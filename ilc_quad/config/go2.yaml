@@ -1,0 +1,13 @@
+# Unitree Go2. Torque motors natively; the knee is the strong joint at 45.43 Nm,
+# hip and thigh at 23.7. Mass 15.21 kg.
+mujoco_sim:
+  ros__parameters:
+    robot: go2
+    # 250 Hz, not 200: the control period has to be a whole number of 2 ms
+    # physics steps, and 200 Hz is 2.5 of them. 250 Hz is 2.
+    control_rate_hz: 250.0
+    # 1.0 paces the sim to wall time, which is what gives a controller in another
+    # process time to answer each state with a torque. Raise it to run faster, or
+    # set 0 to go as fast as the machine allows.
+    realtime_factor: 1.0
+    viewer: false

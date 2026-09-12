@@ -1,0 +1,10 @@
+# Unitree Go1. Its MJCF ships position servos, which QuadModel rewrites into
+# torque motors at load, so the command interface matches Go2's exactly. The knee
+# limit is 35.55 Nm against Go2's 45.43 and the joint limits are tighter.
+# Mass 12.74 kg.
+mujoco_sim:
+  ros__parameters:
+    robot: go1
+    control_rate_hz: 250.0
+    realtime_factor: 1.0
+    viewer: false
