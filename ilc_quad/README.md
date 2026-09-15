@@ -9,10 +9,14 @@ tells you what happened.
 
 | | |
 |---|---|
-| `ilc_quad/quad_model.py` | The model layer. Normalizes both robots to one torque interface in one joint order. |
-| `ilc_quad/sim_node.py` | ROS 2 node owning the physics. Subscribes torques, publishes state. |
+| `ilc_quad/sim_quad_model.py` | The model layer. Normalizes both robots to one torque interface in one joint order. |
+| `scripts/sim_node.py` | ROS 2 node owning the physics. Subscribes torques, publishes state. |
 | `ilc_quad/check_model.py` | No-ROS sanity check of the setup. Run it first. |
 | `launch/sim.launch.py`, `config/{go2,go1}.yaml` | Bring-up. |
+
+`ament_cmake`: the `ilc_quad/` module is installed by `ament_python_install_package`, and
+`scripts/*.py` are installed as executables with the `.py` stripped — so the node is
+`ros2 run ilc_quad sim_node`, while `check_model` stays a module (`python3 -m`, below).
 
 ## The interface you write against
 
@@ -26,7 +30,7 @@ service     reset_trial        std_srvs/Trigger             -> sim time of the r
 ```
 
 Canonical order is `FL, FR, RL, RR` x `hip, thigh, calf` — see
-`quad_model.CANONICAL_JOINT_NAMES`, and `JointState.name` carries it on every
+`sim_quad_model.CANONICAL_JOINT_NAMES`, and `JointState.name` carries it on every
 message. Run your controller with `use_sim_time:=True`.
 
 Four things worth knowing before you write the control:
@@ -147,6 +151,6 @@ frame, so `QuadModel.base_velocity_body` rotates the linear half and leaves the
 angular half alone. Rotating both is the easy mistake; it yields a twist that
 looks plausible until the robot pitches.
 
-Custom messages would need `ament_cmake` (`rosidl` can't generate from an
-`ament_python` package), so everything here is stock messages. A typed trial
-message would mean a separate `ilc_quad_msgs` package.
+Everything here uses stock messages. Now that the package is `ament_cmake`, a
+typed trial message is possible in place — add `rosidl_generate_interfaces` to
+`CMakeLists.txt` — rather than needing a separate `ilc_quad_msgs` package.

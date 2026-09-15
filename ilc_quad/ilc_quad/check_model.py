@@ -21,7 +21,7 @@ import sys
 import mujoco
 import numpy as np
 
-from .quad_model import CANONICAL_JOINT_NAMES, QuadModel, default_menagerie_root
+from .sim_quad_model import CANONICAL_JOINT_NAMES, QuadModel, default_menagerie_root
 
 
 def check(robot: str, menagerie_root: str) -> list[str]:

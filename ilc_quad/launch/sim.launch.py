@@ -54,7 +54,7 @@ def generate_launch_description():
 
         Node(
             package="ilc_quad",
-            executable="sim_node",
+            executable="sim_node.py",
             name="mujoco_sim",
             output="screen",
             emulate_tty=True,

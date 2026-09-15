@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """MuJoCo simulation node: owns the physics, publishes state, accepts torques.
 
 The only thing in the system that touches `MjModel`/`MjData`, so there is exactly
@@ -54,7 +55,7 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray
 from std_srvs.srv import Trigger
 
-from .quad_model import CANONICAL_JOINT_NAMES, QuadModel, default_menagerie_root
+from ilc_quad.sim_quad_model import CANONICAL_JOINT_NAMES, QuadModel, default_menagerie_root
 
 SENSOR_QOS = QoSProfile(
     reliability=QoSReliabilityPolicy.BEST_EFFORT,
