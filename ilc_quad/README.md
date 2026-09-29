@@ -1,9 +1,10 @@
 # ilc_quad
 
 MuJoCo simulation of the Menagerie Unitree **Go2** and **Go1**, set up for
-iterative learning control of jumping. This package is the simulator and the model
-layer only — no control law, no trajectory, no learning. You publish torques, it
-tells you what happened.
+iterative learning control of jumping, plus the ILC jumping controller itself: a
+full-body trajectory optimization for the reference and the paper's 3-stage
+force-based ILC, flown against the simulator or a real Go2 (see
+[ILC jumping](#ilc-jumping)).
 
 ## What's here
 
@@ -13,6 +14,12 @@ tells you what happened.
 | `scripts/sim_node.py` | ROS 2 node owning the physics. Subscribes torques, publishes state. |
 | `ilc_quad/check_model.py` | No-ROS sanity check of the setup. Run it first. |
 | `launch/sim.launch.py`, `config/{go2,go1}.yaml` | Bring-up. |
+| `ilc_quad/ilc_gen.py` | Full-body TO (`PlanarQuadModel`, `init_trajopt`) and the ILC (`JumpILC`). `python -m ilc_quad.ilc_gen` runs an offline demo. |
+| `scripts/ilc_jump_sim.py` | ROS 2 node flying ILC jump trials, on the sim or a real Go2. |
+| `scripts/ilc_jump_lockstep.py` | The same ILC node against in-process MuJoCo, lockstep and faster than realtime, for tests and sweeps. |
+| `scripts/go1_bridge.py` | unitree_legged_sdk (v3.8, UDP) bridge making a real Go1 look like `sim_node`. |
+| `scripts/go2_bridge.py`, `ilc_quad/go2_lowcmd.py` | unitree_ros2 bridge making a real Go2 look like `sim_node`. |
+| `launch/ilc_jump_{sim,go1,go2}.launch.py` | ILC bring-up for each backend. |
 
 `ament_cmake`: the `ilc_quad/` module is installed by `ament_python_install_package`, and
 `scripts/*.py` are installed as executables with the `.py` stripped — so the node is
@@ -22,6 +29,7 @@ tells you what happened.
 
 ```
 subscribes  joint_torque_cmd   std_msgs/Float64MultiArray   12 torques, canonical order
+            joint_cmd          std_msgs/Float64MultiArray   60: [q, dq, kp, kd, tau] x 12
 publishes   joint_states       sensor_msgs/JointState       position, velocity, effort
             base_odom          nav_msgs/Odometry            twist in the base frame
             foot_contacts      std_msgs/Float64MultiArray   4 normal forces, FL FR RL RR
@@ -154,3 +162,107 @@ looks plausible until the robot pitches.
 Everything here uses stock messages. Now that the package is `ament_cmake`, a
 typed trial message is possible in place — add `rosidl_generate_interfaces` to
 `CMakeLists.txt` — rather than needing a separate `ilc_quad_msgs` package.
+
+`joint_cmd` is a per-joint PD target plus feedforward, field-major:
+`[q_des(12), dq_des(12), kp(12), kd(12), tau_ff(12)]`, executed as
+`tau_ff + kp (q_des - q) + kd (dq_des - dq)` at every 2 ms physics step — the law
+Go2's motor drivers run on a LowCmd, so a controller written against it runs
+unchanged on hardware. `sim_quad_model.pack_joint_cmd` builds one. `sim_node` also
+takes `box_x_front` / `box_height` (> 0 adds a box to the scene) for jumping onto.
+
+## ILC jumping
+
+`ilc_jump_sim.py` flies the jump trial after trial and learns the contact forces
+between them. At startup it solves the full-body TO, or loads it from
+`reference_file`. Each trial then runs stand → jump → land → ILC update. It speaks
+only the topics above, so the simulator and the real robot are the same to it.
+
+```bash
+# MuJoCo, box ahead, trials start and reset on their own (the sim runs at 500 Hz)
+ros2 launch ilc_quad ilc_jump_sim.launch.py viewer:=true \
+    reference_file:=/ilc_ws/log/ref.npz log_dir:=/ilc_ws/log/run1
+
+# MuJoCo Go1 (plan it for Go1: the reference file records the robot)
+ros2 launch ilc_quad ilc_jump_sim.launch.py robot:=go1 box:=false jump_dx:=0.4 jump_dz:=0.0 \
+    reference_file:=/ilc_ws/log/ref_go1_f40.npz viewer:=true
+
+# real Go1: unitree_legged_sdk's Python wrapper built, robot in low-level mode
+# (L2+A, L2+B, L1+L2+Start), OptiTrack trunk pose published
+ros2 launch ilc_quad ilc_jump_go1.launch.py pose_topic:=/optitrack/go1/pose pose_type:=pose \
+    sdk_path:=$HOME/unitree_legged_sdk/lib/python/amd64 box_height:=0.0 jump_dx:=0.4 jump_dz:=0.0
+
+# real Go2: unitree_ros2 sourced, sport mode released, OptiTrack trunk pose published
+ros2 launch ilc_quad ilc_jump_go2.launch.py pose_topic:=/optitrack/go2/pose pose_type:=pose
+ros2 service call /start_trial std_srvs/srv/Trigger     # each trial, operator-started
+ros2 service call /damp std_srvs/srv/Trigger            # any time: go limp
+```
+
+The controller during the jump:
+
+- **Feedforward:** the TO's joint torque, plus the ILC's force correction
+  `J(q)ᵀR(θ)ᵀ(U − u_TO)`.
+- **Legs in contact:** force-controlled, with damping only (`contact_kp`/`contact_kd`).
+- **Swing and flight legs:** a joint PD tracks the TO's joint trajectory.
+
+Measured trials are resampled onto the 10 ms TO grid, expressed relative to where
+the CoM stood at takeoff, and handed to `JumpILC.update`. The TO is solved once;
+set `reference_file` to reuse it, since it takes tens of seconds. `log_dir` gets one
+npz per trial, and `resume_file` continues learning from one.
+
+On the real robot there are two layers of safety:
+
+- **`go1_bridge` / `go2_bridge`:** damps if `joint_cmd` stops for 50 ms, latches damping past a
+  joint limit (`/clear_fault` releases it), and clips torques and targets to the
+  MJCF limits.
+- **`ilc_jump_sim.py`:** damps on stale state or pose, or on excessive tilt before
+  the jump. A failed landing damps the robot but still learns from the jump.
+
+### Tests and weight sweeps without ROS transport
+
+`ilc_jump_lockstep.py` runs the node's own code, calling its callbacks directly
+and stepping MuJoCo only once each command is in. It is deterministic, runs about
+5× realtime (≈1 s per trial), and several copies can run in parallel. The sim
+alone can be given uncertainties the controller is not told about:
+
+- **`--ground KP KD`:** per-foot contact stiffness and damping, the paper's hard
+  (2e4, 3e3) or soft (2e3, 5e2) ground. The MJCF's own foot contact is close to
+  the soft one.
+- **`--payload KG`:** a mass welded on the trunk.
+
+`sim_node` takes the same settings as `ground_kp`/`ground_kd`/`payload_mass`.
+
+```bash
+python3 install/ilc_quad/lib/ilc_quad/ilc_jump_lockstep.py --jump 0.6 0.0 \
+    --ground 2e3 5e2 --reference-file /ilc_ws/log/ref_f60.npz --summary /ilc_ws/log/soft.json
+python3 install/ilc_quad/lib/ilc_quad/ilc_jump_lockstep.py --jump 0.6 0.1 --box 0.35 0.1 \
+    --param "phases:=[30,30,30]" --viewer --realtime
+```
+
+The ILC weights are `qe` (Qe on [x, z, θ, vx, vz, ω], default
+diag(3, 3, 3, .01, .01, .01)), `qu` (Qu in Stages I–II, default 3e-5) and
+`qu_stage3` (Qu in Stage III, default 3e-4). They come from sweeps over the paper's
+tasks (Sec. III: 40 and 60 cm jumps, hard/soft ground, a 2 kg payload, boxes) on
+both robots:
+
+- **Stage III needs about 10× the step penalty of Stages I–II.** With the paper's
+  single Qu the landing gets close by trial 10, then drifts off by trial 20. Stage
+  III weighs only the landing state, and its steps overshoot where the SRB model
+  mispredicts pitch.
+- **Qe weighting x like z beats the paper's diag(1, 3, 3).** The paper's prices a
+  degree of pitch like 9 cm of distance. The exception is Go2's (60, 10) cm box,
+  where the paper's Qe did better.
+
+What Go1 can do in sim with these weights:
+
+- **40 cm:** reached (1 cm, 1°) at trial 11.
+- **60 cm:** needs `margin:=0.9`; at 0.8 the plan lands 3.9 cm short. Then it
+  reaches 1 cm and 1° by trial 15–17. On hard or soft ground, or carrying 2 kg,
+  it gets within about 1 cm but keeps 3–6° of landing pitch.
+- **Boxes:** none of (60, 10), (50, 20) or (60, 30) cm are learned.
+
+Neither bridge has run against a robot yet, only offline: `go2_bridge` against
+unitree_sdk2's LowCmd layout and CRC, `go1_bridge` against a mock of
+unitree_legged_sdk's Python wrapper. Go1's bridge also runs the SDK's
+`PowerProtect` at `power_level` (default 10, full power, which a jump needs); use
+a lower level for a first stand test, hanging in a harness.
+

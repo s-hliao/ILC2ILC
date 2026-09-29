@@ -7,6 +7,10 @@ whatever torque was last commanded on `joint_torque_cmd` and reports what came o
 it, leaving the control entirely to whatever you connect.
 
     subscribes  joint_torque_cmd  Float64MultiArray, 12 torques in canonical order
+                joint_cmd         Float64MultiArray, 60 values: per-joint PD target
+                                  and feedforward, [q, dq, kp, kd, tau] x 12 (see
+                                  `sim_quad_model.JOINT_CMD_FIELDS`); the PD runs at
+                                  every physics step, as Go2's motor drivers do
     publishes   joint_states      JointState, canonical order; effort is the
                                   *applied* torque (see below)
                 base_odom         Odometry, twist in the base frame
@@ -40,6 +44,15 @@ a sample that is already stale at the cost of latency on the one that isn't.
 `control_rate_hz` must divide the physics timestep evenly -- see
 `QuadModel.substeps_for`. 250 Hz is 2 steps of 2 ms; 200 Hz would be 2.5 and is
 rejected at startup.
+
+A box can be added to the scene (`box_height` > 0): front face at world
+x = `box_x_front`, resting on the floor. The robot's home keyframe stands at x = 0.
+
+Uncertainties the controller is not told about (`QuadModel` ground / payload):
+`ground_kp`/`ground_kd` > 0 make the floor and box a spring-damper of that many
+N/m and N s/m per foot (the paper's hard ground is 2e4 / 3e3, soft 2e3 / 5e2; the
+MJCF's own foot contact is closer to the soft one), and `payload_mass` > 0 welds a
+box of that mass on top of the trunk.
 """
 
 from __future__ import annotations
@@ -55,7 +68,14 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray
 from std_srvs.srv import Trigger
 
-from ilc_quad.sim_quad_model import CANONICAL_JOINT_NAMES, QuadModel, default_menagerie_root
+from ilc_quad.sim_quad_model import (
+    CANONICAL_JOINT_NAMES,
+    JOINT_CMD_LEN,
+    QuadModel,
+    default_menagerie_root,
+    pd_torque,
+    unpack_joint_cmd,
+)
 
 SENSOR_QOS = QoSProfile(
     reliability=QoSReliabilityPolicy.BEST_EFFORT,
@@ -85,6 +105,13 @@ class MujocoSimNode(Node):
         self.declare_parameter("viewer", False)
         self.declare_parameter("base_frame", "base_link")
         self.declare_parameter("odom_frame", "odom")
+        self.declare_parameter("box_x_front", 0.25)
+        self.declare_parameter("box_height", 0.0)     # <= 0: no box
+        self.declare_parameter("box_length", 1.0)
+        self.declare_parameter("box_width", 1.0)
+        self.declare_parameter("ground_kp", 0.0)      # <= 0: the MJCF's contact
+        self.declare_parameter("ground_kd", 0.0)
+        self.declare_parameter("payload_mass", 0.0)   # <= 0: none
 
         # The sim node is the clock's source, so it cannot run on it: a timer
         # waiting for /clock that only this node's timer can advance never fires.
@@ -97,7 +124,22 @@ class MujocoSimNode(Node):
 
         robot = self.get_parameter("robot").value
         root = self.get_parameter("menagerie_root").value
-        self.qm = QuadModel(robot, root)
+        box = None
+        if float(self.get_parameter("box_height").value) > 0:
+            box = {k: float(self.get_parameter(f"box_{k}").value)
+                   for k in ("x_front", "height", "length", "width")}
+        ground = payload = None
+        if float(self.get_parameter("ground_kp").value) > 0:
+            ground = {k: float(self.get_parameter(f"ground_{k}").value) for k in ("kp", "kd")}
+        if float(self.get_parameter("payload_mass").value) > 0:
+            payload = dict(mass=float(self.get_parameter("payload_mass").value))
+        self.qm = QuadModel(robot, root, box=box, ground=ground, payload=payload)
+        if box is not None:
+            self.get_logger().info(f"box in the scene: {box}")
+        if ground is not None:
+            self.get_logger().info(f"compliant ground: {ground}")
+        if payload is not None:
+            self.get_logger().info(f"payload on the trunk: {payload}")
         self.get_logger().info(f"loaded {self.qm}")
 
         self.substeps = self.qm.substeps_for(
@@ -109,8 +151,9 @@ class MujocoSimNode(Node):
 
         # Sim time, monotonic for the life of the node.
         self.sim_time = 0.0
-        # Zero-order-held command, canonical order.
-        self.held_torque = np.zeros(12)
+        # Zero-order-held command, canonical order, as an unpacked joint_cmd (5, 12);
+        # a plain torque command is the kp = kd = 0 case.
+        self.held_cmd = np.zeros((5, 12))
         self.commands_received = 0
 
         self.clock_pub = self.create_publisher(Clock, "/clock", CLOCK_QOS)
@@ -121,6 +164,9 @@ class MujocoSimNode(Node):
         )
         self.create_subscription(
             Float64MultiArray, "joint_torque_cmd", self._on_torque_cmd, SENSOR_QOS
+        )
+        self.create_subscription(
+            Float64MultiArray, "joint_cmd", self._on_joint_cmd, SENSOR_QOS
         )
         self.create_service(Trigger, "reset_trial", self._on_reset_trial)
 
@@ -150,7 +196,18 @@ class MujocoSimNode(Node):
                 f"ignoring torque command of length {len(msg.data)}, expected 12"
             )
             return
-        self.held_torque = np.asarray(msg.data, dtype=float)
+        cmd = np.zeros((5, 12))
+        cmd[4] = msg.data
+        self.held_cmd = cmd
+        self.commands_received += 1
+
+    def _on_joint_cmd(self, msg: Float64MultiArray) -> None:
+        if len(msg.data) != JOINT_CMD_LEN:
+            self.get_logger().warn(
+                f"ignoring joint_cmd of length {len(msg.data)}, expected {JOINT_CMD_LEN}"
+            )
+            return
+        self.held_cmd = unpack_joint_cmd(msg.data)
         self.commands_received += 1
 
     def _on_reset_trial(self, request, response):
@@ -161,7 +218,7 @@ class MujocoSimNode(Node):
         message is its `header.stamp` minus this value.
         """
         self.qm.reset_home()
-        self.held_torque = np.zeros(12)
+        self.held_cmd = np.zeros((5, 12))
         response.success = True
         response.message = f"{self.sim_time:.9f}"
         self.get_logger().info(f"trial reset at sim t={self.sim_time:.3f}s")
@@ -170,13 +227,17 @@ class MujocoSimNode(Node):
     # -- main loop -----------------------------------------------------------
 
     def _step(self) -> None:
-        applied = self.qm.set_torques(self.held_torque)
+        # The PD part is re-evaluated every physics step, like a motor driver's
+        # inner loop; a torque-only command (kp = kd = 0) is simply held.
         for _ in range(self.substeps):
+            self.qm.set_torques(
+                pd_torque(self.held_cmd, self.qm.joint_positions(), self.qm.joint_velocities())
+            )
             mujoco.mj_step(self.qm.model, self.qm.data)
         self.sim_time += self.control_period
 
         # Read back post-step: this is the torque the actuators developed, which
-        # differs from `applied` wherever a motor saturated.
+        # differs from the commanded one wherever a motor saturated.
         self._publish(self.qm.applied_torques())
 
         if self.viewer is not None:

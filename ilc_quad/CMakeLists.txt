@@ -6,7 +6,8 @@ project(ilc_quad)
 find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_python REQUIRED)
 
-# The ilc_quad/ module: quad model, check_model. Imported by the scripts below.
+# The ilc_quad/ module: quad model, check_model, ILC (ilc_gen), Go2 LowCmd helpers.
+# Imported by the scripts below.
 ament_python_install_package(${PROJECT_NAME})
 
 install(DIRECTORY
@@ -19,9 +20,11 @@ install(DIRECTORY
 # executable="sim_node" both work. RENAME takes one file, hence one call each.
 install(PROGRAMS
   scripts/sim_node.py
-  scripts/ilc_jump.py
+  scripts/ilc_jump_sim.py
+  scripts/go2_bridge.py
+  scripts/go1_bridge.py
+  scripts/ilc_jump_lockstep.py
   DESTINATION lib/${PROJECT_NAME}
-
 )
 
 ament_package()

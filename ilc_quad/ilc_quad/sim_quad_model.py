@@ -51,6 +51,33 @@ NU = len(CANONICAL_JOINT_NAMES)
 
 SUPPORTED_ROBOTS = ("go2", "go1")
 
+# `joint_cmd`: one Float64MultiArray of 5 x 12 values, field-major, canonical order,
+#   [q_des(12), dq_des(12), kp(12), kd(12), tau_ff(12)]
+# executed per joint as  tau = tau_ff + kp (q_des - q) + kd (dq_des - dq)  -- the law
+# Go2's motor drivers run on a LowCmd, so sim and hardware share one command.
+JOINT_CMD_FIELDS = ("q", "dq", "kp", "kd", "tau")
+JOINT_CMD_LEN = len(JOINT_CMD_FIELDS) * NU
+
+
+def pack_joint_cmd(q, dq, kp, kd, tau) -> list:
+    """Five (12,) arrays (or scalars, broadcast) -> the flat joint_cmd payload."""
+    fields = [np.broadcast_to(np.asarray(v, dtype=float), (NU,)) for v in (q, dq, kp, kd, tau)]
+    return np.concatenate(fields).tolist()
+
+
+def unpack_joint_cmd(data) -> np.ndarray:
+    """Flat joint_cmd payload -> (5, 12), rows in JOINT_CMD_FIELDS order."""
+    cmd = np.asarray(data, dtype=float)
+    if cmd.shape != (JOINT_CMD_LEN,):
+        raise ValueError(f"joint_cmd needs {JOINT_CMD_LEN} values, got {cmd.size}")
+    return cmd.reshape(len(JOINT_CMD_FIELDS), NU)
+
+
+def pd_torque(cmd: np.ndarray, q: np.ndarray, dq: np.ndarray) -> np.ndarray:
+    """The joint_cmd law for an unpacked (5, 12) command at joint state (q, dq)."""
+    q_des, dq_des, kp, kd, tau = cmd
+    return tau + kp * (q_des - q) + kd * (dq_des - dq)
+
 # Whichever of these the model defines is the floating base. Go2 uses the first,
 # Go1 the second.
 _BASE_BODY_NAMES = ("base", "trunk")
@@ -58,6 +85,8 @@ _BASE_BODY_NAMES = ("base", "trunk")
 # The foot collision geoms are named for the leg alone -- `FL`, not `FL_foot` --
 # on both robots: the condim=6 priority=1 spheres at the end of each calf.
 _FLOOR_GEOM = "floor"
+_BOX_GEOM = "box"
+_PAYLOAD_BODY = "payload"
 
 _MENAGERIE_ENV = "MUJOCO_MENAGERIE_PATH"
 _MENAGERIE_FALLBACK = "/mujoco_menagerie"
@@ -86,9 +115,25 @@ class QuadModel:
     torque_limit : (12,) float, the symmetric per-joint torque bound.
     base_body_id : the floating base body.
     foot_geom_ids : (4,) int, the foot spheres in `CANONICAL_LEGS` order.
+    terrain_geom_ids : the floor, plus the box if there is one -- what counts as
+        ground for `foot_normal_forces`.
+
+    box : optional dict(x_front, height[, length, width]) adding a static box to
+        the world, front face at world x = x_front, centred on y = 0, resting on
+        the floor. Added on the compiled spec, so the Menagerie checkout stays
+        read-only like the actuator rewrite.
+    ground : optional dict(kp, kd), a compliant floor (and box): per-foot contact
+        stiffness in N/m and damping in N s/m, the paper's (K_p^G, K_d^G). See
+        `_set_ground`. None keeps the MJCF's contact.
+    payload : optional dict(mass[, pos, size]), an extra rigid box welded to the
+        base -- `pos` is its centre in the base frame (default on top of the
+        trunk). Sim-only uncertainties: a controller building its own QuadModel
+        without these does not know about them.
     """
 
-    def __init__(self, robot: str = "go2", menagerie_root: str | None = None):
+    def __init__(self, robot: str = "go2", menagerie_root: str | None = None,
+                 box: dict | None = None, ground: dict | None = None,
+                 payload: dict | None = None):
         if robot not in SUPPORTED_ROBOTS:
             raise ValueError(
                 f"unsupported robot {robot!r}; expected one of {SUPPORTED_ROBOTS}"
@@ -105,7 +150,11 @@ class QuadModel:
                 f"${_MENAGERIE_ENV}) at a mujoco_menagerie checkout."
             )
 
-        self.model = mujoco.MjModel.from_xml_path(self.scene_path)
+        self.box, self.ground, self.payload = box, ground, payload
+        if box is None and payload is None:
+            self.model = mujoco.MjModel.from_xml_path(self.scene_path)
+        else:
+            self.model = self._compile_with_extras(box, payload)
         self.data = mujoco.MjData(self.model)
 
         torque_limit_model_order = self._to_torque_actuators()
@@ -113,9 +162,77 @@ class QuadModel:
         # Out of model order into canonical order, so every (12,) array this
         # class hands out agrees.
         self.torque_limit = torque_limit_model_order[self.act_idx]
+        if ground is not None:
+            self._set_ground(float(ground["kp"]), float(ground["kd"]))
         self.reset_home()
 
     # -- setup ---------------------------------------------------------------
+
+    def _compile_with_extras(self, box: dict | None, payload: dict | None) -> mujoco.MjModel:
+        """The scene with a static box geom in the world body and/or a payload on the base.
+
+        The box takes the geom defaults the floor does (same friction, contype and
+        conaffinity), so the feet meet it exactly as they meet the ground. The
+        payload is a body with explicit inertia (a solid box) and no joint, so it
+        is welded to the base; its geom is visual only.
+        """
+        spec = mujoco.MjSpec.from_file(self.scene_path)
+        if box is not None:
+            height = float(box["height"])
+            length = float(box.get("length", 1.0))
+            width = float(box.get("width", 1.0))
+            if height <= 0 or length <= 0 or width <= 0:
+                raise ValueError(f"box needs positive height/length/width, got {box}")
+            spec.worldbody.add_geom(
+                name=_BOX_GEOM,
+                type=mujoco.mjtGeom.mjGEOM_BOX,
+                size=[length / 2, width / 2, height / 2],
+                pos=[float(box["x_front"]) + length / 2, 0.0, height / 2],
+                rgba=[0.6, 0.45, 0.3, 1.0],
+            )
+        if payload is not None:
+            mass = float(payload["mass"])
+            size = np.asarray(payload.get("size", (0.15, 0.10, 0.05)), float)
+            pos = np.asarray(payload.get("pos", (0.0, 0.0, 0.08)), float)
+            if mass <= 0 or np.any(size <= 0):
+                raise ValueError(f"payload needs positive mass and size, got {payload}")
+            base = next(spec.body(n) for n in _BASE_BODY_NAMES if spec.body(n) is not None)
+            inertia = mass / 12.0 * (size[[1, 0, 0]] ** 2 + size[[2, 2, 1]] ** 2)
+            body = base.add_body(name=_PAYLOAD_BODY, pos=pos, mass=mass, ipos=[0, 0, 0],
+                                 inertia=inertia, explicitinertial=True)
+            body.add_geom(type=mujoco.mjtGeom.mjGEOM_BOX, size=size / 2, contype=0,
+                          conaffinity=0, group=1, mass=0, rgba=[0.8, 0.2, 0.2, 1.0])
+        return spec.compile()
+
+    def _set_ground(self, kp: float, kd: float) -> None:
+        """Make the floor (and box) a spring-damper of kp N/m, kd N s/m per foot.
+
+        MuJoCo's soft contact, with the impedance fixed at d and solref given as
+        (-stiffness, -damping), settles where the constraint force equals
+        aref / R, with aref = -(s0 / d^2) d r - (s1 / d) v and R = (1 - d) A / d.
+        A is the contact's diagonal approximation, the inverse weight of the calf
+        body (the world has none). Per unit penetration r and velocity v that is
+            f = -s0 / ((1 - d) A) r - s1 / ((1 - d) A) v,
+        so s0 = -kp (1 - d) A and s1 = -kd (1 - d) A give the physical kp, kd, with
+        r measured past the 1 mm contact margin. The terrain gets priority over the
+        feet (which carry priority 1), so these parameters, not the feet's, set
+        every foot contact.
+
+        The damping acts on the light calf alone (1/A), so it is stiff: a step
+        damps velocity by dt kd (1 - d) A, which must stay below ~2. The timestep
+        is halved until that is at most 1 (2 ms -> 0.25 ms for kd = 3000 N s/m),
+        which keeps every control rate that divided the old step whole.
+        """
+        m = self.model
+        d = 0.5
+        calf = m.geom_bodyid[self.foot_geom_ids[0]]
+        A = float(m.body_invweight0[calf, 0])
+        for gid in self.terrain_geom_ids:
+            m.geom_solref[gid] = (-kp * (1 - d) * A, -kd * (1 - d) * A)
+            m.geom_solimp[gid] = (d, d, 0.001, 0.5, 2.0)
+            m.geom_priority[gid] = 2
+        while m.opt.timestep * kd * (1 - d) * A > 1.0:
+            m.opt.timestep /= 2
 
     def _to_torque_actuators(self) -> np.ndarray:
         """Rewrite every actuator into a direct torque motor, in place.
@@ -218,6 +335,11 @@ class QuadModel:
             raise ValueError(
                 f"{self.scene_path} defines no geom {_FLOOR_GEOM!r}; foot contact "
                 "forces need the ground geom to pair against"
+            )
+        self.terrain_geom_ids = {self.floor_geom_id}
+        if self.box is not None:
+            self.terrain_geom_ids.add(
+                mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_GEOM, _BOX_GEOM)
             )
 
     def _find_base_body(self) -> int:
@@ -338,8 +460,9 @@ class QuadModel:
     def foot_normal_forces(self) -> np.ndarray:
         """Ground reaction normal force per foot, canonical leg order, (4,).
 
-        Only foot-against-floor contacts count; a foot resting on another part of
-        the robot is not ground contact, and a knee on the floor is not a foot.
+        Only foot-against-terrain (floor or box) contacts count; a foot resting on
+        another part of the robot is not ground contact, and a knee on the floor
+        is not a foot.
         """
         forces = np.zeros(len(CANONICAL_LEGS))
         foot_to_leg = {gid: i for i, gid in enumerate(self.foot_geom_ids)}
@@ -348,9 +471,9 @@ class QuadModel:
         for c in range(self.data.ncon):
             contact = self.data.contact[c]
             g1, g2 = contact.geom1, contact.geom2
-            if g1 == self.floor_geom_id and g2 in foot_to_leg:
+            if g1 in self.terrain_geom_ids and g2 in foot_to_leg:
                 leg = foot_to_leg[g2]
-            elif g2 == self.floor_geom_id and g1 in foot_to_leg:
+            elif g2 in self.terrain_geom_ids and g1 in foot_to_leg:
                 leg = foot_to_leg[g1]
             else:
                 continue
