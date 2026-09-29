@@ -14,6 +14,7 @@ force-based ILC, flown against the simulator or a real Go2 (see
 | `scripts/sim_node.py` | ROS 2 node owning the physics. Subscribes torques, publishes state. |
 | `ilc_quad/check_model.py` | No-ROS sanity check of the setup. Run it first. |
 | `launch/sim.launch.py`, `config/{go2,go1}.yaml` | Bring-up. |
+| `ilc_quad/trial_log.py` | `TrialRecorder`: one folder per ILC run, one self-contained npz per trial, to resume or transfer from any trial. |
 | `ilc_quad/ilc_gen.py` | Full-body TO (`PlanarQuadModel`, `init_trajopt`) and the ILC (`JumpILC`). `python -m ilc_quad.ilc_gen` runs an offline demo. |
 | `scripts/ilc_jump_sim.py` | ROS 2 node flying ILC jump trials, on the sim or a real Go2. |
 | `scripts/ilc_jump_lockstep.py` | The same ILC node against in-process MuJoCo, lockstep and faster than realtime, for tests and sweeps. |
@@ -216,6 +217,53 @@ On the real robot there are two layers of safety:
   MJCF limits.
 - **`ilc_jump_sim.py`:** damps on stale state or pose, or on excessive tilt before
   the jump. A failed landing damps the robot but still learns from the jump.
+
+### Runs, resuming and transferring
+
+With `log_dir` set, each launch writes a run folder `<log_dir>/<run_name>/`
+(`run_name` defaults to a timestamp):
+
+- `meta.json` holds the task, the weights, every node parameter, the sim conditions
+  (lockstep runs) and the parent trial, if any.
+- `reference.npz` is the plan the run flew.
+- `trial_NNN.npz` is one file per trial. Each file stands alone: the forces flown and
+  the ILC's next forces, the result and the history so far, the reference, the trial
+  on the TO grid, and the raw recording. `TrialRecorder.load(path, trial=k)` reads
+  one back.
+
+Any of those files can seed a new run:
+
+- **`resume_from:=<trial file or run folder>`** continues the same task from that
+  trial. Continuing from trial 3 reproduces the original trials 4–6 exactly.
+- **`transfer_from:=<file or folder>`** starts a *different* task from what another
+  task learned, in one of two ways:
+  - `transfer_mode:=retarget` (default): this task's own plan, plus the correction
+    the other task learned on top of its plan (resampled onto this task's contact
+    phases).
+  - `transfer_mode:=paper`: the paper's Sec. II-D3. It keeps the other task's plan
+    and learned forces, aims them at this goal, and learns in Stage III only, after
+    one Stage III step before the first trial.
+
+In sim on Go1, neither transfer helped the 40 cm → (60, 10) cm box jump. The box
+plan (with the edge clearance below) already lands within 2.5 cm on trial 1 from its
+own TO forces. The 40 cm correction overshoots it by 10–20 cm, and the 40 cm joint
+profile (paper mode) clips the box edge.
+
+**Box plans keep the feet off the box's front edge.** `box_clearance` (default 4 cm)
+and `box_setback` (3 cm) keep any moving foot at least that far above the box top
+whenever it is within `box_setback` of the front face. That includes the front foot
+swinging during rear-leg contact, which the plan used to route right across the edge,
+so that a slightly late push clipped it and tumbled. With it, Go1 plans (60, 10) and
+(50, 10) and lands on them on trial 1.
+
+**Box plans start from a single-rigid-body plan** (`to_guess:=srb`, the default).
+The robot is first planned as one rigid body with its stance feet fixed, the legs'
+reach limits, force limits and friction, and hips high enough for a tucked foot to
+clear the box. That plan is turned into a full-body starting point by IK, with smooth
+swing-foot paths over the box edge. Then the full-body TO runs once. From the old
+straight-line start, IPOPT failed every tall-box plan. From this start, one solve
+found exact Go1 (50, 20), (50, 15), (60, 10) and A1 (50, 20) plans in 11–28 s.
+`to_steps:=4` (continuation in box height) also works, at 2–4× the time.
 
 ### Tests and weight sweeps without ROS transport
 

@@ -49,7 +49,7 @@ CANONICAL_JOINT_NAMES = tuple(
 )
 NU = len(CANONICAL_JOINT_NAMES)
 
-SUPPORTED_ROBOTS = ("go2", "go1")
+SUPPORTED_ROBOTS = ("go2", "go1", "a1")
 
 # `joint_cmd`: one Float64MultiArray of 5 x 12 values, field-major, canonical order,
 #   [q_des(12), dq_des(12), kp(12), kd(12), tau_ff(12)]
@@ -102,7 +102,7 @@ class QuadModel:
 
     Parameters
     ----------
-    robot : "go2" or "go1".
+    robot : "go2", "go1" or "a1".
     menagerie_root : path to a mujoco_menagerie checkout. Defaults to
         `$MUJOCO_MENAGERIE_PATH`, then `/mujoco_menagerie`.
 
@@ -353,11 +353,20 @@ class QuadModel:
         )
 
     def _find_foot_geoms(self) -> np.ndarray:
+        """The foot spheres, by name (Go1/Go2), else the priority sphere on `<leg>_calf`
+        (Menagerie's A1 leaves its feet unnamed)."""
+        m = self.model
         ids = []
         for leg in CANONICAL_LEGS:
-            gid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, leg)
+            gid = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_GEOM, leg)
             if gid < 0:
-                raise ValueError(f"{self.robot} has no foot geom {leg!r}")
+                calf = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, f"{leg}_calf")
+                spheres = [g for g in range(m.ngeom) if m.geom_bodyid[g] == calf
+                           and m.geom_type[g] == mujoco.mjtGeom.mjGEOM_SPHERE
+                           and m.geom_priority[g] > 0]
+                if calf < 0 or len(spheres) != 1:
+                    raise ValueError(f"{self.robot} has no foot geom {leg!r}")
+                gid = spheres[0]
             ids.append(gid)
         return np.array(ids, dtype=int)
 
@@ -462,21 +471,31 @@ class QuadModel:
 
         Only foot-against-terrain (floor or box) contacts count; a foot resting on
         another part of the robot is not ground contact, and a knee on the floor
-        is not a foot.
+        is not a foot. A contact of another geom of the calf counts as the foot's
+        when it sits at the foot: A1's lower calf capsule ends at the foot centre,
+        and once the soft foot sphere has sunk a centimetre it carries half the load.
         """
+        m, d = self.model, self.data
         forces = np.zeros(len(CANONICAL_LEGS))
-        foot_to_leg = {gid: i for i, gid in enumerate(self.foot_geom_ids)}
+        calf_to_leg = {int(m.geom_bodyid[gid]): i for i, gid in enumerate(self.foot_geom_ids)}
         wrench = np.zeros(6)
 
-        for c in range(self.data.ncon):
-            contact = self.data.contact[c]
+        for c in range(d.ncon):
+            contact = d.contact[c]
             g1, g2 = contact.geom1, contact.geom2
-            if g1 in self.terrain_geom_ids and g2 in foot_to_leg:
-                leg = foot_to_leg[g2]
-            elif g2 in self.terrain_geom_ids and g1 in foot_to_leg:
-                leg = foot_to_leg[g1]
+            if g1 in self.terrain_geom_ids:
+                robot_geom = g2
+            elif g2 in self.terrain_geom_ids:
+                robot_geom = g1
             else:
                 continue
+            leg = calf_to_leg.get(int(m.geom_bodyid[robot_geom]))
+            if leg is None:
+                continue
+            foot = self.foot_geom_ids[leg]
+            if robot_geom != foot and np.linalg.norm(contact.pos - d.geom_xpos[foot]) > \
+                    m.geom_size[foot][0] + 0.015:
+                continue                                  # the calf above the foot
             mujoco.mj_contactForce(self.model, self.data, c, wrench)
             # wrench[0] is the normal component, in the contact frame.
             forces[leg] += abs(wrench[0])

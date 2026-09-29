@@ -9,6 +9,7 @@ Run as a module so the model layer import resolves:
 """
 
 import json
+import os
 
 import mujoco
 import numpy as np
@@ -320,9 +321,257 @@ class QuadILCStageSolver:
             return ground_z
         return ground_z + 0.5 * box["height"] * (1 + ca.tanh((xf - box["x_front"]) / width))
 
+    @staticmethod
+    def box_edge(xf, box, clearance, setback, width=0.005):
+        """Height a moving foot must clear near the box's front edge: box top + clearance
+        within `setback` of the edge (either side), smoothly 0 elsewhere."""
+        lo, hi = box["x_front"] - setback, box["x_front"] + setback
+        return (box["height"] + clearance) * 0.5 * (ca.tanh((xf - lo) / width)
+                                                    - ca.tanh((xf - hi) / width))
+
+    def srb_guess(self, fb, goal, swing_mask, dt, box=None, margin=0.8, clearance=0.02,
+                  box_clearance=0.0, box_setback=0.0, theta_goal=0.0, tuck=0.06, joint_margin=0.1,
+                  landing_pitch_rate=None, flight_pitch_rate=None, landing_clearance=None,
+                  n_landing_ramp=6, w_goal=1e5, w_force=1e-6, w_smooth=1e-4, w_omega=1e-3):
+        """
+        A full-body initial guess for init_trajopt from a single-rigid-body plan.
+
+        1. SRB TO: whole-body CoM c and pitch theta under the contact forces (the SRB model
+           the ILC learns on), stance feet fixed where they stand, each stance foot within
+           its leg's reach (from the knee's range), the same force limits and friction
+           cone, ballistic flight, landing at the goal. The hips of legs in the air stay
+           high enough over the terrain (and the box edge) for a tucked foot to clear it.
+        2. Full body: the base placed so the home-pose CoM offset sits on c; legs by IK --
+           stance feet on their contact points; a foot in the air moved from where it left
+           the ground to its home spot under the hip (the landing pose), lifted by `tuck`
+           in between and kept over the box edge (and, with a landing clearance, brought
+           straight down onto its spot from that height above it).
+        Velocities follow the TO's semi-implicit Euler; torques are the full-body dynamics'
+        joint rows with the SRB forces, clipped to the plan's limits.
+        returns dict(s, sd, tau, f) for init_trajopt(init_guess=...), and the SRB result
+        """
+        nu, Nc, Ndc, N = self.nu, self.Nc, self.Ndc, self.N
+        p = self.p
+        m, g = fb.total_mass, fb.g
+        s0 = fb.standing_state()
+        c0 = fb.com(s0).full().ravel()
+        feet0 = fb.feet(s0).full().ravel().reshape(2, 2)
+        I = float(fb.pitch_inertia(s0))
+        c_off = c0 - s0[:2]                          # CoM - base origin, level home pose
+        hips = [leg["hip"] for leg in fb.legs]       # in the base frame
+        mu, fmin, fmax = margin * p["mu"], p["fmin"] / margin, margin * p["fmax"]
+        radius = fb.foot_radius
+        stance = ~swing_mask[:, 1::2]                                       # (Nc, 2)
+
+        # hip-to-foot distance is set by the knee alone: |knee + R(-q_calf) foot|, so the
+        # leg's reach runs between the knee's limits (kept joint_margin inside them)
+        def leg_length(leg, q_calf):
+            a = -q_calf
+            v = np.array([np.cos(a) * leg["foot"][0] - np.sin(a) * leg["foot"][1],
+                          np.sin(a) * leg["foot"][0] + np.cos(a) * leg["foot"][1]])
+            return float(np.linalg.norm(leg["knee"] + v))
+        reach_min, reach_max = [], []
+        for i, leg in enumerate(fb.legs):
+            lo, hi = fb.joint_range[2 * i + 1] + np.array([joint_margin, -joint_margin])
+            lengths = [leg_length(leg, qc) for qc in np.linspace(lo, hi, 50)]
+            reach_min.append(min(lengths) + 0.01)
+            reach_max.append(max(lengths) - 0.01)
+
+        def rot(a, v):
+            return ca.vertcat(ca.cos(a) * v[0] - ca.sin(a) * v[1], ca.sin(a) * v[0] + ca.cos(a) * v[1])
+
+        def R(a):
+            return np.array([[np.cos(a), -np.sin(a)], [np.sin(a), np.cos(a)]])
+
+        def hermite(t, t0, t1, p0, p1, v0, v1):
+            """Cubic Hermite point at time t between (t0, p0, v0) and (t1, p1, v1)."""
+            h = t1 - t0
+            u = (t - t0) / h
+            return ((2 * u ** 3 - 3 * u ** 2 + 1) * p0 + (u ** 3 - 2 * u ** 2 + u) * h * v0
+                    + (-2 * u ** 3 + 3 * u ** 2) * p1 + (u ** 3 - u ** 2) * h * v1)
+
+        def solve_srb():
+            opti = ca.Opti()
+            C = opti.variable(N + 1, 2)
+            Cd = opti.variable(N + 1, 2)
+            Th = opti.variable(N + 1)
+            Om = opti.variable(N + 1)
+            F = opti.variable(Nc, nu)
+            opti.subject_to(C[0, :].T == c0)
+            opti.subject_to(Cd[0, :].T == 0)
+            opti.subject_to(Th[0] == 0)
+            opti.subject_to(Om[0] == 0)
+            if landing_pitch_rate is not None:
+                opti.subject_to(opti.bounded(-landing_pitch_rate, Om[N], landing_pitch_rate))
+            if flight_pitch_rate is not None:
+                for k in range(Nc, N + 1):
+                    opti.subject_to(opti.bounded(-flight_pitch_rate, Om[k], flight_pitch_rate))
+            for k in range(N):
+                f = F[k, :].T if k < Nc else ca.DM.zeros(nu)
+                ck = C[k, :].T
+                force = f[0:2] + f[2:4] + ca.DM([0, -m * g])
+                moment = 0
+                for leg in range(2):
+                    r = ca.DM(feet0[leg]) - ck
+                    moment += r[0] * f[2 * leg + 1] - r[1] * f[2 * leg]
+                opti.subject_to(m * (Cd[k + 1, :].T - Cd[k, :].T) / dt == force)
+                opti.subject_to(I * (Om[k + 1] - Om[k]) / dt == moment)
+                opti.subject_to(C[k + 1, :].T == ck + dt * Cd[k + 1, :].T)
+                opti.subject_to(Th[k + 1] == Th[k] + dt * Om[k + 1])
+            for t in range(Nc):
+                for leg in range(2):
+                    fx, fz = F[t, 2 * leg], F[t, 2 * leg + 1]
+                    if not stance[t, leg]:
+                        opti.subject_to(fx == 0)
+                        opti.subject_to(fz == 0)
+                    else:
+                        opti.subject_to(opti.bounded(fmin, fz, fmax))
+                        opti.subject_to(opti.bounded(-mu * fz, fx, mu * fz))
+            for k in range(1, N + 1):
+                base = C[k, :].T - rot(Th[k], c_off)
+                for leg in range(2):
+                    hip = base + rot(Th[k], hips[leg])
+                    if k <= (Ndc if leg == 0 else Nc):
+                        d = hip - ca.DM(feet0[leg])
+                        opti.subject_to(opti.bounded(reach_min[leg] ** 2, ca.sumsqr(d),
+                                                     reach_max[leg] ** 2))
+                        opti.subject_to(hip[1] >= feet0[leg][1] + 0.5 * reach_min[leg])
+                    elif k < N - 3:
+                        lift = 0.6 * reach_max[leg]
+                        # the box smoothed over 2 cm here: this is only a guess, and a
+                        # sharp step in a hip constraint stalls the small solve
+                        need = (self.box_profile(hip[0], 0.0, box, 0.02)
+                                if box is not None else 0.0)
+                        opti.subject_to(hip[1] - lift - radius
+                                        >= need + (clearance if k > Nc else 0.0))
+                        if box is not None and box_clearance > 0:
+                            opti.subject_to(hip[1] - lift - radius >= self.box_edge(
+                                hip[0], box, box_clearance, box_setback + 0.05, 0.02))
+            cost = w_goal * ((C[N, 0] - goal[0]) ** 2 + 3 * (C[N, 1] - goal[1]) ** 2
+                             + 3 * (Th[N] - theta_goal) ** 2)
+            cost += w_force * ca.sumsqr(F) + w_smooth * ca.sumsqr(F[1:, :] - F[:-1, :])
+            cost += w_omega * ca.sumsqr(Om)
+            opti.minimize(cost)
+            # a physical start: a smooth push to a takeoff state, then the ballistic arc
+            # from there to the goal (from a straight line this solve stalls too)
+            T_fl = (N - Nc) * dt
+            c_to = c0 + np.array([0.3 * (goal[0] - c0[0]), 0.03])
+            v_to = (np.asarray(goal) - c_to) / T_fl + np.array([0.0, 0.5 * g * T_fl])
+            c_g, cd_g = np.zeros((N + 1, 2)), np.zeros((N + 1, 2))
+            for k in range(N + 1):
+                if k <= Nc:
+                    c_g[k] = hermite(k * dt, 0.0, Nc * dt, c0, c_to, np.zeros(2), v_to)
+                else:
+                    t = (k - Nc) * dt
+                    c_g[k] = c_to + v_to * t + np.array([0.0, -0.5 * g * t ** 2])
+            cd_g[1:] = np.diff(c_g, axis=0) / dt
+            opti.set_initial(C, c_g)
+            opti.set_initial(Cd, cd_g)
+            f_guess = np.zeros((Nc, nu))
+            f_guess[:, 1::2] = stance * m * g / np.maximum(stance.sum(1, keepdims=True), 1)
+            opti.set_initial(F, f_guess)
+            opti.solver("ipopt", {"print_time": False},
+                        {"print_level": 0, "sb": "yes", "max_iter": 1000})
+            try:
+                sol, ok = opti.solve(), True
+            except RuntimeError:
+                sol, ok = opti.debug, False
+                if os.environ.get("ILC_SRB_DEBUG"):
+                    opti.debug.show_infeasibilities(1e-4)
+            return dict(success=ok, status=opti.stats().get("return_status", ""),
+                        c=np.array(sol.value(C)).reshape(N + 1, 2),
+                        cd=np.array(sol.value(Cd)).reshape(N + 1, 2),
+                        theta=np.array(sol.value(Th)).ravel(),
+                        omega=np.array(sol.value(Om)).ravel(),
+                        f=np.array(sol.value(F)).reshape(Nc, nu))
+
+        q_lo, q_hi = fb.joint_range[:, 0], fb.joint_range[:, 1]
+        home_rel_body = [feet0[leg] - (s0[:2] + hips[leg]) for leg in range(2)]  # foot - hip, level
+
+        def swing_path(leg, c, th):
+            """World foot targets while a leg is in the air: from where it lifted off, moving
+            with its hip at first (the leg leaves the ground with the body, the joints at
+            rest; held back at the liftoff spot, the leg is dragged straight into the knee
+            limit), through a via point, to its landing spot under the hip (home pose at N). The
+            via point sits over the box edge when the foot crosses it, timed to when the
+            hip gets there; otherwise mid-swing, tucked above both ends."""
+            k_off = Ndc if leg == 0 else Nc
+            p0 = feet0[leg]
+            base_N = c[N] - R(th[N]) @ c_off
+            pN = base_N + R(th[N]) @ (hips[leg] + home_rel_body[leg])
+            hip_xz = np.array([c[k] - R(th[k]) @ c_off + R(th[k]) @ hips[leg]
+                               for k in range(N + 1)])
+            hip_x = hip_xz[:, 0]
+            v0 = (hip_xz[k_off + 1] - hip_xz[k_off]) / dt
+            if box is not None and p0[0] < box["x_front"] < pN[0]:
+                past = np.where(hip_x[k_off:] >= box["x_front"] - 0.02)[0]
+                k_via = k_off + (int(past[0]) if past.size else (N - k_off) // 2)
+                via = np.array([box["x_front"],
+                                box["height"] + box_clearance + radius + 0.01])
+            else:
+                k_via = (k_off + N) // 2
+                via = np.array([0.5 * (p0[0] + pN[0]), max(p0[1], pN[1]) + tuck])
+            # with a landing clearance, the foot hovers above its landing spot and comes
+            # straight down onto it over the last n_landing_ramp samples
+            k_end, p_end, v_end = N, pN, np.zeros(2)
+            if landing_clearance is not None:
+                k_end = N - n_landing_ramp
+                p_end = pN + np.array([0.0, landing_clearance])
+                v_end = np.array([0.0, -landing_clearance / (n_landing_ramp * dt)])
+            k_via = int(np.clip(k_via, k_off + 3, k_end - 4))
+            v_via = (p_end - p0) / ((k_end - k_off) * dt)
+            path = {}
+            for k in range(k_off + 1, N + 1):
+                t = k * dt
+                if k <= k_via:
+                    path[k] = hermite(t, k_off * dt, k_via * dt, p0, via, v0, v_via)
+                elif k <= k_end:
+                    path[k] = hermite(t, k_via * dt, k_end * dt, via, p_end, v_via, v_end)
+                else:
+                    path[k] = p_end + (pN - p_end) * (k - k_end) / (N - k_end)
+            return path
+
+        def full_body(c, th):
+            paths = [swing_path(leg, c, th) for leg in range(2)]
+            s_g = np.zeros((N + 1, fb.ns))
+            q = fb.q_home.copy()
+            for k in range(N + 1):
+                base = c[k] - R(th[k]) @ c_off
+                targets = [paths[leg].get(k, feet0[leg]) for leg in range(2)]
+                # IK: damped least squares on the planar model's feet, base fixed
+                s_k = np.concatenate([base, [th[k]], q])
+                for _ in range(60):
+                    err = np.concatenate(targets) - fb.feet(s_k).full().ravel()
+                    if np.abs(err).max() < 1e-5:
+                        break
+                    J = fb.Jc(s_k).full()[:, 3:]
+                    dq = J.T @ np.linalg.solve(J @ J.T + 1e-4 * np.eye(4), err)
+                    s_k[3:] = np.clip(s_k[3:] + dq, q_lo, q_hi)
+                q = s_k[3:].copy()
+                s_g[k] = s_k
+            s_g[N, 3:] = fb.q_home
+            return s_g
+
+        srb = solve_srb()
+        s_g = full_body(srb["c"], srb["theta"])
+
+        sd_g = np.vstack([np.zeros(fb.ns), np.diff(s_g, axis=0) / dt])
+        tau_max = margin * 2.0 * fb.torque_limit
+        tau_g = np.zeros((N, fb.nj))
+        for k in range(N):
+            fk = srb["f"][k] if k < Nc else np.zeros(nu)
+            gen = (fb.H(s_g[k]).full() @ (sd_g[k + 1] - sd_g[k]) / dt
+                   + fb.h(s_g[k], sd_g[k]).full().ravel() - fb.Jc(s_g[k]).full().T @ fk)
+            tau_g[k] = np.clip(gen[3:] - fb.tau_fric(sd_g[k, 3:]).full().ravel(), -tau_max, tau_max)
+        return dict(s=s_g, sd=sd_g, tau=tau_g, f=srb["f"]), srb
+
     def init_trajopt(self, fb, goal, swing_mask, dt, theta_goal=0.0, box=None, clearance=0.02,
                      n_touchdown=3, qd_max=30.0, margin=0.8, joint_margin=0.1,
-                     swing_qd=10.0, w_swing=1.0, w_goal=1e5, w_tau=1e-4, w_smooth=1e-4):
+                     swing_qd=10.0, w_swing=1.0, w_goal=1e5, w_tau=1e-4, w_smooth=1e-4,
+                     box_clearance=0.0, box_setback=0.0, max_iter=500, terrain_width=0.005,
+                     init_guess=None, ipopt_options=None, guess="line",
+                     landing_pitch_rate=None, flight_pitch_rate=None, leg_clearance=None,
+                     landing_clearance=None, n_landing=15, n_landing_ramp=6):
         """
         Reference for trial 1 and x_ref for every trial, from the full-body dynamics.
 
@@ -333,6 +582,40 @@ class QuadILCStageSolver:
         swing_mask : (Nc, nu) contact schedule (Ephase); force u_t acts over [t, t+1]
         box        : None, or dict(x_front=..., height=...) in the same world frame
         clearance  : minimum foot height above the terrain during flight (m)
+        box_clearance, box_setback : a foot off the ground -- the front one swinging during
+                     rear-leg contact as well as both in flight -- clears the box's front
+                     edge by box_clearance (m) whenever it is within box_setback (m) of it,
+                     horizontally. Without it the swinging front foot may skim the edge,
+                     and a jump that pushes a little late clips it and tumbles
+        max_iter   : IPOPT iteration cap. Jumps well inside the robot's limits solved in
+                     10-60 s; a task at or past them can grind for tens of minutes
+                     before giving up, so the cap is kept low
+        terrain_width : m over which the box's front face and edge zone are smoothed (tanh)
+        init_guess : None, or dict(s, sd, tau, f) -- a previous solution to start from (see
+                     JumpILC's to_steps); overrides `guess`
+        guess      : what to start from without one: "line" (the standing pose slid toward
+                     the goal) or "srb" (a single-rigid-body plan made full-body, srb_guess)
+        flight_pitch_rate : None, or the largest |pitch rate| (rad/s) of the trunk from
+                     takeoff (sample Nc) to touchdown. Uncapped, a box plan pitches up 40-48
+                     deg at takeoff and spins nose-down at ~200 deg/s, relying on the swinging
+                     legs to brake it to landing_pitch_rate; the flown legs lag and brake less,
+                     so the robot lands 11-14 deg nose-down and tips over
+        leg_clearance : None, or the smallest x-distance (m) in the trunk frame between any
+                     point of the front leg (hip, knee, foot) and any point of the rear leg.
+                     The sagittal model has no self-collision: without this it may tuck the
+                     front feet back until they catch on the rear hips and thighs in flight,
+                     or cross the calves, and the front legs then cannot swing out to land
+        landing_clearance, n_landing, n_landing_ramp : None, or the height (m) every foot
+                     keeps above the surface under it over the last n_landing samples of
+                     flight, ramped down to 0 over the final n_landing_ramp. Flown, the front
+                     feet run 3-7 cm below the plan late in flight (leg tracking and pitch
+                     lag), so a plan skimming the box top 2-5 cm up lands on the front feet
+                     early and pitches the robot over
+        landing_pitch_rate : None, or the largest |pitch rate| (rad/s) the trunk may have at
+                     touchdown (sample N). Pitch itself is only pulled to theta_goal at N;
+                     without this a plan can land level but spinning nose-down at 130-170
+                     deg/s, and the robot then tips over on its landing
+        ipopt_options : extra IPOPT options, e.g. {"mu_strategy": "adaptive"}
         n_touchdown: last samples before N where only "not inside the terrain" is required,
                      so the feet can descend onto the landing surface (a 2 cm margin one
                      10 ms step before touchdown would otherwise hold the CoM too high)
@@ -391,6 +674,11 @@ class QuadILCStageSolver:
         F = opti.variable(Nc, nu)
         opti.subject_to(S[0, :].T == s0)
         opti.subject_to(Sd[0, :].T == 0)
+        if landing_pitch_rate is not None:
+            opti.subject_to(opti.bounded(-landing_pitch_rate, Sd[N, 2], landing_pitch_rate))
+        if flight_pitch_rate is not None:
+            for k in range(Nc, N + 1):
+                opti.subject_to(opti.bounded(-flight_pitch_rate, Sd[k, 2], flight_pitch_rate))
 
         # lambda: full-body dynamics, no contact force in flight
         for k in range(N):
@@ -416,7 +704,8 @@ class QuadILCStageSolver:
                     opti.subject_to(-fx - mu * fz <= 0)
                     pinned[foot] |= {t, t + 1}
 
-        # feet off the ground stay above the terrain (with a margin in flight); knees too
+        # feet off the ground stay above the terrain (with a margin in flight); knees and
+        # calf midpoints too
         for k in range(1, N + 1):
             feet = fb.feet(S[k, :].T)
             for foot in range(2):
@@ -424,16 +713,24 @@ class QuadILCStageSolver:
                 if k in pinned[foot]:
                     opti.subject_to(xz == feet0[2 * foot:2 * foot + 2])
                     continue
-                height = xz[1] - radius - self.box_profile(xz[0], ground_z, box)
+                height = xz[1] - radius - self.box_profile(xz[0], ground_z, box, terrain_width)
+                if box is not None and box_clearance > 0 and k < N - n_touchdown:
+                    opti.subject_to(xz[1] - radius - ground_z >= self.box_edge(
+                        xz[0], box, box_clearance, box_setback, terrain_width))
                 if k <= Nc:                           # lifted off while the other foot pushes
                     opti.subject_to(height >= 0)
                 elif k < N - n_touchdown:             # flight
                     opti.subject_to(height >= clearance)
                 else:                                 # descending onto the landing surface
                     opti.subject_to(height >= 0)
+                if landing_clearance is not None and k > max(Nc, N - n_landing):
+                    opti.subject_to(height >= landing_clearance * min(1.0, (N - k) / n_landing_ramp))
             knees = fb.knees(S[k, :].T)
             for i in range(2):
-                opti.subject_to(knees[2 * i + 1] >= self.box_profile(knees[2 * i], ground_z, box))
+                opti.subject_to(knees[2 * i + 1] >= self.box_profile(knees[2 * i], ground_z, box,
+                                                                     terrain_width))
+                mid = 0.5 * (knees[2 * i:2 * i + 2] + feet[2 * i:2 * i + 2])
+                opti.subject_to(mid[1] >= self.box_profile(mid[0], ground_z, box, terrain_width))
         if box is not None:
             # land fully on top: every foot past the front edge at sample N
             feet = fb.feet(S[N, :].T)
@@ -447,6 +744,23 @@ class QuadILCStageSolver:
         for k in range(N):
             opti.subject_to(opti.bounded(-tau_max, Tau[k, :].T, tau_max))
         opti.subject_to(S[N, 3:].T == fb.q_home)
+
+        # legs keep clear of each other: along the trunk, every point of the front leg (hip,
+        # knee, foot) stays leg_clearance ahead of every point of the rear leg, so the
+        # thighs and calves of the two cannot cross or touch
+        if leg_clearance is not None:
+            hips = [leg["hip"] for leg in fb.legs]                  # trunk frame
+            for k in range(1, N + 1):
+                sk = S[k, :].T
+                c, sn = ca.cos(sk[2]), ca.sin(sk[2])
+                along = lambda pt: c * (pt[0] - sk[0]) + sn * (pt[1] - sk[1])   # trunk x
+                feet, knees = fb.feet(sk), fb.knees(sk)
+                front = [hips[0][0], along(knees[0:2]), along(feet[0:2])]
+                rear = [hips[1][0], along(knees[2:4]), along(feet[2:4])]
+                for i, a in enumerate(front):
+                    for j, b in enumerate(rear):
+                        if i or j:                          # hip to hip is fixed
+                            opti.subject_to(a >= b + leg_clearance)
 
         # J(q_N) + running cost
         cN = fb.com(S[N, :].T)
@@ -483,14 +797,40 @@ class QuadILCStageSolver:
         tau_guess = np.zeros((N, nj))
         tau_guess[:Nc] = 2.0 * f_guess @ fb.torque_map(fb.q_home, 0.0).T
         opti.set_initial(Tau, tau_guess)
+        srb_info = None
+        if init_guess is None and guess == "srb":
+            init_guess, srb_info = self.srb_guess(
+                fb, goal, swing_mask, dt, box=box, margin=margin, clearance=clearance,
+                box_clearance=box_clearance, box_setback=box_setback, theta_goal=theta_goal,
+                landing_pitch_rate=landing_pitch_rate, flight_pitch_rate=flight_pitch_rate,
+                landing_clearance=landing_clearance, n_landing_ramp=n_landing_ramp)
+        elif guess not in ("line", "srb"):
+            raise ValueError(f"guess must be line or srb, got {guess!r}")
+        if init_guess is not None:
+            opti.set_initial(S, init_guess["s"])
+            opti.set_initial(Sd, init_guess["sd"])
+            opti.set_initial(Tau, init_guess["tau"])
+            opti.set_initial(F, init_guess["f"])
 
-        opti.solver("ipopt", {"print_time": False},
-                    {"print_level": 0, "sb": "yes", "max_iter": 3000})
+        opts = {"print_level": 0, "sb": "yes", "max_iter": int(max_iter)}
+        opts.update(ipopt_options or {})
+        opti.solver("ipopt", {"print_time": False}, opts)
         try:
             sol = opti.solve()
             ok = True
         except RuntimeError:
             sol, ok = opti.debug, False
+        stats = opti.stats()
+        # how far the returned point is from satisfying the dynamics (a converged plan: ~1e-9)
+        dyn_res = 0.0
+        for k in range(N):
+            sk, sdk = np.array(sol.value(S[k, :])).ravel(), np.array(sol.value(Sd[k, :])).ravel()
+            sdn = np.array(sol.value(Sd[k + 1, :])).ravel()
+            f = np.array(sol.value(F[k, :])).ravel() if k < Nc else np.zeros(nu)
+            tk = np.array(sol.value(Tau[k, :])).ravel()
+            lhs = fb.H(sk).full() @ (sdn - sdk) / dt + fb.h(sk, sdk).full().ravel()
+            rhs = fb.S @ (tk + fb.tau_fric(sdk[3:]).full().ravel()) + fb.Jc(sk).full().T @ f
+            dyn_res = max(dyn_res, float(np.abs(lhs - rhs).max()))
         s_opt = np.array(sol.value(S)).reshape(N + 1, ns)
         sd_opt = np.array(sol.value(Sd)).reshape(N + 1, ns)
         tau_opt = np.array(sol.value(Tau)).reshape(N, nj)
@@ -502,7 +842,8 @@ class QuadILCStageSolver:
         x_ref = np.column_stack([com, s_opt[:, 2], comd, sd_opt[:, 2]])
         feet_rel = np.array([fb.feet(s).full().reshape(2, 2) for s in s_opt]) - com[:, None, :]
         contact = feet_rel - np.array([0.0, radius])                     # sphere bottom
-        info = dict(success=ok,
+        info = dict(success=ok, status=stats.get("return_status", ""), srb=srb_info,
+                    iterations=int(stats.get("iter_count", -1)), dynamics_residual=dyn_res,
                     landing=x_ref[-1, :3].copy(),
                     goal_miss=float(np.hypot(x_ref[-1, 0] - goal[0], x_ref[-1, 1] - goal[1])),
                     min_clearance=self.min_clearance(x_ref, feet_rel, x_ref[:, 2], radius,
@@ -681,7 +1022,30 @@ class JumpILC:
     schedule  : n_stage1 trials of Stage I, n_stage2 of Stage II, then Stage III until the
                 landing is within pos_tol / theta_tol (paper, Sec. III-C)
     margin    : share of each hard limit the TO may use (init_trajopt)
+    box_clearance, box_setback : how far moving feet stay from the box's front edge
+                (init_trajopt)
+    terrain_width : smoothing of the box's face and edge zone in the TO (init_trajopt)
+    to_steps  : solve a box plan by continuation: the box height and the jump's height
+                gain grow over this many solves, each started from the one before, the
+                last being the task itself (1: solve the task directly). Only how the plan
+                is found -- the plan it converges to satisfies the same constraints. From
+                the standing-pose guess alone, IPOPT failed every Go1 (50, 20) and (50, 15)
+                box plan; in 4 steps each stage converged. The SRB guess (to_guess) now
+                does the same in one solve, so this is off by default
+    ipopt_options : extra IPOPT options for the TO
+    to_guess  : the TO's starting point (init_trajopt's guess): "srb" (default), a
+                single-rigid-body plan made full-body by IK (srb_guess), or "line", the
+                standing pose slid toward the goal. From "srb", one solve found exact Go1
+                (50, 20), (50, 15), (60, 10) and A1 (50, 20) box plans in 11-28 s, where
+                "line" failed; flat jumps solve from either. With to_steps > 1 it seeds
+                the first step only
     swing_qd, w_swing : soft speed limit on swing/flight legs and its weight (init_trajopt)
+    landing_pitch_rate : largest |pitch rate| at touchdown in the plan, rad/s (init_trajopt)
+    flight_pitch_rate : largest |pitch rate| from takeoff to touchdown, rad/s (init_trajopt)
+    leg_clearance : trunk-frame x-distance kept between every point of the front leg and
+                every point of the rear leg in the plan, m (init_trajopt)
+    landing_clearance : height every foot keeps above its landing surface late in flight
+                until it comes straight down onto it, m (init_trajopt)
     Qe_diag, Qu_diag : ILC weights on the state error and the trial-to-trial force step
     Qu_stage3 : step weight for Stage III alone (None: Qu_diag). Stage III weighs only
                 the landing state, a handful of rows against every force sample, so a
@@ -695,8 +1059,12 @@ class JumpILC:
     def __init__(self, qm, jump=(0.50, 0.10), box=dict(x_front=0.25, height=0.10),
                  phases=(20, 20, 25), dt=0.01, n_stage1=5, n_stage2=5, pos_tol=0.01,
                  theta_tol=np.radians(1.0), margin=0.8, swing_qd=10.0, w_swing=1.0,
+                 box_clearance=0.04, box_setback=0.03, terrain_width=0.005, to_steps=1,
+                 to_guess="srb", landing_pitch_rate=np.radians(45.0),
+                 flight_pitch_rate=np.radians(100.0), leg_clearance=0.10, landing_clearance=0.06,
+                 ipopt_options=None,
                  mdc_params=None, Qe_diag=(1.0, 3.0, 3.0, 0.01, 0.01, 0.01), Qu_diag=1e-5,
-                 Qu_stage3=None, reference=None):
+                 Qu_stage3=None, reference=None, _check_reference=True):
         nx, nu = self.nx, self.nu
         self.fb = fb = PlanarQuadModel(qm)
         self.Ndc, self.Nsc, self.Nfl = (int(n) for n in phases)
@@ -716,7 +1084,18 @@ class JumpILC:
         self.config = dict(robot=qm.robot, jump=[float(v) for v in jump], box=self.box,
                            phases=[self.Ndc, self.Nsc, self.Nfl], dt=self.dt, margin=margin,
                            swing_qd=float(swing_qd), w_swing=float(w_swing),
-                           fmax=float(self.mdc_params["fmax"]))
+                           fmax=float(self.mdc_params["fmax"]),
+                           landing_pitch_rate=None if landing_pitch_rate is None
+                           else float(landing_pitch_rate),
+                           flight_pitch_rate=None if flight_pitch_rate is None
+                           else float(flight_pitch_rate),
+                           leg_clearance=None if leg_clearance is None else float(leg_clearance),
+                           landing_clearance=None if landing_clearance is None
+                           else float(landing_clearance))
+        if self.box is not None:            # only a box plan depends on these
+            self.config.update(box_clearance=float(box_clearance), box_setback=float(box_setback))
+            if terrain_width != 0.005:
+                self.config["terrain_width"] = float(terrain_width)
 
         self.s_home = fb.standing_state()
         self.goal = fb.com(self.s_home).full().ravel() + np.asarray(jump, float)
@@ -733,11 +1112,31 @@ class JumpILC:
         self.solver = QuadILCStageSolver(self.N, self.Nc, self.Ndc, nx, nu, self.mdc_params,
                                          fb.torque_map)
         if reference is None:
-            self.x_ref, self.u_ref, self.to_info = self.solver.init_trajopt(
-                fb, self.goal, self.swing_mask, self.dt, box=self.box, margin=margin,
-                swing_qd=swing_qd, w_swing=w_swing)
+            to_kwargs = dict(margin=margin, swing_qd=swing_qd, w_swing=w_swing,
+                             box_clearance=box_clearance, box_setback=box_setback,
+                             terrain_width=terrain_width, ipopt_options=ipopt_options,
+                             guess=to_guess, landing_pitch_rate=landing_pitch_rate,
+                             flight_pitch_rate=flight_pitch_rate,
+                             leg_clearance=leg_clearance,
+                             landing_clearance=landing_clearance)
+            steps = int(to_steps) if self.box is not None else 1
+            c_home = fb.com(self.s_home).full().ravel()
+            guess, self.to_trace = None, []
+            for lam in np.arange(1, steps + 1) / steps:
+                box_l = None if self.box is None else dict(self.box,
+                                                           height=lam * self.box["height"])
+                goal_l = c_home + np.array([jump[0], lam * jump[1]])
+                self.x_ref, self.u_ref, self.to_info = self.solver.init_trajopt(
+                    fb, goal_l, self.swing_mask, self.dt, box=box_l, init_guess=guess,
+                    **to_kwargs)
+                info = self.to_info
+                guess = dict(s=info["s"], sd=info["sd"], tau=info["tau"], f=self.u_ref)
+                self.to_trace.append(dict(fraction=float(lam), success=info["success"],
+                                          status=info["status"], iterations=info["iterations"],
+                                          dynamics_residual=info["dynamics_residual"],
+                                          goal_miss=info["goal_miss"]))
         else:
-            self._load_reference(reference)
+            self._load_reference(reference, check=_check_reference)
         # time-varying lever arms (contact point - CoM) from the TO
         self.R1, self.R2 = self.to_info["R1"], self.to_info["R2"]
 
@@ -749,20 +1148,111 @@ class JumpILC:
     _INFO_KEYS = ("s", "sd", "tau", "q_ref", "qd_ref", "R1", "R2", "feet_rel", "landing",
                   "foot_radius", "ground_z", "success", "goal_miss", "min_clearance")
 
-    def save_reference(self, path):
-        np.savez(path, x_ref=self.x_ref, u_ref=self.u_ref, config=json.dumps(self.config),
-                 **{f"info_{k}": self.to_info[k] for k in self._INFO_KEYS})
+    def reference_arrays(self):
+        """The reference as arrays: what save_reference writes and trial files carry."""
+        return dict(x_ref=self.x_ref, u_ref=self.u_ref, config=json.dumps(self.config),
+                    **{f"info_{k}": self.to_info[k] for k in self._INFO_KEYS})
 
-    def _load_reference(self, path):
-        data = np.load(path)
+    def save_reference(self, path):
+        np.savez(path, **self.reference_arrays())
+
+    def _load_reference(self, src, check=True):
+        """src: a path written by save_reference, or a mapping of the same arrays (a
+        TrialRecord's .reference). check: refuse one made for another task/TO setting."""
+        data = np.load(src) if isinstance(src, (str, os.PathLike)) else src
         saved = json.loads(str(data["config"]))
-        if saved != json.loads(json.dumps(self.config)):
-            raise ValueError(f"reference {path} was made for {saved}, not {self.config}")
-        self.x_ref, self.u_ref = data["x_ref"], data["u_ref"]
-        self.to_info = {k: data[f"info_{k}"] for k in self._INFO_KEYS}
+        if check and saved != json.loads(json.dumps(self.config)):
+            raise ValueError(f"reference {src if isinstance(src, str) else ''} was made for "
+                             f"{saved}, not {self.config}")
+        self.x_ref, self.u_ref = np.asarray(data["x_ref"]), np.asarray(data["u_ref"])
+        self.to_info = {k: np.asarray(data[f"info_{k}"]) for k in self._INFO_KEYS}
         for k in ("foot_radius", "ground_z", "goal_miss", "min_clearance"):
             self.to_info[k] = float(self.to_info[k])
         self.to_info["success"] = bool(self.to_info["success"])
+
+    # -- resuming and transferring (trial files from trial_log.TrialRecorder) --------------
+    def restore(self, rec):
+        """Continue learning from a recorded trial of this same task: the next trial flies
+        that trial's U_next, and the stage schedule and history carry on from it."""
+        if json.loads(json.dumps(rec["config"])) != json.loads(json.dumps(self.config)):
+            raise ValueError(f"{rec.get('path', 'trial')} is from task {rec['config']}, not "
+                             f"{self.config}; use transfer_from for another task")
+        self.U = np.asarray(rec["U_next"], float).copy()
+        self.trial = int(rec["trial"])
+        self.history = list(rec["history"])
+
+    def transfer_from(self, rec):
+        """
+        Start this task from what another task learned ("retarget"): this task keeps its
+        own TO reference, and trial 1 flies its TO forces plus the correction the other
+        task learned on top of its TO forces, U_s - u_ref,s. That correction is mostly
+        what the model gets wrong about the robot (force it does not produce, lever arms),
+        which carries over between jumps. It is resampled phase by phase onto this task's
+        contact schedule (all-leg contact, then rear-leg contact), and the result clipped
+        into the force limits and friction cone.
+        """
+        cfg = rec["config"]
+        if cfg["robot"] != self.config["robot"]:
+            raise ValueError(f"{rec.get('path', 'trial')} was flown by {cfg['robot']}, "
+                             f"not {self.config['robot']}")
+        src_dc, src_sc = int(cfg["phases"][0]), int(cfg["phases"][1])
+        dU_src = np.asarray(rec["U_next"], float) - np.asarray(rec["u_ref"], float)
+        dU = np.zeros_like(self.u_ref)
+        for (s0, n_src), (d0, n_dst) in (((0, src_dc), (0, self.Ndc)),
+                                           ((src_dc, src_sc), (self.Ndc, self.Nsc))):
+            t_src = (np.arange(n_src) + 0.5) / n_src
+            t_dst = (np.arange(n_dst) + 0.5) / n_dst
+            for j in range(self.nu):
+                dU[d0:d0 + n_dst, j] = np.interp(t_dst, t_src, dU_src[s0:s0 + n_src, j])
+        self.U = self._clip_forces(self.u_ref + dU)
+        self.transferred_from = rec.get("path")
+
+    @classmethod
+    def from_trial(cls, qm, rec, jump, box=None, **kwargs):
+        """
+        The paper's transfer (Sec. II-D3): keep the simple task's reference -- its joint
+        profile, TO torque and forces -- and its learned forces, aim at a new target, and
+        learn in Stage III only. Nothing is re-planned; call prime() with the simple
+        task's last trial before the first new one. `box` is the new task's box, which
+        the reference itself was not planned around.
+        """
+        cfg = rec["config"]
+        kwargs.setdefault("n_stage1", 0)
+        kwargs.setdefault("n_stage2", 0)
+        ilc = cls(qm, jump=jump, box=box, phases=cfg["phases"], dt=cfg["dt"],
+                  margin=cfg["margin"], swing_qd=cfg["swing_qd"], w_swing=cfg["w_swing"],
+                  landing_pitch_rate=cfg.get("landing_pitch_rate"),
+                  flight_pitch_rate=cfg.get("flight_pitch_rate"),
+                  leg_clearance=cfg.get("leg_clearance"),
+                  landing_clearance=cfg.get("landing_clearance"),
+                  reference=rec.reference, _check_reference=False, **kwargs)
+        ilc.config["reference_from"] = dict(path=rec.get("path"), jump=cfg["jump"],
+                                            box=cfg["box"])
+        ilc.U = np.asarray(rec["U_next"], float).copy()
+        ilc.transferred_from = rec.get("path")
+        return ilc
+
+    def prime(self, log):
+        """
+        One Stage III step before the first trial of a transferred task (eq. 22-23): the
+        last trial of the simple task (its recorded log, flown with self.U) scored against
+        this task's goal, and U moved to close it. Counts no trial.
+        """
+        du, info = self._step(log, stage=3)
+        self.U = self.U + du
+        self.U[self.swing_mask] = 0.0
+        return info
+
+    def _clip_forces(self, U):
+        """U projected into the contact limits and friction cone, swing forces zero."""
+        p = self.mdc_params
+        U = U.copy()
+        for pair in range(self.nu // 2):
+            fx, fz = U[:, 2 * pair], U[:, 2 * pair + 1]
+            fz[:] = np.clip(fz, p["fmin"], p["fmax"])
+            fx[:] = np.clip(fx, -p["mu"] * fz, p["mu"] * fz)
+        U[self.swing_mask] = 0.0
+        return U
 
     # -- per-trial bookkeeping --------------------------------------------------------------
     def stage(self, trial=None):
@@ -804,22 +1294,39 @@ class JumpILC:
         if result["converged"]:
             return result
 
-        nx, nu, N, Nc = self.nx, self.nu, self.N, self.Nc
-        U_full = np.vstack([self.U, np.zeros((self.Nfl, nu))])
-        A_list, B_list = self.nominal.linearize_along_trial(X, U_full, self.R1, self.R2, self.dt)
-        G = build_lifted_G(A_list, B_list, N, Nc, nx, nu, flatten=True)
-        du, info = self.solver.solve(G, X, self.x_ref, self.U, log["q"], log["theta"],
-                                     log["qdot"], log["tau_pd"], self.swing_mask,
-                                     self.Qe_diag, self.Qu_stage3 if stage == 3 else self.Qu_diag,
-                                     stage)
+        du, info = self._step(log, stage)
         result["solver"] = info
         self.U = self.U + du                              # eq. (15): u_{k+1} = u_k + du*
         self.U[self.swing_mask] = 0.0
         return result
 
+    def _step(self, log, stage):
+        """The stage's QP on the trial in `log` (flown with self.U): the force step du*."""
+        X = np.asarray(log["X"], float)
+        nx, nu, N, Nc = self.nx, self.nu, self.N, self.Nc
+        U_full = np.vstack([self.U, np.zeros((self.Nfl, nu))])
+        A_list, B_list = self.nominal.linearize_along_trial(X, U_full, self.R1, self.R2, self.dt)
+        G = build_lifted_G(A_list, B_list, N, Nc, nx, nu, flatten=True)
+        # Stages I-II track the reference; Stage III aims at the goal itself (eq. 21-23:
+        # the desired landing position and pose), which is where the plan lands only when
+        # the TO reached it -- and never after a transfer to a new target
+        target = self.x_ref
+        if stage == 3:
+            target = self.x_ref.copy()
+            target[-1, :2] = self.goal
+            target[-1, 2] = 0.0
+        return self.solver.solve(G, X, target, self.U, log["q"], log["theta"],
+                                 log["qdot"], log["tau_pd"], self.swing_mask,
+                                 self.Qe_diag, self.Qu_stage3 if stage == 3 else self.Qu_diag,
+                                 stage)
+
     def describe_reference(self):
         info = self.to_info
-        return (f"TO: success={info['success']}, planned landing {np.round(info['landing'], 3)} "
+        extra = ""
+        if "status" in info:
+            extra = (f" [{info['status']}, {info['iterations']} it, dynamics residual "
+                     f"{info['dynamics_residual']:.1e}]")
+        return (f"TO: success={info['success']}{extra}, planned landing {np.round(info['landing'], 3)} "
                 f"(goal {np.round(self.goal, 3)}), min foot clearance "
                 f"{info['min_clearance']*100:.1f} cm, peak |f| {np.abs(self.u_ref).max():.0f} N, "
                 f"peak |tau| per motor {np.round(np.abs(info['tau']).max(0) / 2, 1)} N·m")
@@ -828,7 +1335,8 @@ class JumpILC:
 def describe_result(r):
     line = (f"trial {r['trial']:2d} | stage {r['stage']} | landing miss {r['pos_err']*100:5.2f} cm | "
             f"pitch {np.degrees(r['theta_err']):4.1f} deg | min foot clearance "
-            f"{r['clearance']*100:5.1f} cm" + ("  <-- feet hit the ground/box" if r["clearance"] < 0 else ""))
+            f"{r['clearance']*100:5.1f} cm" + ("  <-- feet hit the ground/box" if r["clearance"] < 0 else "")
+            + ("  <-- FELL" if r.get("fell") else ""))
     info = r.get("solver")
     if info is not None and not info["success"]:
         line += f"\n   solver failed ({info['error']}); repeating last forces"

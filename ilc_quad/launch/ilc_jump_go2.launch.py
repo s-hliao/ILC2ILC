@@ -35,7 +35,10 @@ ARGS = [
     ("max_trials", "25", "stop after this many trials"),
     ("reference_file", "", "npz to load the TO from, or save it to"),
     ("log_dir", "", "directory for one npz per trial"),
-    ("resume_file", "", "a trial npz to continue learning from"),
+    ("run_name", "", "run folder under log_dir (default: a timestamp)"),
+    ("resume_from", "", "trial npz or run folder to continue learning from"),
+    ("transfer_from", "", "another task's trial npz or run folder to start from"),
+    ("transfer_mode", "retarget", "retarget (this task's plan + learned correction) or paper"),
     ("margin", "0.8", "share of each hard limit the TO may use (Go1's 60 cm jump plans only at 0.9)"),
 ]
 
@@ -68,7 +71,10 @@ def generate_launch_description():
                      "max_trials": ParameterValue(LaunchConfiguration("max_trials"), value_type=int),
                      "reference_file": LaunchConfiguration("reference_file"),
                      "log_dir": LaunchConfiguration("log_dir"),
-                     "resume_file": LaunchConfiguration("resume_file"),
+                     "run_name": LaunchConfiguration("run_name"),
+                     "resume_from": LaunchConfiguration("resume_from"),
+                     "transfer_from": LaunchConfiguration("transfer_from"),
+                     "transfer_mode": LaunchConfiguration("transfer_mode"),
                      "margin": _float("margin"),
                      "auto_start": False,
                      "use_sim_time": False,

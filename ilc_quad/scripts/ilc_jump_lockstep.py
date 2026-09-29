@@ -87,7 +87,9 @@ def run(args) -> list[dict]:
         jump_dx=args.jump[0], jump_dz=args.jump[1],
         box_x_front=args.box[0] if args.box else 0.25, box_height=args.box[1] if args.box else 0.0,
         max_trials=args.max_trials, qu=args.qu, qu_stage3=args.qu3, qe=[float(v) for v in args.qe],
-        reference_file=args.reference_file, log_dir=args.log_dir, auto_start=True,
+        reference_file=args.reference_file, log_dir=args.log_dir, run_name=args.run_name,
+        resume_from=args.resume_from, transfer_from=args.transfer_from,
+        transfer_mode=args.transfer_mode, auto_start=True,
         exit_when_done=True,
     )
     for item in args.param:
@@ -101,6 +103,9 @@ def run(args) -> list[dict]:
 
     rclpy.init(args=["ilc_jump_lockstep"] + ros_args)
     node = IlcJumpNode()
+    if node.recorder is not None:         # what the controller is not told, for the record
+        node.recorder.annotate(sim=dict(box=box, ground=ground, payload=payload,
+                                        runner="ilc_jump_lockstep"))
     sink = _CommandSink()
     node.cmd_pub = sink
 
@@ -163,6 +168,7 @@ def run(args) -> list[dict]:
         pass
     finally:
         history = list(node.ilc.history)
+        args.run_dir = node.recorder.run_dir if node.recorder is not None else ""
         if viewer is not None:
             viewer.close()
         node.destroy_node()
@@ -186,7 +192,12 @@ def main():
     ap.add_argument("--qe", type=float, nargs=6, default=(3.0, 3.0, 3.0, 0.01, 0.01, 0.01))
     ap.add_argument("--max-trials", type=int, default=25)
     ap.add_argument("--reference-file", default="")
-    ap.add_argument("--log-dir", default="")
+    ap.add_argument("--log-dir", default="", help="root folder; the run goes in <log-dir>/<run-name>")
+    ap.add_argument("--run-name", default="", help="run folder name (default: a timestamp)")
+    ap.add_argument("--resume-from", default="", help="trial npz or run folder to continue from")
+    ap.add_argument("--transfer-from", default="",
+                    help="another task's trial npz or run folder to start from")
+    ap.add_argument("--transfer-mode", default="retarget", choices=("retarget", "paper"))
     ap.add_argument("--summary", default="", help="JSON file for the per-trial results")
     ap.add_argument("--param", action="append", default=[], metavar="NAME:=VALUE",
                     help="any other ilc_jump parameter, e.g. --param margin:=0.8")
@@ -198,7 +209,8 @@ def main():
     if args.summary:
         os.makedirs(os.path.dirname(os.path.abspath(args.summary)), exist_ok=True)
         with open(args.summary, "w") as f:
-            json.dump(dict(args=vars(args), history=history), f, default=float, indent=1)
+            json.dump(dict(args=vars(args), run_dir=args.run_dir, history=history), f,
+                      default=float, indent=1)
 
 
 if __name__ == "__main__":
