@@ -24,6 +24,7 @@ install(PROGRAMS
   scripts/go2_bridge.py
   scripts/go1_bridge.py
   scripts/ilc_jump_lockstep.py
+  scripts/replay_trials.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

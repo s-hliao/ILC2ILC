@@ -42,7 +42,7 @@ ARGS = [
     ("resume_from", "", "trial npz or run folder to continue learning from"),
     ("transfer_from", "", "another task's trial npz or run folder to start from"),
     ("transfer_mode", "retarget", "retarget (this task's plan + learned correction) or paper"),
-    ("margin", "0.8", "share of each hard limit the TO may use (Go1's 60 cm jump plans only at 0.9)"),
+    ("margin", "0.85", "share of each hard limit the TO may use (Go1 validation: 0.85 for flat and 10 cm boxes, 0.9-1.0 for taller)"),
 ]
 
 

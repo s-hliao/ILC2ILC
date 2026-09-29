@@ -331,8 +331,8 @@ class QuadILCStageSolver:
 
     def srb_guess(self, fb, goal, swing_mask, dt, box=None, margin=0.8, clearance=0.02,
                   box_clearance=0.0, box_setback=0.0, theta_goal=0.0, tuck=0.06, joint_margin=0.1,
-                  landing_pitch_rate=None, flight_pitch_rate=None, landing_clearance=None,
-                  n_landing_ramp=6, w_goal=1e5, w_force=1e-6, w_smooth=1e-4, w_omega=1e-3):
+                  landing_pitch_rate=None, flight_pitch_rate=None, flight_min_pitch=None,
+                  landing_clearance=None, n_landing_ramp=6, w_goal=1e5, w_force=1e-6, w_smooth=1e-4, w_omega=1e-3):
         """
         A full-body initial guess for init_trajopt from a single-rigid-body plan.
 
@@ -406,6 +406,9 @@ class QuadILCStageSolver:
             if flight_pitch_rate is not None:
                 for k in range(Nc, N + 1):
                     opti.subject_to(opti.bounded(-flight_pitch_rate, Om[k], flight_pitch_rate))
+            if flight_min_pitch is not None:
+                for k in range(Nc, N + 1):
+                    opti.subject_to(Th[k] >= flight_min_pitch)
             for k in range(N):
                 f = F[k, :].T if k < Nc else ca.DM.zeros(nu)
                 ck = C[k, :].T
@@ -570,8 +573,9 @@ class QuadILCStageSolver:
                      swing_qd=10.0, w_swing=1.0, w_goal=1e5, w_tau=1e-4, w_smooth=1e-4,
                      box_clearance=0.0, box_setback=0.0, max_iter=500, terrain_width=0.005,
                      init_guess=None, ipopt_options=None, guess="line",
-                     landing_pitch_rate=None, flight_pitch_rate=None, leg_clearance=None,
-                     landing_clearance=None, n_landing=15, n_landing_ramp=6):
+                     landing_pitch_rate=None, flight_pitch_rate=None, flight_min_pitch=None,
+                     flight_spin_change=None, leg_clearance=None, landing_clearance=None,
+                     n_landing=15, n_landing_ramp=6):
         """
         Reference for trial 1 and x_ref for every trial, from the full-body dynamics.
 
@@ -595,6 +599,14 @@ class QuadILCStageSolver:
                      JumpILC's to_steps); overrides `guess`
         guess      : what to start from without one: "line" (the standing pose slid toward
                      the goal) or "srb" (a single-rigid-body plan made full-body, srb_guess)
+        flight_min_pitch : None, or the lowest trunk pitch (rad, nose up +) from takeoff to
+                     touchdown. Nose-up pitch in flight is harmless; nose-down, the front feet
+                     reach the box first and the robot tips over them
+        flight_spin_change : None, or how far apart (rad/s) the trunk's fastest and slowest
+                     pitch rates in flight may be. Free, plans swing the legs as a
+                     reaction wheel to brake a 150-220 deg/s nose-down spin after takeoff to
+                     the landing rate; the flown legs lag that swing, brake less, and the
+                     robot lands 9 deg nose-down and tips over
         flight_pitch_rate : None, or the largest |pitch rate| (rad/s) of the trunk from
                      takeoff (sample Nc) to touchdown. Uncapped, a box plan pitches up 40-48
                      deg at takeoff and spins nose-down at ~200 deg/s, relying on the swinging
@@ -679,6 +691,15 @@ class QuadILCStageSolver:
         if flight_pitch_rate is not None:
             for k in range(Nc, N + 1):
                 opti.subject_to(opti.bounded(-flight_pitch_rate, Sd[k, 2], flight_pitch_rate))
+        if flight_min_pitch is not None:
+            for k in range(Nc, N + 1):
+                opti.subject_to(S[k, 2] >= flight_min_pitch)
+        if flight_spin_change is not None:
+            # every flight pitch rate inside one band [lo, lo + flight_spin_change]
+            spin_lo = opti.variable()
+            for k in range(Nc + 1, N + 1):
+                opti.subject_to(opti.bounded(spin_lo, Sd[k, 2], spin_lo + flight_spin_change))
+            opti.set_initial(spin_lo, -np.radians(90.0))
 
         # lambda: full-body dynamics, no contact force in flight
         for k in range(N):
@@ -803,6 +824,7 @@ class QuadILCStageSolver:
                 fb, goal, swing_mask, dt, box=box, margin=margin, clearance=clearance,
                 box_clearance=box_clearance, box_setback=box_setback, theta_goal=theta_goal,
                 landing_pitch_rate=landing_pitch_rate, flight_pitch_rate=flight_pitch_rate,
+                flight_min_pitch=flight_min_pitch,
                 landing_clearance=landing_clearance, n_landing_ramp=n_landing_ramp)
         elif guess not in ("line", "srb"):
             raise ValueError(f"guess must be line or srb, got {guess!r}")
@@ -1001,6 +1023,13 @@ class QuadILCStageSolver:
 
 
 
+def _same_task(a, b):
+    """Whether two JumpILC configs are the same task. A key one of them lacks counts as
+    None there: options added since an older run was recorded default to off."""
+    a, b = json.loads(json.dumps(a)), json.loads(json.dumps(b))
+    return all(a.get(k) == b.get(k) for k in set(a) | set(b))
+
+
 class JumpILC:
     """
     The paper's pipeline for one jump, independent of what flies the trials: the full-body
@@ -1042,6 +1071,8 @@ class JumpILC:
     swing_qd, w_swing : soft speed limit on swing/flight legs and its weight (init_trajopt)
     landing_pitch_rate : largest |pitch rate| at touchdown in the plan, rad/s (init_trajopt)
     flight_pitch_rate : largest |pitch rate| from takeoff to touchdown, rad/s (init_trajopt)
+    flight_min_pitch : lowest trunk pitch from takeoff to touchdown, rad (init_trajopt)
+    flight_spin_change : how far the trunk's pitch rate may move in flight, rad/s (init_trajopt)
     leg_clearance : trunk-frame x-distance kept between every point of the front leg and
                 every point of the rear leg in the plan, m (init_trajopt)
     landing_clearance : height every foot keeps above its landing surface late in flight
@@ -1057,11 +1088,13 @@ class JumpILC:
     nx, nu = 6, 4                 # x = [px, pz, theta, vx, vz, omega], u = [f1x, f1z, f2x, f2z]
 
     def __init__(self, qm, jump=(0.50, 0.10), box=dict(x_front=0.25, height=0.10),
-                 phases=(20, 20, 25), dt=0.01, n_stage1=5, n_stage2=5, pos_tol=0.01,
+                 phases=(20, 20, 25), dt=0.01, n_stage1=2, n_stage2=3, pos_tol=0.01,
                  theta_tol=np.radians(1.0), margin=0.8, swing_qd=10.0, w_swing=1.0,
                  box_clearance=0.04, box_setback=0.03, terrain_width=0.005, to_steps=1,
-                 to_guess="srb", landing_pitch_rate=np.radians(45.0),
-                 flight_pitch_rate=np.radians(100.0), leg_clearance=0.10, landing_clearance=0.06,
+                 to_guess="srb", landing_pitch_rate=np.radians(90.0),
+                 flight_pitch_rate=None, flight_min_pitch=0.0,
+                 flight_spin_change=np.radians(20.0), leg_clearance=0.10,
+                 landing_clearance=0.06,
                  ipopt_options=None,
                  mdc_params=None, Qe_diag=(1.0, 3.0, 3.0, 0.01, 0.01, 0.01), Qu_diag=1e-5,
                  Qu_stage3=None, reference=None, _check_reference=True):
@@ -1089,6 +1122,10 @@ class JumpILC:
                            else float(landing_pitch_rate),
                            flight_pitch_rate=None if flight_pitch_rate is None
                            else float(flight_pitch_rate),
+                           flight_min_pitch=None if flight_min_pitch is None
+                           else float(flight_min_pitch),
+                           flight_spin_change=None if flight_spin_change is None
+                           else float(flight_spin_change),
                            leg_clearance=None if leg_clearance is None else float(leg_clearance),
                            landing_clearance=None if landing_clearance is None
                            else float(landing_clearance))
@@ -1117,6 +1154,8 @@ class JumpILC:
                              terrain_width=terrain_width, ipopt_options=ipopt_options,
                              guess=to_guess, landing_pitch_rate=landing_pitch_rate,
                              flight_pitch_rate=flight_pitch_rate,
+                             flight_min_pitch=flight_min_pitch,
+                             flight_spin_change=flight_spin_change,
                              leg_clearance=leg_clearance,
                              landing_clearance=landing_clearance)
             steps = int(to_steps) if self.box is not None else 1
@@ -1141,6 +1180,10 @@ class JumpILC:
         self.R1, self.R2 = self.to_info["R1"], self.to_info["R2"]
 
         self.U = self.u_ref.copy()                # trial 1 flies the TO forces (eq. 29)
+        # Stage III safeguard (see update): the best Stage III trial so far, and how much
+        # the step weight is scaled up after steps that made the landing worse
+        self.best3 = None
+        self.qu3_scale = 1.0
         self.trial = 0                            # trials flown so far
         self.history = []
 
@@ -1161,7 +1204,7 @@ class JumpILC:
         TrialRecord's .reference). check: refuse one made for another task/TO setting."""
         data = np.load(src) if isinstance(src, (str, os.PathLike)) else src
         saved = json.loads(str(data["config"]))
-        if check and saved != json.loads(json.dumps(self.config)):
+        if check and not _same_task(saved, self.config):
             raise ValueError(f"reference {src if isinstance(src, str) else ''} was made for "
                              f"{saved}, not {self.config}")
         self.x_ref, self.u_ref = np.asarray(data["x_ref"]), np.asarray(data["u_ref"])
@@ -1174,12 +1217,15 @@ class JumpILC:
     def restore(self, rec):
         """Continue learning from a recorded trial of this same task: the next trial flies
         that trial's U_next, and the stage schedule and history carry on from it."""
-        if json.loads(json.dumps(rec["config"])) != json.loads(json.dumps(self.config)):
+        if not _same_task(rec["config"], self.config):
             raise ValueError(f"{rec.get('path', 'trial')} is from task {rec['config']}, not "
                              f"{self.config}; use transfer_from for another task")
         self.U = np.asarray(rec["U_next"], float).copy()
         self.trial = int(rec["trial"])
         self.history = list(rec["history"])
+        # the safeguard's step scale carries on; its best trial does not (not recorded),
+        # so the next Stage III trial becomes the best
+        self.qu3_scale = float(self.history[-1].get("qu3_scale", 1.0)) if self.history else 1.0
 
     def transfer_from(self, rec):
         """
@@ -1223,6 +1269,8 @@ class JumpILC:
                   margin=cfg["margin"], swing_qd=cfg["swing_qd"], w_swing=cfg["w_swing"],
                   landing_pitch_rate=cfg.get("landing_pitch_rate"),
                   flight_pitch_rate=cfg.get("flight_pitch_rate"),
+                  flight_min_pitch=cfg.get("flight_min_pitch"),
+                  flight_spin_change=cfg.get("flight_spin_change"),
                   leg_clearance=cfg.get("leg_clearance"),
                   landing_clearance=cfg.get("landing_clearance"),
                   reference=rec.reference, _check_reference=False, **kwargs)
@@ -1294,6 +1342,29 @@ class JumpILC:
         if result["converged"]:
             return result
 
+        # Safeguard. Stage III steps on the SRB model's sensitivities of the landing state
+        # alone; where they are off, every step can make the landing a little worse, and
+        # with nothing to notice it drifts away trial after trial (1-10 cm over 10 trials
+        # on Go1 boxes). So every trial is scored by the landing cost Stage III minimizes
+        # (a trial that fell never counts as best), and in Stage III a trial worse than the
+        # best so far -- from any stage: Stage II, tracking the whole reference, often ends
+        # with a worse landing than one of its earlier trials -- sends the next trial back
+        # to the best trial's forces with a 4x more heavily weighted (shorter) step from
+        # there; each improvement halves the weight back.
+        e = X[-1, :3] - np.array([self.goal[0], self.goal[1], 0.0])
+        cost = np.inf if log.get("fell") else float(e @ (self.Qe_diag[:3] * e))
+        is_best = np.isfinite(cost) and (self.best3 is None or cost <= self.best3["cost"])
+        if is_best:
+            self.best3 = dict(cost=cost, U=self.U.copy(), log=log)
+        if stage == 3:
+            if is_best:
+                self.qu3_scale = max(1.0, 0.5 * self.qu3_scale)
+            elif self.best3 is not None:
+                self.U = self.best3["U"].copy()
+                log = self.best3["log"]
+                self.qu3_scale *= 4.0
+                result["rejected"] = True
+            result["qu3_scale"] = self.qu3_scale
         du, info = self._step(log, stage)
         result["solver"] = info
         self.U = self.U + du                              # eq. (15): u_{k+1} = u_k + du*
@@ -1317,7 +1388,8 @@ class JumpILC:
             target[-1, 2] = 0.0
         return self.solver.solve(G, X, target, self.U, log["q"], log["theta"],
                                  log["qdot"], log["tau_pd"], self.swing_mask,
-                                 self.Qe_diag, self.Qu_stage3 if stage == 3 else self.Qu_diag,
+                                 self.Qe_diag,
+                                 self.Qu_stage3 * self.qu3_scale if stage == 3 else self.Qu_diag,
                                  stage)
 
     def describe_reference(self):

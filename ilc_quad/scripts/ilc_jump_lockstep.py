@@ -187,8 +187,8 @@ def main():
     ap.add_argument("--ground", type=float, nargs=2, metavar=("KP", "KD"),
                     help="ground stiffness N/m and damping N s/m per foot (sim only)")
     ap.add_argument("--payload", type=float, default=0.0, help="kg on the trunk (sim only)")
-    ap.add_argument("--qu", type=float, default=3e-5)
-    ap.add_argument("--qu3", type=float, default=3e-4, help="Qu in Stage III (0: --qu)")
+    ap.add_argument("--qu", type=float, default=1e-4)
+    ap.add_argument("--qu3", type=float, default=1e-5, help="Qu in Stage III (0: --qu)")
     ap.add_argument("--qe", type=float, nargs=6, default=(3.0, 3.0, 3.0, 0.01, 0.01, 0.01))
     ap.add_argument("--max-trials", type=int, default=25)
     ap.add_argument("--reference-file", default="")

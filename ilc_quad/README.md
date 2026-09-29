@@ -231,6 +231,94 @@ With `log_dir` set, each launch writes a run folder `<log_dir>/<run_name>/`
   on the TO grid, and the raw recording. `TrialRecorder.load(path, trial=k)` reads
   one back.
 
+**Landing.** A box jump touches down moving forward at about 1.5 m/s. If the feet
+simply stop, that momentum pivots the trunk over the front feet. Braking at the feet
+pitches it nose-down as well, because the backward push acts below the CoM. The old
+landing held the home pose with a joint PD. With it, the trunk rolled 8–19° nose-down
+and the rear feet lifted for 250–450 ms. The node now handles touchdown in two parts.
+
+**Last 0.1 s of flight** (`level_feet_samples`, default 10). The legs aim the feet
+where the plan has them relative to the trunk, as if the trunk were at its planned
+pitch. They take up the pitch error, so all four feet touch down together.
+
+**From touchdown** (`landing_controller:=balance`, the default), a 4-force QP runs
+every tick.
+
+- **Hard constraints:**
+  - every pair pushes down at least `bal_fmin` and stays in its friction cone;
+  - every motor stays within 85% of its torque limit;
+  - total push is at most `bal_fz_max` body weights (3.5);
+  - with `bal_fx_guard`, the net fore-aft push never drives the CoM further forward
+    while it is ahead of its place or moving forward.
+- **Objectives, in order:**
+  - the pitch moment that levels the trunk;
+  - strong braking (`bal_brake`, 60/s);
+  - the CoM height.
+- **Why each constraint is there:**
+  - The moment includes the braking forces' own lever, so the QP loads the front legs
+    to cancel it. Braking has to be strong: at 10–20/s the CoM reaches the front feet
+    before it stops.
+  - Without the fore-aft guard, the QP buys nose-up moment by pushing forward with the
+    front feet, and that carries the CoM past them.
+  - At 2 body weights the push cap was too tight to brake a 20 cm box landing.
+  - When a solve reports failure, the controller re-solves with bounds and friction
+    cones only.
+
+**Legs during the landing.** The joint targets come from IK that keeps each foot
+anchored on the landing surface. The surface height is the standing foot height plus
+the box. While the trunk still moves faster than `bal_hold_speed` (0.2 m/s):
+
+- the target pose follows the trunk, so the legs give with the impact;
+- joint damping stays light (`bal_kd_absorb`), because damping toward zero speed
+  stiffened the legs against it.
+
+Below that speed the target moves over `bal_hold_tau` to a level standing pose over
+the feet, and the legs hold it there. With targets that kept following the trunk, the
+robot crept forward at 3–16 cm/s and never stopped. The legs compress 2–3 cm.
+`landing_controller:=pd` restores the old hold.
+
+**The ILC does not learn from the landing controllers.** They act from 10 samples
+before the end of the plan (the level-feet legs), or from touchdown if that comes
+earlier. With `flight_att_kp` / `flight_att_kd` set, flight attitude feedback acts from
+takeoff. It is off by default; it swings the thighs against the pitch error. From
+that sample on, the ILC's measured state is replaced by the error at that sample
+carried on as in free flight:
+
+- position and pitch errors grow by the velocity and pitch-rate errors;
+- those velocity and pitch-rate errors stay constant.
+
+That is exact for the CoM, which is ballistic whatever the legs do, and it is how the
+ILC's model propagates errors after takeoff. Each trial's result records the sample in
+`measured_until`.
+
+**Stage III is safeguarded** (`JumpILC.update`). Stage III steps on the SRB model's
+sensitivities of the landing state alone. Once corrections are small, the model
+misjudges them, sometimes even in sign: a step predicted to add 2 cm/s of takeoff
+speed took 1 cm/s away. Unchecked, the landing then drifted by 1–10 cm over 10 trials.
+The safeguard works like this:
+
+- Every trial is scored by the landing cost. A trial that fell never counts as best.
+- In Stage III, a trial worse than the best so far sends the next trial back to the
+  best trial's forces, with a 4× more heavily weighted step.
+- The best trial can come from Stages I–II too.
+
+With it, Stage III can use a small step penalty (`qu_stage3` 1e-5). The ILC's own
+schedule is now 2 trials of Stage I and 3 of Stage II (`n_stage1`, `n_stage2`). Stage I,
+which tracks the contact phase, did little for landing.
+
+**Watching a run.** `replay_trials.py` plays the recorded MuJoCo states back in the
+viewer, in the scene the run flew in (box, payload). It is kinematic, with no
+physics, so what you see is what was flown:
+
+```bash
+ros2 run ilc_quad replay_trials.py /ilc_ws/log/go1_fp/b50_20_m100               # all trials
+ros2 run ilc_quad replay_trials.py <run> --trials 1 last --speed 0.25 --loop    # slow motion
+ros2 run ilc_quad replay_trials.py <run> --trials 1 20 --video jump.mp4         # no display
+```
+
+In the viewer, space pauses, the right and left arrows skip between trials, and
+backspace restarts the current trial.
+
 Any of those files can seed a new run:
 
 - **`resume_from:=<trial file or run folder>`** continues the same task from that
@@ -264,6 +352,65 @@ swing-foot paths over the box edge. Then the full-body TO runs once. From the ol
 straight-line start, IPOPT failed every tall-box plan. From this start, one solve
 found exact Go1 (50, 20), (50, 15), (60, 10) and A1 (50, 20) plans in 11–28 s.
 `to_steps:=4` (continuation in box height) also works, at 2–4× the time.
+
+**Plans keep the legs apart, clear of the box, and fly a steady spin.** On top of the
+box-edge clearance, `init_trajopt` has:
+
+- **`leg_clearance`** (0.10 m): along the trunk, every point of the front leg (hip,
+  knee, foot) stays this far ahead of every point of the rear leg. Without it, plans
+  crossed the calves or tucked the front feet into the rear hips.
+- **Calf midpoints above the terrain.**
+- **`landing_clearance`** (0.06 m): over the last 15 samples, the feet stay this high
+  over the surface they land on, then come straight down. The flown front feet run
+  3–7 cm below the plan late in flight, so plans that skimmed the box landed on the
+  front feet early.
+- **`flight_min_pitch`** (0°): never nose-down in flight. Nose-up is free.
+- **`flight_spin_change`** (20°/s): every flight pitch rate lies in one narrow band.
+  Otherwise plans swing the legs as a reaction wheel to brake a 150–220°/s nose-down
+  spin. The flown legs lag that swing and land 9° nose-down.
+- **`landing_pitch_rate`** (90°/s at touchdown): with the narrow spin band, this lets
+  plans take off about 30° nose-up.
+
+The initial guess matches these: swing feet start moving with their hips and hover
+above the landing spot. Every plan in the validation below converged in a single
+solve from that guess. The three hardest at 85% needed a raised cap: up to 1266
+iterations and 78 s, above the 500 default.
+
+### Go1 validation (2026-09-30)
+
+`/ilc_ws/log/final_validate.sh OUT` runs eight tasks with the node's defaults. Scoring
+is `/ilc_ws/log/suite_report.py`, on the real landing state at the plan's end.
+
+- **Easy tasks** learn from scratch on plans at 85% of the limits.
+- **Harder boxes** fly plans at 90% or 100% and start by transfer (retarget) from an
+  easier run that converged. From scratch they fell in their first 1–10 trials; the
+  learned correction (weak push, extra spin) carries over.
+- **Pass** is the paper's Table I at trial 20: no falls, |ex| ≤ 1 cm, |ey| ≤ 2 cm and
+  |eθ| ≤ 2°.
+
+| Task (dx × box height) | Plan | Start | Falls | Trial 1 ex, ey, eθ | Last ex, ey, eθ |
+|---|---|---|---|---|---|
+| 40 cm flat | 85% | scratch | 0 | −2.8, +0.4 cm, +3.3° | +0.3, −0.7 cm, +0.8° (trial 20) |
+| 60 cm flat | 85% | scratch | 0 | −5.6, +1.4 cm, +2.4° | −0.7, −0.3 cm, +1.6° (20) |
+| 50 × 10 cm box | 85% | scratch | 0 | −2.1, +0.8 cm, −3.9° | −0.1, +1.3 cm, +0.1° (converged, 7) |
+| 55 × 10 cm box | 85% | scratch | 0 | −1.9, −0.1 cm, −5.1° | −0.1, +0.4 cm, −0.2° (converged, 7) |
+| 50 × 15 cm box | 90% | from 50 × 10 | 0 | +3.1, −1.7 cm, +2.0° | +0.1, −0.9 cm, +1.4° (20) |
+| 60 × 10 cm box | 90% | from 55 × 10 | 0 | +1.3, −1.5 cm, −4.3° | +0.3, −0.3 cm, +0.2° (converged, 10) |
+| 50 × 20 cm box | 100% | from 50 × 10 | 0 | +1.4, −1.1 cm, −0.3° | −0.0, −0.3 cm, +0.6° (converged, 7) |
+| 50 × 20 cm box | 90% | from 50 × 20 @100% | 0 | +2.3, −0.8 cm, −0.6° | +0.1, −0.2 cm, +0.3° (converged, 7) |
+
+Landings on the last trials:
+
+- trunk dips 0.8–3.3° nose-down after touchdown, then settles level;
+- rear feet rise at most 1.7 cm;
+- legs compress 2–3 cm;
+- the trunk creeps under 2 cm/s once holding.
+
+Two box tasks are out of reach:
+
+- **60 × 15 cm at 90%:** plans only with a raised cap and lands 45 cm off, past Go1 here.
+- **40 × 10 cm:** impossible for any face distance. The front feet stand past the face
+  a 40 cm landing needs.
 
 ### Tests and weight sweeps without ROS transport
 

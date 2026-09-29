@@ -33,7 +33,9 @@ front leg, a third of the rear knee's at takeoff), so without it trial 1 does no
 leave the ground. Hip abduction is held at 0.
 
 A trial: stand (ramp to the home pose, then settle) -> jump (N samples of the TO
-grid) -> land (hold the home pose) -> update (ILC, in a worker thread while the
+grid) -> land (from touchdown: the balance controller, a trunk PD on pitch, height and
+fore-aft position through J^T with every foot kept pushing down; or
+landing_controller:=pd, a joint PD holding the home pose) -> update (ILC, in a worker thread while the
 robot keeps standing). The recorded trial is resampled onto the TO grid and
 expressed in the TO's frame: CoM relative to where it stood at the jump's start,
 along the heading it faced then.
@@ -50,6 +52,7 @@ import os
 import threading
 import time
 
+import casadi as ca
 import numpy as np
 import rclpy
 from geometry_msgs.msg import PoseStamped
@@ -141,30 +144,32 @@ class IlcJumpNode(Node):
         p("jump_dz", 0.20)
         p("box_x_front", 0.25)
         p("box_height", 0.20)
-        p("phases", [20, 20, 25])                 # Ndc, Nsc, Nfl on the TO grid
+        p("phases", [30, 30, 30])                 # Ndc, Nsc, Nfl on the TO grid
         p("dt", 0.01)                             # TO grid
-        p("margin", 0.8)                          # share of each hard limit the TO may use
+        p("margin", 0.85)                         # share of each hard limit the TO may use
         p("swing_qd", 10.0)                       # TO: soft speed limit on swing legs, rad/s
         p("w_swing", 1.0)                         # TO: weight on swing speed above it
         p("box_clearance", 0.04)                  # TO: moving feet clear the box's front edge
         p("box_setback", 0.03)                    #     by this much, when this close to it
         p("to_guess", "srb")                      # TO: start from an SRB plan (srb) or a line
-        p("landing_pitch_rate_deg", 45.0)         # TO: |pitch rate| at touchdown; <= 0: free
-        p("flight_pitch_rate_deg", 100.0)         # TO: |pitch rate| takeoff to touchdown; <= 0: free
+        p("landing_pitch_rate_deg", 90.0)         # TO: |pitch rate| at touchdown; <= 0: free
+        p("flight_pitch_rate_deg", 0.0)           # TO: |pitch rate| takeoff to touchdown; <= 0: free
+        p("flight_min_pitch_deg", 0.0)            # TO: lowest pitch in flight (nose up +); <= -90: free
+        p("flight_spin_change_deg", 20.0)         # TO: pitch-rate spread allowed in flight; <= 0: free
         p("leg_clearance", 0.10)                  # TO: m between the front and rear legs; <= 0: off
         p("landing_clearance", 0.06)              # TO: m feet stay above the landing late in flight; <= 0: off
         p("to_steps", 1)                          # TO: >1 = box plans by continuation in height
-        p("qu", 3e-5)                             # ILC step penalty (Qu); larger = gentler
-        # Qu in Stage III (<= 0: the same as qu). Stage III weighs only the landing state, so
-        # the Stage I-II step overshoots there and the landing drifts off over trials; 10x
-        # the step penalty holds it (MuJoCo sweep over the paper's tasks, 2026-09)
-        p("qu_stage3", 3e-4)
+        p("qu", 1e-4)                             # ILC step penalty (Qu); larger = gentler
+        # Qu in Stage III (<= 0: the same as qu). Stage III is safeguarded (JumpILC.update: a
+        # step that lands worse is undone and retried shorter), so it can step freely; at
+        # the old 3e-4 its steps were too short to lift a 1-2 cm landing shortfall
+        p("qu_stage3", 1e-5)
         # ILC error weights Qe on [x, z, theta, vx, vz, omega]. The paper's diag{1,3,3,...}
-        # prices a degree of landing pitch like 9 cm of distance; x weighted as z did better
-        # on Go1's 40/60 cm jumps and Go2's flat ones (Go2's (60,10) box preferred the paper's)
+        # prices a degree of landing pitch like 9 cm of distance, and left Go1's 60 cm jump
+        # 1.4 cm short; x weighted as z passed the whole Go1 validation suite (2026-09-30)
         p("qe", [3.0, 3.0, 3.0, 0.01, 0.01, 0.01])
-        p("n_stage1", 5)
-        p("n_stage2", 5)
+        p("n_stage1", 2)
+        p("n_stage2", 3)
         p("max_trials", 25)
         p("pos_tol", 0.01)
         p("theta_tol_deg", 1.0)
@@ -199,6 +204,39 @@ class IlcJumpNode(Node):
         p("feedforward", "to_torque")
         p("land_kp", 60.0)
         p("land_kd", 5.0)
+        # landing: balance = trunk PD (pitch, height, fore-aft) -> pair forces -> J^T, from
+        # touchdown on; pd = hold the home pose with land_kp/kd alone (the old landing)
+        p("landing_controller", "balance")
+        p("bal_pitch_w", 35.0)                    # rad/s: pitch loop natural frequency
+        p("bal_z_w", 8.0)                         # rad/s: CoM height loop
+        p("bal_x_w", 2.0)                         # rad/s: re-centre the CoM over the feet
+        p("bal_brake", 60.0)                      # 1/s: forward-velocity damping at landing
+        p("bal_zeta", 1.0)                        # damping ratio of all three loops
+        p("bal_fmin", 30.0)                       # N per pair: every foot keeps pushing down
+        p("bal_hold_tau", 0.3)                    # s: trunk target moves to standing, then holds
+        p("bal_hold_speed", 0.2)                  # m/s: below this forward speed the legs hold
+        p("bal_crouch", 0.0)                      # m: the landing lets the trunk sink this far
+        p("bal_fz_max", 3.5)                      # body weights: cap on the total landing push
+        p("bal_w_lever", 0.1)                     # m: QP weighs a moment error like a force at this lever
+        p("bal_w_z", 0.3)                         # QP weight of the vertical force (1: fore-aft)
+        p("bal_fx_guard", True)                   # net fore-aft push only toward the CoM's place
+        p("bal_z_guard", False)                   # no more than the weight while above height, rising
+        p("bal_rise", 0.5)                        # s: then rises back to standing, once holding
+        p("bal_kp", 40.0)                         # joint PD holding the feet on their anchors
+        p("bal_kd", 3.0)
+        p("bal_kd_absorb", 0.5)                   # joint damping until the legs hold: let them give
+        p("touchdown_force", 20.0)                # foot_contacts reading that ends the flight
+        # last samples of flight: legs aim the feet where the plan has them relative to the
+        # trunk's *planned* pitch, so a pitch error is taken up by the legs and all four feet
+        # touch down together; 0: fly the planned joint angles to the end
+        p("level_feet_samples", 10)
+        # flight: all thighs offset by -kp (pitch - planned) - kd (pitch rate - planned),
+        # the legs as a reaction wheel holding the trunk on the plan's pitch; 0: off
+        p("flight_att_kp", 0.0)                   # rad of thigh per rad of pitch error
+        p("flight_att_kd", 0.0)                   # s
+        p("flight_att_max", 0.35)                 # rad: largest thigh offset
+        p("late_liftoff", False)                  # rear legs start their swing only once off the ground
+        p("vel_filter_hz", 30.0)                  # low-pass on the differentiated trunk pose
         p("damp_kd", 2.0)
         p("stand_time", 1.0)                      # ramp to the home pose
         p("settle_time", 0.5)                     # then hold before jumping
@@ -246,6 +284,10 @@ class IlcJumpNode(Node):
                                 if float(get("landing_pitch_rate_deg")) > 0 else None),
             flight_pitch_rate=(math.radians(float(get("flight_pitch_rate_deg")))
                                if float(get("flight_pitch_rate_deg")) > 0 else None),
+            flight_min_pitch=(math.radians(float(get("flight_min_pitch_deg")))
+                              if float(get("flight_min_pitch_deg")) > -90 else None),
+            flight_spin_change=(math.radians(float(get("flight_spin_change_deg")))
+                                if float(get("flight_spin_change_deg")) > 0 else None),
             leg_clearance=(float(get("leg_clearance"))
                            if float(get("leg_clearance")) > 0 else None),
             landing_clearance=(float(get("landing_clearance"))
@@ -332,6 +374,60 @@ class IlcJumpNode(Node):
             raise ValueError(f"feedforward must be to_torque or force, got {self.feedforward!r}")
         self.state_timeout = float(get("state_timeout"))
         self.mocap_offset = np.asarray(get("mocap_offset"), float)
+        self.landing_controller = get("landing_controller")
+        if self.landing_controller not in ("balance", "pd"):
+            raise ValueError(f"landing_controller must be balance or pd, got {self.landing_controller!r}")
+        zeta = float(get("bal_zeta"))
+        self.bal_gains = {k: (float(get(f"bal_{k}_w")) ** 2, 2 * zeta * float(get(f"bal_{k}_w")))
+                          for k in ("pitch", "z", "x")}
+        self.bal_fmin = float(get("bal_fmin"))
+        self.bal_brake = float(get("bal_brake"))
+        self.bal_hold_tau = float(get("bal_hold_tau"))
+        self.bal_hold_speed = float(get("bal_hold_speed"))
+        self.bal_crouch = float(get("bal_crouch"))
+        self.bal_fz_max = float(get("bal_fz_max")) * self.fb.total_mass * self.fb.g
+        self.bal_w_lever, self.bal_w_z = float(get("bal_w_lever")), float(get("bal_w_z"))
+        self.bal_fx_guard = bool(get("bal_fx_guard"))
+        self.bal_z_guard = bool(get("bal_z_guard"))
+        self.bal_rise = float(get("bal_rise"))
+        # the landing force QP: 4 forces, friction cones |fx| <= mu fz as 4 rows
+        mu = self.ilc.mdc_params["mu"]
+        self.bal_cone = np.array([[1.0, -mu, 0.0, 0.0], [-1.0, -mu, 0.0, 0.0],
+                                  [0.0, 0.0, 1.0, -mu], [0.0, 0.0, -1.0, -mu]])
+        self.bal_qp = ca.conic("bal", "qrqp", dict(h=ca.Sparsity.dense(4, 4),
+                                                   a=ca.Sparsity.dense(10, 4)),
+                               dict(print_iter=False, print_header=False, print_info=False,
+                                    error_on_fail=False))
+        self.bal_pd = (float(get("bal_kp")), float(get("bal_kd")))
+        self.bal_kd_absorb = float(get("bal_kd_absorb"))
+        self.touchdown_force = float(get("touchdown_force"))
+        self.vel_filter_hz = float(get("vel_filter_hz"))
+        self.level_feet_samples = int(get("level_feet_samples"))
+        self.flight_att = (float(get("flight_att_kp")), float(get("flight_att_kd")),
+                           float(get("flight_att_max")))
+        self.late_liftoff = bool(get("late_liftoff"))
+        self.rear_off = False
+        # the plan's feet relative to its base, world axes, for the level touchdown
+        s_ref = self.ilc.to_info["s"]
+        self.feet_off_ref = np.array([fb.feet(sk).full().ravel().reshape(2, 2) - sk[:2]
+                                      for sk in s_ref])
+        self.vel = None                       # filtered (time, pos, theta, [vx, vz, theta_d])
+        self.touched_down = False
+        self.anchor = None                    # landing: where each pair's foot is held
+        self.surface_z = None
+        self.last_q = None
+        self.bal_force = None
+        self.t_touchdown = None
+        self.measure_until = None
+        # the standing CoM over its feet: where balance holds the trunk
+        s_home = fb.standing_state()
+        feet_home = fb.feet(s_home).full().ravel()
+        self.com_over_feet = (fb.com(s_home).full().ravel()
+                              - 0.5 * (feet_home[0:2] + feet_home[2:4]))
+        self.base_over_feet = s_home[:2] - 0.5 * (feet_home[0:2] + feet_home[2:4])
+        self.hold_pose = None                 # landing: trunk pose the legs hold [x, z, pitch]
+        self.crouch = 0.0                     # landing: how far below standing height to aim
+        self.holding = False
 
         # ---- I/O ----
         pose_topic = get("pose_topic") or ("base_odom" if self.is_sim else "")
@@ -419,6 +515,8 @@ class IlcJumpNode(Node):
                 self._to_damp(f"trunk tilted {math.degrees(tilt):.0f} deg")
                 return
 
+        self._update_velocity(now)
+        self.last_q = q
         try:
             cmd = getattr(self, f"_tick_{self.phase}")(now, q, dq)
         except Exception as err:          # a bug mid-jump must not leave the last command held
@@ -429,6 +527,204 @@ class IlcJumpNode(Node):
             msg_out = Float64MultiArray()
             msg_out.data = pack_joint_cmd(*cmd)
             self.cmd_pub.publish(msg_out)
+
+    def _update_velocity(self, now):
+        """Trunk velocity [v_fwd, v_z, pitch rate] by differentiating the pose each tick,
+        low-passed (first order, vel_filter_hz)."""
+        _, pos, quat = self.pose
+        theta = planar_pitch(quat)
+        if self.vel is None or now <= self.vel[0]:
+            self.vel = (now, pos.copy(), theta, np.zeros(3))
+            return
+        t0, p0, th0, v0 = self.vel
+        h = now - t0
+        yaw = self.frame["yaw"] if getattr(self, "frame", None) else yaw_of(quat)
+        d = (pos - p0) / h
+        raw = np.array([math.cos(yaw) * d[0] + math.sin(yaw) * d[1], d[2], (theta - th0) / h])
+        a = 1.0 - math.exp(-2 * math.pi * self.vel_filter_hz * h)
+        self.vel = (now, pos.copy(), theta, v0 + a * (raw - v0))
+
+    def _balance(self, q, dq):
+        """
+        Landing balance. The jump lands moving forward at ~1.5 m/s; stopped dead at the
+        feet, that momentum pivots the trunk over the front feet. Braking at the feet
+        pitches it nose-down too (the backward push acts below the CoM), so how hard the
+        robot may brake is set by how much front-rear load shift the pitch can take.
+
+        Pair forces f = [fFx, fFz, fRx, fRz] (world, ground on robot), applied through
+        J^T, from a small QP each tick: every pair pushes down at least bal_fmin (the rear
+        feet stay on the ground) inside its friction cone, and f matches, in this order of
+        weight,
+          - the pitch moment of a PD levelling the trunk (bal_pitch_w),
+          - braking: forward velocity damped at bal_brake (1/s), plus a weak spring
+            (bal_x_w) re-centring the CoM over the feet once it has stopped,
+          - the vertical force of a PD on the CoM height over the feet (bal_z_w),
+        with every motor's torque inside its limit.
+        The moment row includes the braking forces' own lever (they act below the CoM), so
+        the QP loads the front legs to cancel the nose-down moment braking makes. It has
+        to brake early: the landing's ~19 N s of forward momentum, stopped at the feet,
+        is ~5 N s of nose-down angular impulse, and the front legs' lever to cancel it
+        shrinks as the CoM travels forward -- braked gently, the CoM reaches the front
+        feet first and the trunk pivots over them. The vertical force gives way first:
+        the front legs push harder than the height loop asks.
+
+        The joint PD targets keep the feet on the landing surface (the standing height
+        at the jump's start plus the box): each pair's foot is anchored where it lands, a
+        pair still in the air is aimed straight down onto the surface, by IK with the
+        trunk at a held pose: the measured one while the trunk still moves faster than
+        bal_hold_speed (the legs give with the impact), then moving over bal_hold_tau to
+        level standing over the anchored feet, where the legs hold the robot. Both the
+        height loop and that pose aim bal_crouch below standing height at touchdown, so
+        the legs compress to absorb the landing, and rise back over bal_rise once holding.
+        """
+        fb, ilc = self.fb, self.ilc
+        vx, vz, theta_d = self.vel[3]
+        s = self._planar_state(q)
+        theta, qp = s[2], s[3:]
+        com = fb.com(s).full().ravel()
+        feet = fb.feet(s).full().ravel().reshape(2, 2)
+        q_des = expand(self._anchored_joints(s, feet))
+        err = com - 0.5 * (feet[0] + feet[1]) - self.com_over_feet
+        err[1] += self.crouch                                   # absorb: aim lower at first
+        m, inertia, g = fb.total_mass, ilc.nominal.I, fb.g
+        (kth, dth), (kz, dz), (kx, _) = (self.bal_gains[k] for k in ("pitch", "z", "x"))
+        mu, fmin, fmax = ilc.mdc_params["mu"], self.bal_fmin, ilc.mdc_params["fmax"]
+        Fz = float(np.clip(m * (g - kz * err[1] - dz * vz), 2 * fmin, 2 * fmax))
+        Fx_des = m * (-self.bal_brake * vx - kx * err[0])
+        M_des = inertia * (-kth * theta - dth * theta_d)       # nose-up moment
+        r = feet - com                                          # levers, front and rear
+        rows = np.array([[-r[0, 1], r[0, 0], -r[1, 1], r[1, 0]],   # moment r_x f_z - r_z f_x
+                         [1.0, 0.0, 1.0, 0.0],                     # net fore-aft force
+                         [0.0, 1.0, 0.0, 1.0]])                    # net vertical force
+        w = np.array([1.0 / self.bal_w_lever ** 2, 1.0, self.bal_w_z])  # moment in N over a lever
+        target = np.array([M_des, Fx_des, Fz])
+        H = 2.0 * (rows.T * w) @ rows + 1e-6 * np.eye(4)
+        gvec = -2.0 * (rows.T * w) @ target
+        lbx = [-mu * fmax, fmin, -mu * fmax, fmin]
+        ubx = [mu * fmax, fmax, mu * fmax, fmax]
+        # rows: friction cones (<= 0), then per-motor torque T f within 85% of the limit
+        # (the rest for the joint PD) -- demanded past it, the front knees fold
+        # and the total push under bal_fz_max: the legs give instead of meeting the impact
+        # rigidly (braking hard asks for all the friction, i.e. all the vertical force, the
+        # legs can make)
+        T = fb.torque_map(qp, theta)
+        tmax = 0.85 * collapse(self.tau_limit)
+        # and the net fore-aft push never drives the CoM further off: forward only while
+        # it is behind its place over the feet and not moving away, backward likewise.
+        # Near the front feet, vertical forces have no lever left to raise the nose, and
+        # the cheapest nose-up moment is a forward push at the front feet -- which carries
+        # the CoM past them
+        away = err[0] > 0 or vx > 0
+        fx_lo = 0.0 if (self.bal_fx_guard and not away) else -np.inf
+        fx_hi = 0.0 if (self.bal_fx_guard and away) else np.inf
+        # likewise vertically: above its height and still rising, the trunk gets no more than
+        # its weight -- the pitch loop, pushing the nose up with the front legs, otherwise
+        # pops the robot up onto its front feet with the rear ones hanging
+        fz_hi = self.bal_fz_max
+        if self.bal_z_guard and err[1] > 0 and vz > 0:
+            fz_hi = min(fz_hi, m * g)
+        A = np.vstack([self.bal_cone, T, [[0.0, 1.0, 0.0, 1.0]], [[1.0, 0.0, 1.0, 0.0]]])
+        lba = np.concatenate([np.full(4, -np.inf), -tmax, [-np.inf], [fx_lo]])
+        uba = np.concatenate([np.zeros(4), tmax, [fz_hi], [fx_hi]])
+        sol = self.bal_qp(h=H, g=gvec, a=A, lba=lba, uba=uba, lbx=lbx, ubx=ubx)
+        f = np.array(sol["x"]).ravel()
+        if not self._forces_ok(f, lbx, ubx, mu):
+            # torque limits, the push cap or the fore-aft guard can be jointly infeasible
+            # at an awkward touchdown pose -- and an infeasible QP returns garbage (a rear
+            # pair pulling on the ground at -240 N, the front past fmax). Drop those rows:
+            # bounds and friction cones alone are always feasible
+            free = np.arange(len(lba)) >= 4
+            lba2, uba2 = lba.copy(), uba.copy()
+            lba2[free], uba2[free] = -np.inf, np.inf
+            f = np.array(self.bal_qp(h=H, g=gvec, a=A, lba=lba2, uba=uba2,
+                                     lbx=lbx, ubx=ubx)["x"]).ravel()
+        if not self._forces_ok(f, lbx, ubx, mu):                # never expected: project
+            f = np.where(np.isfinite(f), f, 0.0)
+            f[1::2] = np.clip(f[1::2], fmin, fmax)
+            f[0::2] = np.clip(f[0::2], -mu * f[1::2], mu * f[1::2])
+        self.bal_force = f
+        tau_ff = np.clip(expand(fb.torque_map(qp, theta) @ f), -self.tau_limit, self.tau_limit)
+        # while braking, the joint targets follow the trunk, and damping them toward zero
+        # speed would stiffen the legs against the impact (kd 3 at ~10 rad/s of knee
+        # compression is past the motors' limit): light damping until the legs hold
+        kd_leg = self.bal_pd[1] if self.holding else self.bal_kd_absorb
+        kp, kd = np.full(NU, self.bal_pd[0]), np.full(NU, kd_leg)
+        kp[HIP_IDX], kd[HIP_IDX] = self.gains["stand"]
+        return q_des, np.zeros(NU), kp, kd, tau_ff
+
+    @staticmethod
+    def _forces_ok(f, lbx, ubx, mu, tol=1e-3):
+        """Whether pair forces are finite, inside their bounds and friction cones."""
+        return (bool(np.all(np.isfinite(f)))
+                and bool(np.all(f >= np.asarray(lbx) - tol) and np.all(f <= np.asarray(ubx) + tol))
+                and bool(np.all(np.abs(f[0::2]) <= mu * f[1::2] + tol)))
+
+    def _anchored_joints(self, s, feet):
+        """Planar joint targets that put each pair's foot on its landing anchor (see
+        _balance), by damped least-squares IK with the trunk where it is measured."""
+        c = self.contacts
+        known = np.isfinite(c).all()
+        down = [known and max(c[2 * i], c[2 * i + 1]) > self.touchdown_force for i in range(2)]
+        if self.anchor is None:
+            self.anchor = feet.copy()
+            self.anchor[:, 1] = self.surface_z
+            self.anchored = [bool(down[i]) or not known for i in range(2)]
+            self.q_anchor = s[3:].copy()
+            self.hold_pose = s[:3].copy()
+            self.holding = False
+            self.crouch = self.bal_crouch
+        for i in range(2):
+            if not self.anchored[i]:
+                self.anchor[i, 0] = feet[i, 0]            # descending: straight down
+                self.anchored[i] = bool(down[i])
+        # the trunk pose the legs hold. While the landing's momentum is still being braked
+        # (forward speed above bal_hold_speed) it is the measured pose: the legs give with
+        # the trunk, and the braking stays with the force QP -- held back by the legs
+        # instead, the trunk pitches over the front feet. Below that speed it moves
+        # (bal_hold_tau) to level standing over the anchored feet and stays: IK at the
+        # measured pose throughout would move the targets with the trunk, and nothing
+        # would stop it creeping forward over the feet
+        if not self.holding and abs(self.vel[3][0]) > self.bal_hold_speed:
+            self.hold_pose = s[:3].copy()
+        else:
+            self.holding = True
+            if self.bal_rise > 0:                       # stand back up
+                self.crouch *= math.exp(-self.tick / self.bal_rise)
+            goal = np.concatenate([0.5 * (self.anchor[0] + self.anchor[1]) + self.base_over_feet,
+                                   [0.0]])
+            goal[1] -= self.crouch
+            a = 1.0 - math.exp(-self.tick / self.bal_hold_tau) if self.bal_hold_tau > 0 else 1.0
+            self.hold_pose = self.hold_pose + a * (goal - self.hold_pose)
+        s_hold = np.concatenate([self.hold_pose, s[3:]])
+        self.q_anchor = self._ik(s_hold, self.anchor.ravel(), self.q_anchor)
+        return self.q_anchor
+
+    def _planar_state(self, q):
+        """Measured planar state [fwd, z, pitch, q] (fwd along the jump's heading)."""
+        _, pos, quat = self.pose
+        yaw = self.frame["yaw"] if getattr(self, "frame", None) else yaw_of(quat)
+        fwd = math.cos(yaw) * pos[0] + math.sin(yaw) * pos[1]
+        return np.concatenate([[fwd, pos[2], planar_pitch(quat)], collapse(q)])
+
+    def _ik(self, s, target, q0, iters=6):
+        """Planar joints putting the feet at target [xF, zF, xR, zR] with the trunk at s,
+        damped least squares from q0, inside the joint range."""
+        fb = self.fb
+        lo, hi = fb.joint_range[:, 0], fb.joint_range[:, 1]
+        q, s_ik = np.array(q0, float), np.array(s, float)
+        for _ in range(iters):
+            s_ik[3:] = q
+            e = target - fb.feet(s_ik).full().ravel()
+            if np.abs(e).max() < 1e-4:
+                break
+            J = fb.Jc(s_ik).full()[:, 3:]
+            q = np.clip(q + J.T @ np.linalg.solve(J @ J.T + 1e-4 * np.eye(4), e), lo, hi)
+        return q
+
+    def _land_cmd(self, q, dq):
+        if self.landing_controller == "balance":
+            return self._balance(q, dq)
+        return self._hold("land")
 
     def _inputs_fresh(self):
         if self.pose is None:
@@ -502,9 +798,18 @@ class IlcJumpNode(Node):
         _, pos, quat = self.pose
         self.frame = dict(origin=pos.copy(), yaw=yaw_of(quat))
         self.rec = dict(t=[], pos=[], quat=[], q=[], dq=[], tau_pd=[], cmd_tau=[], q_des=[],
-                        dq_des=[], tau_total=[], effort=[], contacts=[])
+                        dq_des=[], tau_total=[], effort=[], contacts=[], bal_f=[])
         self.U_flown = self.ilc.U.copy()
         self.fell = False
+        self.touched_down = False
+        self.t_touchdown = None
+        self.anchor = None
+        self.rear_off = False
+        # the landing surface for the balance controller's foot anchors: the feet's
+        # height standing now, raised by the box the plan lands on
+        feet = self.fb.feet(self._planar_state(self.last_q)).full().ravel()
+        box = self.ilc.box
+        self.surface_z = 0.5 * (feet[1] + feet[3]) + (box["height"] if box is not None else 0.0)
         self.get_logger().info(f"trial {self.ilc.trial + 1}: jump")
 
     def _tick_jump(self, now, q, dq):
@@ -519,8 +824,40 @@ class IlcJumpNode(Node):
         ilc, dt = self.ilc, self.ilc.dt
         k = min(int(t / dt + 1e-6), ilc.N - 1)
         a = t / dt - k
+        # touchdown before the plan's last sample: the landing controller takes over there
+        # and then (late in flight only, so push-off contact never trips it)
+        if self.landing_controller == "balance" and k >= ilc.Nc + (ilc.N - ilc.Nc) // 2:
+            c = self.contacts
+            if self.touched_down or (np.isfinite(c).any()
+                                     and np.nanmax(c) > self.touchdown_force):
+                if not self.touched_down:
+                    self.t_touchdown = t
+                self.touched_down = True
+                q_des, dq_des, kp, kd, tau_ff = self._balance(q, dq)
+                self._record(t, q, dq, q_des, dq_des, kp, kd, tau_ff,
+                             kp * (q_des - q) + kd * (dq_des - dq) + tau_ff)
+                return q_des, dq_des, kp, kd, tau_ff
         q_des = expand((1 - a) * ilc.to_info["q_ref"][k] + a * ilc.to_info["q_ref"][k + 1])
         dq_des = expand((1 - a) * ilc.to_info["qd_ref"][k] + a * ilc.to_info["qd_ref"][k + 1])
+        if self.level_feet_samples > 0 and k >= ilc.N - self.level_feet_samples:
+            # feet where the plan puts them off the base (world axes), whatever the trunk's
+            # pitch: the legs take up the pitch error and all feet meet the surface together
+            s_meas = self._planar_state(q)
+            target = s_meas[:2] + ((1 - a) * self.feet_off_ref[k] + a * self.feet_off_ref[k + 1])
+            q_level = self._ik(s_meas, target.ravel(), collapse(q_des))
+            q_des = expand(q_level)
+        if k >= ilc.Nc and self.flight_att[0] + self.flight_att[1] > 0:
+            # flight attitude: the feet carry no force, so nothing the ILC learns can steer
+            # the trunk here -- yet the box plans' quick leg tuck after takeoff, flown with
+            # lag, spins the trunk ~40 deg/s further nose-down than planned. Swing all thighs
+            # against the pitch error: with the legs' angular momentum traded against the
+            # trunk's, raising q_thigh raises the nose
+            kp_a, kd_a, max_a = self.flight_att
+            th_ref = (1 - a) * ilc.x_ref[k, 2] + a * ilc.x_ref[k + 1, 2]
+            w_ref = (1 - a) * ilc.x_ref[k, 5] + a * ilc.x_ref[k + 1, 5]
+            e_th, e_w = planar_pitch(self.pose[2]) - th_ref, self.vel[3][2] - w_ref
+            delta = float(np.clip(-kp_a * e_th - kd_a * e_w, -max_a, max_a))
+            q_des = q_des + expand(np.array([delta, 0.0, delta, 0.0]))
 
         # feedforward: the TO's joint torque, plus the ILC's force correction through
         # J(q)^T R(theta)^T at the measured configuration; both held over each TO sample
@@ -550,6 +887,17 @@ class IlcJumpNode(Node):
                     for idx in joints:
                         kp[idx], kd[idx] = self.gains["contact"]
         kp[HIP_IDX], kd[HIP_IDX] = self.gains["stand"]
+        if self.late_liftoff and ilc.Nc <= k < ilc.Nc + 5 and not self.rear_off:
+            # rear feet still on the ground past the planned takeoff: keep the rear legs
+            # force-controlled (no swing PD or swing torque) until they come off, rather than
+            # tucking them against the ground
+            c = self.contacts
+            if np.isfinite(c).all() and max(c[2], c[3]) > self.touchdown_force:
+                for idx in PLANAR_TO_CANONICAL[2] + PLANAR_TO_CANONICAL[3]:
+                    kp[idx], kd[idx] = self.gains["contact"]
+                    tau_ff[idx] = 0.0
+            else:
+                self.rear_off = True
         # everything the motor carries besides J^T f of the ILC's forces: the ILC's torque
         # limits apply to  T u + this  (QuadILCStageSolver.solve's tau_pd_k)
         tau_pd = kp * (q_des - q) + kd * (dq_des - dq) + tau_ff - tau_ilc
@@ -571,6 +919,10 @@ class IlcJumpNode(Node):
         self.rec["tau_total"].append(kp * (q_des - q) + kd * (dq_des - dq) + tau_ff)
         self.rec["effort"].append(self.effort.copy())
         self.rec["contacts"].append(self.contacts.copy())
+        # the landing controller's pair forces this tick (NaN before it takes over)
+        self.rec["bal_f"].append(self.bal_force.copy() if self.bal_force is not None
+                                 else np.full(4, np.nan))
+        self.bal_force = None
 
     def _tick_land(self, now, q, dq):
         if self.fell or now - self.phase_t0 >= self.land_time:
@@ -578,10 +930,10 @@ class IlcJumpNode(Node):
             # the recording is final from here: the update thread reads it
             self.worker = threading.Thread(target=self._update_worker, daemon=True)
             self.worker.start()
-            return self._tick_damp(now, q, dq) if self.fell else self._hold("land")
+            return self._tick_damp(now, q, dq) if self.fell else self._land_cmd(q, dq)
         if self.fell:
             return self._tick_damp(now, q, dq)
-        cmd = self._hold("land")
+        cmd = self._land_cmd(q, dq)
         # the landing is recorded too (t runs on past the jump); the ILC's log only
         # resamples the jump itself, samples 0..N
         q_des, dq_des, kp, kd, tau_ff = cmd
@@ -606,7 +958,7 @@ class IlcJumpNode(Node):
                 self.get_logger().info(f"ready: call /start_trial for trial {self.ilc.trial + 1}")
             if self.fell:                     # idle then sends nothing: the bridge damps
                 self.stood = False
-        return self._tick_damp(now, q, dq) if self.fell else self._hold("land")
+        return self._tick_damp(now, q, dq) if self.fell else self._land_cmd(q, dq)
 
     # -- learning -------------------------------------------------------------------------
 
@@ -635,6 +987,7 @@ class IlcJumpNode(Node):
         at = lambda y: np.interp(grid, t, y)
         X = np.column_stack([at(com[:, 0]), at(com[:, 1]), at(theta),
                              at(comd[:, 0]), at(comd[:, 1]), at(thetad)])
+        X = self._free_flight_tail(X)
         Nc = ilc.Nc
         per_motor_pd = np.array([collapse(v) for v in rec["tau_pd"]])
         log = dict(
@@ -643,8 +996,43 @@ class IlcJumpNode(Node):
             theta=X[:Nc, 2],
             qdot=np.column_stack([at(dq_planar[:, i]) for i in range(4)])[:Nc],
             tau_pd=np.column_stack([at(per_motor_pd[:, i]) for i in range(4)])[:Nc],
+            fell=bool(self.fell),             # a trial that fell is never the ILC's best
         )
         return log, rec, self._measured_clearance(t, feet)
+
+    def _free_flight_tail(self, X):
+        """
+        Keep the touchdown controllers out of what the ILC learns from. From the sample
+        where the first of them acts -- the level-feet legs (level_feet_samples before
+        the end), or touchdown, whichever is earlier -- the measured state is replaced by
+        the reference plus the error at that sample carried on as in free flight: position
+        and pitch errors grow by the velocity and pitch-rate errors, which stay constant.
+        That is how the ILC's SRB model propagates an error once the feet are off the
+        ground, and exact for the CoM, which is ballistic whatever the legs do; what the
+        landing controllers do after it (legs reaching for the surface, the balance
+        forces at contact) is not something the learned forces act through.
+        """
+        ilc = self.ilc
+        starts = []
+        if self.flight_att[0] + self.flight_att[1] > 0:
+            starts.append(ilc.Nc)                 # flight attitude feedback from takeoff
+        if self.level_feet_samples > 0:
+            starts.append(ilc.N - self.level_feet_samples)
+        if self.t_touchdown is not None:
+            starts.append(int(self.t_touchdown / ilc.dt + 1e-6))
+        if not starts:
+            return X
+        k0 = max(min(starts), ilc.Nc + 1)
+        if k0 >= ilc.N:
+            return X
+        X = X.copy()
+        e = X[k0] - ilc.x_ref[k0]
+        for k in range(k0 + 1, ilc.N + 1):
+            h = (k - k0) * ilc.dt
+            X[k, 0:3] = ilc.x_ref[k, 0:3] + e[0:3] + h * e[3:6]
+            X[k, 3:6] = ilc.x_ref[k, 3:6] + e[3:6]
+        self.measure_until = k0
+        return X
 
     def _measured_clearance(self, t, feet):
         """
@@ -667,6 +1055,8 @@ class IlcJumpNode(Node):
             result = self.ilc.update(log)
             result["clearance"] = clearance           # measured, not the TO's legs
             result["fell"] = bool(self.fell)          # landing failed: tilted past max_tilt
+            if self.measure_until is not None:        # free-flight tail from this sample on
+                result["measured_until"] = int(self.measure_until)
             self.last_result = result
             self.get_logger().info(describe_result(result))
             if self.recorder is not None:
