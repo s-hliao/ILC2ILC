@@ -1082,6 +1082,21 @@ class JumpILC:
                 the landing state, a handful of rows against every force sample, so a
                 step small enough for Stages I-II can overshoot there, and the unweighted
                 directions drift trial to trial
+    secant    : correct the SRB model's landing sensitivities from the robot (Broyden). Each
+                trial is a step du from some trial; the landing changed by dx where the
+                model said G_N du, so G_N gains the rank-one correction
+                (dx - G_N du) du^T / |du|^2 -- exact along every direction stepped since.
+                Stage III plans with the corrected G_N. On Go1 the SRB model gets the
+                landing x right but its pitch 5-10x too sensitive to the forces, often with
+                the wrong sign (the legs' own momentum, which it lacks), so uncorrected
+                Stage III chases a pitch correction the forces do not make
+    mu        : ground friction the plan, the ILC's friction cones and the landing assume
+                (the paper's 0.6); the plan uses margin x mu of it at most
+    safeguard : Stage III rolls a trial that landed worse than the best so far (or fell)
+                back to the best trial's forces with a shorter step (see update). False:
+                the paper's law, a step from every trial whatever it did -- the error is
+                measured over the jump window [0, N] only, so a trial that fell off the box
+                after landing is as good a measurement as any
     reference : None to run the TO, or a path written by save_reference() to reuse one
     """
 
@@ -1097,7 +1112,8 @@ class JumpILC:
                  landing_clearance=0.06,
                  ipopt_options=None,
                  mdc_params=None, Qe_diag=(1.0, 3.0, 3.0, 0.01, 0.01, 0.01), Qu_diag=1e-5,
-                 Qu_stage3=None, reference=None, _check_reference=True):
+                 Qu_stage3=None, safeguard=True, secant=False, mu=0.6, reference=None,
+                 _check_reference=True):
         nx, nu = self.nx, self.nu
         self.fb = fb = PlanarQuadModel(qm)
         self.Ndc, self.Nsc, self.Nfl = (int(n) for n in phases)
@@ -1113,7 +1129,7 @@ class JumpILC:
         # A1 motor values (Table III)
         self.mdc_params = mdc_params or dict(rho=0.35, sigma=0.02, Vmax=21.5, Vmin=-21.5,
                                              tau_max=fb.torque_limit, fmin=5.0, fmax=500.0,
-                                             mu=0.6)
+                                             mu=float(mu))
         self.config = dict(robot=qm.robot, jump=[float(v) for v in jump], box=self.box,
                            phases=[self.Ndc, self.Nsc, self.Nfl], dt=self.dt, margin=margin,
                            swing_qd=float(swing_qd), w_swing=float(w_swing),
@@ -1133,6 +1149,8 @@ class JumpILC:
             self.config.update(box_clearance=float(box_clearance), box_setback=float(box_setback))
             if terrain_width != 0.005:
                 self.config["terrain_width"] = float(terrain_width)
+        if self.mdc_params["mu"] != 0.6:    # a plan for other friction (0.6: older references)
+            self.config["mu"] = float(self.mdc_params["mu"])
 
         self.s_home = fb.standing_state()
         self.goal = fb.com(self.s_home).full().ravel() + np.asarray(jump, float)
@@ -1182,6 +1200,10 @@ class JumpILC:
         self.U = self.u_ref.copy()                # trial 1 flies the TO forces (eq. 29)
         # Stage III safeguard (see update): the best Stage III trial so far, and how much
         # the step weight is scaled up after steps that made the landing worse
+        self.safeguard = bool(safeguard)
+        self.secant = bool(secant)
+        self.G_corr = np.zeros((nx, self.Nc * nu))    # learned correction to G's landing rows
+        self._origin = None                           # what the last step started from
         self.best3 = None
         self.qu3_scale = 1.0
         self.trial = 0                            # trials flown so far
@@ -1333,6 +1355,7 @@ class JumpILC:
         """
         X = np.asarray(log["X"], float)
         stage = self.stage()
+        self._secant_update(X[-1])
         pos_err, th_err = self.landing_error(X[-1])
         result = dict(trial=self.trial + 1, stage=stage, pos_err=pos_err, theta_err=th_err,
                       clearance=self.clearance(X),
@@ -1351,12 +1374,13 @@ class JumpILC:
         # with a worse landing than one of its earlier trials -- sends the next trial back
         # to the best trial's forces with a 4x more heavily weighted (shorter) step from
         # there; each improvement halves the weight back.
+        # (safeguard=False: none of it, as in the paper -- every trial is stepped from)
         e = X[-1, :3] - np.array([self.goal[0], self.goal[1], 0.0])
         cost = np.inf if log.get("fell") else float(e @ (self.Qe_diag[:3] * e))
         is_best = np.isfinite(cost) and (self.best3 is None or cost <= self.best3["cost"])
         if is_best:
             self.best3 = dict(cost=cost, U=self.U.copy(), log=log)
-        if stage == 3:
+        if stage == 3 and self.safeguard:
             if is_best:
                 self.qu3_scale = max(1.0, 0.5 * self.qu3_scale)
             elif self.best3 is not None:
@@ -1371,6 +1395,18 @@ class JumpILC:
         self.U[self.swing_mask] = 0.0
         return result
 
+    def _secant_update(self, x_N):
+        """Broyden: the landing x_N of the trial just flown (self.U) against what the model
+        predicted for the step that led to it (see `secant`)."""
+        o = self._origin
+        if not self.secant or o is None:
+            return
+        du = (self.U - o["U"]).reshape(-1)
+        if np.abs(du).max() < 1e-3:
+            return
+        r = (x_N - o["x_N"]) - (o["G_N"] + self.G_corr) @ du
+        self.G_corr += np.outer(r, du) / float(du @ du)
+
     def _step(self, log, stage):
         """The stage's QP on the trial in `log` (flown with self.U): the force step du*."""
         X = np.asarray(log["X"], float)
@@ -1378,6 +1414,10 @@ class JumpILC:
         U_full = np.vstack([self.U, np.zeros((self.Nfl, nu))])
         A_list, B_list = self.nominal.linearize_along_trial(X, U_full, self.R1, self.R2, self.dt)
         G = build_lifted_G(A_list, B_list, N, Nc, nx, nu, flatten=True)
+        self._origin = dict(U=self.U.copy(), x_N=X[-1].copy(), G_N=G[-nx:].copy())
+        if stage == 3 and self.secant:
+            G = G.copy()
+            G[-nx:] += self.G_corr
         # Stages I-II track the reference; Stage III aims at the goal itself (eq. 21-23:
         # the desired landing position and pose), which is where the plan lands only when
         # the TO reached it -- and never after a transfer to a new target

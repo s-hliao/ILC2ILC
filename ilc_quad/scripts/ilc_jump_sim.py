@@ -158,6 +158,7 @@ class IlcJumpNode(Node):
         p("flight_spin_change_deg", 20.0)         # TO: pitch-rate spread allowed in flight; <= 0: free
         p("leg_clearance", 0.10)                  # TO: m between the front and rear legs; <= 0: off
         p("landing_clearance", 0.06)              # TO: m feet stay above the landing late in flight; <= 0: off
+        p("mu", 0.6)                              # ground friction the plan, ILC and landing assume
         p("to_steps", 1)                          # TO: >1 = box plans by continuation in height
         p("qu", 1e-4)                             # ILC step penalty (Qu); larger = gentler
         # Qu in Stage III (<= 0: the same as qu). Stage III is safeguarded (JumpILC.update: a
@@ -168,6 +169,13 @@ class IlcJumpNode(Node):
         # prices a degree of landing pitch like 9 cm of distance, and left Go1's 60 cm jump
         # 1.4 cm short; x weighted as z passed the whole Go1 validation suite (2026-09-30)
         p("qe", [3.0, 3.0, 3.0, 0.01, 0.01, 0.01])
+        # Stage III safeguard (JumpILC.update): a trial landing worse than the best, or
+        # falling, is rolled back to the best trial with a shorter step. False: the paper's
+        # law, stepping from every trial -- falls included, their jump window is still data
+        p("stage3_safeguard", True)
+        # Stage III plans with the landing sensitivities corrected from the trials flown
+        # (JumpILC secant: Broyden updates of the SRB model's G)
+        p("stage3_secant", False)
         p("n_stage1", 2)
         p("n_stage2", 3)
         p("max_trials", 25)
@@ -225,7 +233,11 @@ class IlcJumpNode(Node):
         p("bal_kp", 40.0)                         # joint PD holding the feet on their anchors
         p("bal_kd", 3.0)
         p("bal_kd_absorb", 0.5)                   # joint damping until the legs hold: let them give
-        p("touchdown_force", 20.0)                # foot_contacts reading that ends the flight
+        # foot_contacts reading, above the foot's own reading early in flight, that ends the
+        # flight: Go1's footForce is a raw sensor value with a per-foot offset of tens of
+        # counts and drift, so each trial tares it while the feet are surely unloaded (the
+        # first half of the flight) and asks for this much, or 5 sigma of that noise, more
+        p("touchdown_force", 20.0)
         # last samples of flight: legs aim the feet where the plan has them relative to the
         # trunk's *planned* pitch, so a pitch error is taken up by the legs and all four feet
         # touch down together; 0: fly the planned joint angles to the end
@@ -237,6 +249,14 @@ class IlcJumpNode(Node):
         p("flight_att_max", 0.35)                 # rad: largest thigh offset
         p("late_liftoff", False)                  # rear legs start their swing only once off the ground
         p("vel_filter_hz", 30.0)                  # low-pass on the differentiated trunk pose
+        # mocap: capture -> receipt delay, s (Motive reports it). The ILC's trial log dates
+        # each pose frame this much before it arrived; uncompensated, the jump's ~1.5 m/s
+        # puts the measured landing 1.5 mm short per ms, and the ILC learns to overshoot
+        p("pose_latency", 0.0)
+        # ILC trial log: velocities by a line fit over +- this many s of pose frames (a
+        # central difference of held/noisy mocap frames is noise; exact for constant
+        # acceleration), and the flight's CoM by a ballistic fit
+        p("log_vel_window", 0.01)
         p("damp_kd", 2.0)
         p("stand_time", 1.0)                      # ramp to the home pose
         p("settle_time", 0.5)                     # then hold before jumping
@@ -271,7 +291,8 @@ class IlcJumpNode(Node):
         learning = dict(
             pos_tol=float(get("pos_tol")), theta_tol=math.radians(float(get("theta_tol_deg"))),
             Qu_diag=float(get("qu")), Qe_diag=[float(v) for v in get("qe")],
-            Qu_stage3=float(get("qu_stage3")) if float(get("qu_stage3")) > 0 else None)
+            Qu_stage3=float(get("qu_stage3")) if float(get("qu_stage3")) > 0 else None,
+            safeguard=bool(get("stage3_safeguard")), secant=bool(get("stage3_secant")))
         make_ilc = lambda reference: JumpILC(
             self.qm, jump=jump, box=box,
             phases=tuple(int(n) for n in get("phases")), dt=float(get("dt")),
@@ -292,7 +313,7 @@ class IlcJumpNode(Node):
                            if float(get("leg_clearance")) > 0 else None),
             landing_clearance=(float(get("landing_clearance"))
                                if float(get("landing_clearance")) > 0 else None),
-            reference=reference, **learning)
+            mu=float(get("mu")), reference=reference, **learning)
 
         parent = None
         transfer, mode = get("transfer_from"), get("transfer_mode")
@@ -401,7 +422,10 @@ class IlcJumpNode(Node):
         self.bal_pd = (float(get("bal_kp")), float(get("bal_kd")))
         self.bal_kd_absorb = float(get("bal_kd_absorb"))
         self.touchdown_force = float(get("touchdown_force"))
+        self.ff_tare, self.ff_base, self.ff_thresh = [], None, None
         self.vel_filter_hz = float(get("vel_filter_hz"))
+        self.pose_latency = float(get("pose_latency"))
+        self.log_vel_window = float(get("log_vel_window"))
         self.level_feet_samples = int(get("level_feet_samples"))
         self.flight_att = (float(get("flight_att_kp")), float(get("flight_att_kd")),
                            float(get("flight_att_max")))
@@ -436,6 +460,8 @@ class IlcJumpNode(Node):
             raise ValueError(f"backend {self.backend} needs pose_topic: the OptiTrack trunk pose")
         msg_type = {"odometry": Odometry, "pose": PoseStamped}[pose_type]
         self.pose = None                      # (receipt time, position (3,), quat (w,x,y,z))
+        self.pose_seq = 0                     # pose frames received; a new one each frame
+        self.pose_fresh = False               # this tick is the first to see the latest frame
         self.create_subscription(msg_type, pose_topic, self._on_pose, SENSOR_QOS)
         self.create_subscription(JointState, "joint_states", self._on_joint_states, SENSOR_QOS)
         self.contacts = np.full(4, np.nan)    # latest foot normal forces FL FR RL RR (logged)
@@ -465,6 +491,7 @@ class IlcJumpNode(Node):
         pos = np.array([pose.position.x, pose.position.y, pose.position.z])
         pos = pos - quat_rotate(quat, self.mocap_offset)       # tracked point -> base origin
         self.pose = (time.monotonic(), pos, quat)
+        self.pose_seq += 1
 
     def _on_start_trial(self, request, response):
         if self.phase not in ("idle", "damp", "done"):
@@ -529,20 +556,25 @@ class IlcJumpNode(Node):
             self.cmd_pub.publish(msg_out)
 
     def _update_velocity(self, now):
-        """Trunk velocity [v_fwd, v_z, pitch rate] by differentiating the pose each tick,
-        low-passed (first order, vel_filter_hz)."""
+        """Trunk velocity [v_fwd, v_z, pitch rate] by differentiating the pose over each new
+        frame, low-passed (first order, vel_filter_hz). Mocap frames come slower than the
+        control ticks (OptiTrack: 120-360 Hz); differencing every tick would read a held
+        frame as standing still and the next as a jump."""
         _, pos, quat = self.pose
         theta = planar_pitch(quat)
-        if self.vel is None or now <= self.vel[0]:
-            self.vel = (now, pos.copy(), theta, np.zeros(3))
+        self.pose_fresh = self.vel is None or self.pose_seq != self.vel[4]
+        if not self.pose_fresh:
             return
-        t0, p0, th0, v0 = self.vel
+        if self.vel is None or now <= self.vel[0]:
+            self.vel = (now, pos.copy(), theta, np.zeros(3), self.pose_seq)
+            return
+        t0, p0, th0, v0, _ = self.vel
         h = now - t0
         yaw = self.frame["yaw"] if getattr(self, "frame", None) else yaw_of(quat)
         d = (pos - p0) / h
         raw = np.array([math.cos(yaw) * d[0] + math.sin(yaw) * d[1], d[2], (theta - th0) / h])
         a = 1.0 - math.exp(-2 * math.pi * self.vel_filter_hz * h)
-        self.vel = (now, pos.copy(), theta, v0 + a * (raw - v0))
+        self.vel = (now, pos.copy(), theta, v0 + a * (raw - v0), self.pose_seq)
 
     def _balance(self, q, dq):
         """
@@ -659,12 +691,22 @@ class IlcJumpNode(Node):
                 and bool(np.all(f >= np.asarray(lbx) - tol) and np.all(f <= np.asarray(ubx) + tol))
                 and bool(np.all(np.abs(f[0::2]) <= mu * f[1::2] + tol)))
 
+    def _feet_down(self):
+        """Per foot (FL FR RL RR): loaded, by the reading above its in-flight tare when
+        this trial has one (see touchdown_force), else by the raw reading."""
+        c = self.contacts
+        if not np.isfinite(c).all():
+            return np.zeros(4, bool)
+        if self.ff_base is None:
+            return c > self.touchdown_force
+        return c - self.ff_base > self.ff_thresh
+
     def _anchored_joints(self, s, feet):
         """Planar joint targets that put each pair's foot on its landing anchor (see
         _balance), by damped least-squares IK with the trunk where it is measured."""
-        c = self.contacts
-        known = np.isfinite(c).all()
-        down = [known and max(c[2 * i], c[2 * i + 1]) > self.touchdown_force for i in range(2)]
+        known = np.isfinite(self.contacts).all()
+        fd = self._feet_down()
+        down = [bool(fd[2 * i] or fd[2 * i + 1]) for i in range(2)]
         if self.anchor is None:
             self.anchor = feet.copy()
             self.anchor[:, 1] = self.surface_z
@@ -798,13 +840,15 @@ class IlcJumpNode(Node):
         _, pos, quat = self.pose
         self.frame = dict(origin=pos.copy(), yaw=yaw_of(quat))
         self.rec = dict(t=[], pos=[], quat=[], q=[], dq=[], tau_pd=[], cmd_tau=[], q_des=[],
-                        dq_des=[], tau_total=[], effort=[], contacts=[], bal_f=[])
+                        dq_des=[], tau_total=[], effort=[], contacts=[], bal_f=[],
+                        pose_new=[])
         self.U_flown = self.ilc.U.copy()
         self.fell = False
         self.touched_down = False
         self.t_touchdown = None
         self.anchor = None
         self.rear_off = False
+        self.ff_tare, self.ff_base, self.ff_thresh = [], None, None
         # the landing surface for the balance controller's foot anchors: the feet's
         # height standing now, raised by the box the plan lands on
         feet = self.fb.feet(self._planar_state(self.last_q)).full().ravel()
@@ -825,11 +869,17 @@ class IlcJumpNode(Node):
         k = min(int(t / dt + 1e-6), ilc.N - 1)
         a = t / dt - k
         # touchdown before the plan's last sample: the landing controller takes over there
-        # and then (late in flight only, so push-off contact never trips it)
-        if self.landing_controller == "balance" and k >= ilc.Nc + (ilc.N - ilc.Nc) // 2:
-            c = self.contacts
-            if self.touched_down or (np.isfinite(c).any()
-                                     and np.nanmax(c) > self.touchdown_force):
+        # and then (late in flight only, so push-off contact never trips it). The foot
+        # sensors are tared over the first half of the flight
+        k_detect = ilc.Nc + (ilc.N - ilc.Nc) // 2
+        if ilc.Nc + 2 <= k < k_detect and np.isfinite(self.contacts).all():
+            self.ff_tare.append(self.contacts.copy())
+        if k >= k_detect and self.ff_base is None and len(self.ff_tare) >= 5:
+            tare = np.array(self.ff_tare)
+            self.ff_base = np.median(tare, axis=0)
+            self.ff_thresh = np.maximum(self.touchdown_force, 5.0 * tare.std(axis=0))
+        if self.landing_controller == "balance" and k >= k_detect:
+            if self.touched_down or self._feet_down().any():
                 if not self.touched_down:
                     self.t_touchdown = t
                 self.touched_down = True
@@ -919,6 +969,7 @@ class IlcJumpNode(Node):
         self.rec["tau_total"].append(kp * (q_des - q) + kd * (dq_des - dq) + tau_ff)
         self.rec["effort"].append(self.effort.copy())
         self.rec["contacts"].append(self.contacts.copy())
+        self.rec["pose_new"].append(self.pose_fresh)          # first tick of a mocap frame
         # the landing controller's pair forces this tick (NaN before it takes over)
         self.rec["bal_f"].append(self.bal_force.copy() if self.bal_force is not None
                                  else np.full(4, np.nan))
@@ -975,32 +1026,53 @@ class IlcJumpNode(Node):
         dq_planar = np.array([collapse(v) for v in rec["dq"]])
         states = [np.concatenate([[x, z, th], qp])
                   for x, z, th, qp in zip(fwd, rel[:, 2], theta, q_planar)]
-        com = np.array([fb.com(st).full().ravel() for st in states])
+        # the trunk pose by mocap frame: each dated where it was first seen, less the mocap
+        # latency, with the joints at that time (they are read every tick)
+        new = rec["pose_new"].astype(bool) if len(rec["pose_new"]) == len(t) \
+            else np.ones(len(t), bool)
+        new[0] = True
+        tf = t[new] - self.pose_latency
+        qf = np.column_stack([np.interp(tf, t, q_planar[:, i]) for i in range(4)])
+        com = np.array([fb.com(np.concatenate([[x, z, th], qp])).full().ravel()
+                        for x, z, th, qp in zip(fwd[new], rel[new, 2], theta[new], qf)])
         shift = ilc.x_ref[0, :2] - com[0]                   # start where the reference starts
         com = com + shift
+        theta_f = theta[new]
         feet = np.array([fb.feet(st).full().reshape(2, 2) for st in states]) + shift
-        comd = np.gradient(com, t, axis=0)
-        thetad = np.gradient(theta, t)
 
         grid = np.arange(ilc.N + 1) * ilc.dt
-        grid[-1] = min(grid[-1], t[-1])                     # last tick may fall just short
-        at = lambda y: np.interp(grid, t, y)
-        X = np.column_stack([at(com[:, 0]), at(com[:, 1]), at(theta),
-                             at(comd[:, 0]), at(comd[:, 1]), at(thetad)])
-        X = self._free_flight_tail(X)
+        grid[-1] = min(grid[-1], tf[-1])                    # last frame may fall just short
+        at = lambda y: np.interp(grid, tf, y)
+        slope = lambda y: self._local_slope(tf, y, grid, self.log_vel_window)
+        X = np.column_stack([at(com[:, 0]), at(com[:, 1]), at(theta_f),
+                             slope(com[:, 0]), slope(com[:, 1]), slope(theta_f)])
+        X = self._free_flight_tail(X, (tf, com, theta_f))
+        at_tick = lambda y: np.interp(grid, t, y)          # joint series: every tick
         Nc = ilc.Nc
         per_motor_pd = np.array([collapse(v) for v in rec["tau_pd"]])
         log = dict(
             X=X,
-            q=np.column_stack([at(q_planar[:, i]) for i in range(4)])[:Nc],
+            q=np.column_stack([at_tick(q_planar[:, i]) for i in range(4)])[:Nc],
             theta=X[:Nc, 2],
-            qdot=np.column_stack([at(dq_planar[:, i]) for i in range(4)])[:Nc],
-            tau_pd=np.column_stack([at(per_motor_pd[:, i]) for i in range(4)])[:Nc],
+            qdot=np.column_stack([at_tick(dq_planar[:, i]) for i in range(4)])[:Nc],
+            tau_pd=np.column_stack([at_tick(per_motor_pd[:, i]) for i in range(4)])[:Nc],
             fell=bool(self.fell),             # a trial that fell is never the ILC's best
         )
         return log, rec, self._measured_clearance(t, feet)
 
-    def _free_flight_tail(self, X):
+    @staticmethod
+    def _local_slope(ts, y, grid, w):
+        """dy/dt at each grid time: a line through the samples within +-w of it (at least
+        the three nearest)."""
+        out = np.empty(len(grid))
+        for i, g in enumerate(grid):
+            m = np.flatnonzero(np.abs(ts - g) <= w + 1e-9)
+            if m.size < 3:
+                m = np.argsort(np.abs(ts - g))[:3]
+            out[i] = np.polyfit(ts[m] - g, y[m], 1)[0]
+        return out
+
+    def _free_flight_tail(self, X, frames=None):
         """
         Keep the touchdown controllers out of what the ILC learns from. From the sample
         where the first of them acts -- the level-feet legs (level_feet_samples before
@@ -1011,6 +1083,12 @@ class IlcJumpNode(Node):
         ground, and exact for the CoM, which is ballistic whatever the legs do; what the
         landing controllers do after it (legs reaching for the surface, the balance
         forces at contact) is not something the learned forces act through.
+
+        The error there comes from fits over the flight up to that sample (`frames`: pose
+        frame times, CoM, pitch): the CoM ballistic (a line in x, a parabola of known g in
+        z), the pitch a parabola. The tail multiplies the velocity error by up to 0.1 s,
+        and mocap noise differentiated frame to frame would dominate it; the fits average
+        ~20 frames, and match the nominal sim's measured CoM to 0.1 mm.
         """
         ilc = self.ilc
         starts = []
@@ -1026,6 +1104,20 @@ class IlcJumpNode(Node):
         if k0 >= ilc.N:
             return X
         X = X.copy()
+        if frames is not None:
+            tf, com, theta = frames
+            tb = k0 * ilc.dt
+            m = (tf >= (ilc.Nc + 2) * ilc.dt - 1e-9) & (tf <= tb + 1e-9)
+            if m.sum() >= 5:
+                g, h_f = self.fb.g, tf[m] - tb
+                bx = np.polyfit(h_f, com[m, 0], 1)
+                bz = np.polyfit(h_f, com[m, 1] + 0.5 * g * h_f ** 2, 1)
+                bth = np.polyfit(h_f, theta[m], 2)
+                ks = np.arange(ilc.Nc + 2, k0 + 1)
+                h = ks * ilc.dt - tb
+                X[ks, 0], X[ks, 3] = np.polyval(bx, h), bx[0]
+                X[ks, 1], X[ks, 4] = np.polyval(bz, h) - 0.5 * g * h ** 2, bz[0] - g * h
+                X[ks, 2], X[ks, 5] = np.polyval(bth, h), np.polyval(np.polyder(bth), h)
         e = X[k0] - ilc.x_ref[k0]
         for k in range(k0 + 1, ilc.N + 1):
             h = (k - k0) * ilc.dt

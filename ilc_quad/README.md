@@ -96,6 +96,10 @@ over a run.
 
 ## Setup
 
+To rebuild everything on a new machine and rerun the Go1 experiments, follow
+[REPRODUCE.md](REPRODUCE.md). It covers `docker/Dockerfile`, `environment.yml` and
+`experiments/go1/`.
+
 No ROS on the host, so this runs in a container off the `ros:humble-ros-base-jammy`
 image. On the host:
 
@@ -425,6 +429,39 @@ alone can be given uncertainties the controller is not told about:
 - **`--payload KG`:** a mass welded on the trunk.
 
 `sim_node` takes the same settings as `ground_kp`/`ground_kd`/`payload_mass`.
+
+The lockstep runner also models the rest of the gap to the real Go1 (`Reality` in
+`ilc_jump_lockstep.py`). None of it is told to the controller:
+
+| Option | What it models |
+|---|---|
+| `--mass-scale S` | every robot body's mass and inertia × S |
+| `--com-offset DX DZ` | trunk CoM shifted, m |
+| `--friction MU` | ground friction |
+| `--joint-friction NM` | Coulomb joint friction added |
+| `--act-delay S` | command → motors, on top of the one control tick the loop always has |
+| `--motor-scale S` | torque limits × S |
+| `--motor-curve` | Go1 torque-speed envelope (full torque to half the no-load speed, 30.1 / 20.06 rad/s, then linear to zero); `--motor-speed-scale` for battery sag |
+| `--pose-rate HZ`, `--pose-delay S`, `--pose-noise M RAD` | mocap frames: rate (held between frames), latency, per-frame noise |
+| `--joint-noise RAD RAD_S` | encoder noise |
+| `--foot-sensor BIAS SPREAD NOISE` | Go1's raw `footForce`: per-foot offset U(0, BIAS), gain 1 ± SPREAD, noise |
+
+With any of these, each trial also records the true trunk pose, joints and foot forces
+(`rec_true_*`), and runs are scored on those. What the controller measured is no
+longer the truth.
+
+Three controller settings exist for the real robot's sensing:
+- **`pose_latency`:** the mocap's capture-to-receipt delay (Motive reports it). The
+  ILC log dates every frame this much earlier. Left at 0, the ~1.5 m/s landing puts
+  the measured landing about 1.5 mm short per ms of latency, and the ILC learns to
+  overshoot by that much.
+- **`log_vel_window`:** the ILC log fits velocities by a line through ±0.01 s of pose
+  frames, and fits the flight's CoM as ballistic (see `_free_flight_tail`).
+  Differencing held or noisy mocap frames had the ILC seeing 20–40 cm landing errors
+  that weren't there.
+- **`touchdown_force`:** counted above each foot's own reading in the first half of the
+  flight (a per-trial tare). Raw Go1 foot sensors read tens of counts unloaded, which
+  used to end the flight mid-air.
 
 ```bash
 python3 install/ilc_quad/lib/ilc_quad/ilc_jump_lockstep.py --jump 0.6 0.0 \
