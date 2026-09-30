@@ -277,9 +277,15 @@ def build_lifted_G(A_list, B_list, N, Nc, nx, nu, flatten=False):
 
 
 
+# Go1 joint output speeds at which the motors run out of voltage (Unitree's spec sheet:
+# hip/thigh 30.1 rad/s, knee 20.06 rad/s), in the planar order [F thigh, F calf, R thigh,
+# R calf] -- ilc_jump_lockstep.py's GO1_NO_LOAD_SPEED, for mdc="go1"
+GO1_NO_LOAD_SPEED_PLANAR = np.array([30.1, 20.06, 30.1, 20.06])
+
+
 class QuadILCStageSolver:
     def __init__(self, N, Nc, Ndc, nx, nu, mdc_params, torque_map_fn,
-                 solver="osqp", slack_weight=1e2):
+                 solver="osqp", slack_weight=1e2, mdc="legacy", mdc_speed_scale=1.0):
         """
         mdc_params    : dict with rho, sigma, Vmax (>0), Vmin (<0), tau_max, fmin, fmax, mu
         torque_map_fn : (q_t, theta_t) -> T_t = J(q_t)^T R(theta_t)^T, shape (n_joints, nu)  (eq. 14/27)
@@ -290,6 +296,12 @@ class QuadILCStageSolver:
                         saturation bands stop overlapping. 1e2 already makes 1 N·m of
                         violation cost ~1e4 x a typical tracking cost; 1e6 made the QP so
                         badly scaled that OSQP failed and IPOPT ran out of iterations
+        mdc           : the motor rows' model. "legacy": the paper's MDC (eq. 18, rho, sigma,
+                        V) intersected with tau_max. "go1": the Go1 torque-speed envelope
+                        (as ilc_jump_lockstep.py --motor-curve): tau_max up to half the
+                        no-load speed, then down linearly to none at it, while motoring
+                        (torque along qdot); braking keeps tau_max
+        mdc_speed_scale : "go1": the no-load speeds x this (a sagging battery lowers them)
         """
         self.N, self.Nc, self.Ndc = N, Nc, Ndc
         self.nx, self.nu = nx, nu
@@ -297,6 +309,10 @@ class QuadILCStageSolver:
         self.torque_map_fn = torque_map_fn
         self.solver = solver
         self.slack_weight = slack_weight
+        if mdc not in ("legacy", "go1"):
+            raise ValueError(f"mdc must be legacy or go1, got {mdc!r}")
+        self.mdc = mdc
+        self.w_max = GO1_NO_LOAD_SPEED_PLANAR * float(mdc_speed_scale)
 
     def stage_rows(self, stage):
         """
@@ -981,10 +997,20 @@ class QuadILCStageSolver:
             if idx.size == 0:
                 continue
             qd = np.asarray(qdot_k[t], float).reshape(nj)[idx]
-            lb = np.maximum(np.broadcast_to(-np.asarray(p["tau_max"], float), (nj,))[idx],
-                            (p["Vmin"] - p["sigma"] * qd) / p["rho"])
-            ub = np.minimum(np.broadcast_to(np.asarray(p["tau_max"], float), (nj,))[idx],
-                            (p["Vmax"] - p["sigma"] * qd) / p["rho"])
+            if self.mdc == "go1":
+                # Go1 envelope at this sample's measured speed: the limit drops only on
+                # the side that drives the joint along qdot (motoring)
+                tau_max = np.broadcast_to(np.asarray(p["tau_max"], float), (nj,))[idx]
+                w_max = self.w_max[idx]
+                w_knee = 0.5 * w_max
+                drop = np.clip((w_max - np.abs(qd)) / (w_max - w_knee), 0.0, 1.0)
+                lb = np.where(qd < 0, -tau_max * drop, -tau_max)
+                ub = np.where(qd > 0, tau_max * drop, tau_max)
+            else:
+                lb = np.maximum(np.broadcast_to(-np.asarray(p["tau_max"], float), (nj,))[idx],
+                                (p["Vmin"] - p["sigma"] * qd) / p["rho"])
+                ub = np.minimum(np.broadcast_to(np.asarray(p["tau_max"], float), (nj,))[idx],
+                                (p["Vmax"] - p["sigma"] * qd) / p["rho"])
             s = opti.variable(idx.size)
             opti.subject_to(s >= 0)
             rows = ca.vertcat(*[tau_total[int(i)] for i in idx])
@@ -1097,7 +1123,44 @@ class JumpILC:
                 the paper's law, a step from every trial whatever it did -- the error is
                 measured over the jump window [0, N] only, so a trial that fell off the box
                 after landing is as good a measurement as any
+    gain, gain_stage3 : ILC learning gain gamma, U <- U + gamma du* (1: the paper's law);
+                Stage III uses gain_stage3 instead when > 0
+    forget    : leaky ILC (anti-windup): U <- u_ref + forget (U - u_ref) + gamma du*, U the
+                forces the step is taken from (after any safeguard rollback); 1: no leak
+    tau_scale : the QP's per-motor torque limit tau_max x this (a weakened motor)
+    fmin      : the QP's (and force clipping's) least normal force per stance pair, N
+                (None: mdc_params'). Set after the TO, which keeps its own
+    slack_weight : the QP's penalty on softened torque/MDC rows (QuadILCStageSolver)
+    mdc, mdc_speed_scale : the QP's motor model, "legacy" (the paper's MDC) or "go1" (the
+                Go1 torque-speed envelope at each sample's measured joint speed); see
+                QuadILCStageSolver
+    stage3_theta_mode : Stage III's landing pitch rows: "track" (aim at landing_pitch_target,
+                pitch rate as planned), "hold" (target = the trial's own landing pitch and
+                pitch rate: a pitch-neutral step in the model), "free" (theta and omega
+                unweighted)
+    landing_pitch_target : Stage III's target landing pitch, rad (the safeguard scores
+                against it too; theta_err and convergence stay |pitch|)
+    fall_pitch_bias : on a trial that fell, the pitch the step sees from the start of the
+                free-flight tail (log["measured_until"], default N - 10) on is lowered by
+                this, rad: as if it had landed more nose-down, so the step pushes nose-up
+    converge_any_stage : converged may be declared in Stages I-II too (not only Stage III)
+    converged_requires_no_fall : a trial that fell is never converged
+    safeguard_growth : the Stage III step weight's growth on a rejection (backoff "qu")
+    stage3_qu_scale_max : cap on that step weight's scale (None: none)
+    stage3_backoff : what a rejection shortens: "qu" (the step weight, x safeguard_growth)
+                or "alpha" (the ordinary step from the best trial, scaled by
+                0.5 ** consecutive rejections; the step weight stays 1x)
+    stage3_accept_rows : safeguard cost on the landing's "xzth" (x, z, pitch) or "xz" rows
+    stage3_accept_tol : a trial is the best if its cost <= the best's x (1 + this)
+    stage3_best_refresh : a trial flown with the best trial's forces again (within 1e-3 N)
+                makes the best's cost the mean of every cost measured with them, rather
+                than its (luckiest) first one
+    stage3_fall_policy : a Stage III trial that fell "rollback"s to the best trial like any
+                rejection, or is "step"ped from itself (still never the best)
     reference : None to run the TO, or a path written by save_reference() to reuse one
+
+    A trial log may also carry R1, R2 (N, 2): measured lever arms (contact point - CoM,
+    as the TO's), used instead of the plan's for that trial's step.
     """
 
     nx, nu = 6, 4                 # x = [px, pz, theta, vx, vz, omega], u = [f1x, f1z, f2x, f2z]
@@ -1113,6 +1176,13 @@ class JumpILC:
                  ipopt_options=None,
                  mdc_params=None, Qe_diag=(1.0, 3.0, 3.0, 0.01, 0.01, 0.01), Qu_diag=1e-5,
                  Qu_stage3=None, safeguard=True, secant=False, mu=0.6, reference=None,
+                 gain=1.0, gain_stage3=0.0, forget=1.0, tau_scale=1.0, fmin=None,
+                 slack_weight=1e2, mdc="legacy", mdc_speed_scale=1.0,
+                 stage3_theta_mode="track", landing_pitch_target=0.0, fall_pitch_bias=0.0,
+                 converge_any_stage=False, converged_requires_no_fall=False,
+                 safeguard_growth=4.0, stage3_qu_scale_max=None, stage3_backoff="qu",
+                 stage3_accept_rows="xzth", stage3_accept_tol=0.0,
+                 stage3_best_refresh=False, stage3_fall_policy="rollback",
                  _check_reference=True):
         nx, nu = self.nx, self.nu
         self.fb = fb = PlanarQuadModel(qm)
@@ -1165,7 +1235,8 @@ class JumpILC:
 
         # J(q)^T R(theta)^T of the planar model, per motor (eq. 14/27)
         self.solver = QuadILCStageSolver(self.N, self.Nc, self.Ndc, nx, nu, self.mdc_params,
-                                         fb.torque_map)
+                                         fb.torque_map, slack_weight=slack_weight, mdc=mdc,
+                                         mdc_speed_scale=mdc_speed_scale)
         if reference is None:
             to_kwargs = dict(margin=margin, swing_qd=swing_qd, w_swing=w_swing,
                              box_clearance=box_clearance, box_setback=box_setback,
@@ -1194,6 +1265,13 @@ class JumpILC:
                                           goal_miss=info["goal_miss"]))
         else:
             self._load_reference(reference, check=_check_reference)
+        # the ILC's own limits, set after the TO so the plan does not depend on them
+        self.mdc_params = dict(self.mdc_params,
+                               tau_max=np.asarray(self.mdc_params["tau_max"], float)
+                               * float(tau_scale))
+        if fmin is not None:
+            self.mdc_params["fmin"] = float(fmin)
+        self.solver.p = self.mdc_params
         # time-varying lever arms (contact point - CoM) from the TO
         self.R1, self.R2 = self.to_info["R1"], self.to_info["R2"]
 
@@ -1206,6 +1284,26 @@ class JumpILC:
         self._origin = None                           # what the last step started from
         self.best3 = None
         self.qu3_scale = 1.0
+        self.n_rejected = 0                           # consecutive Stage III rejections
+        for name, value, options in (("stage3_theta_mode", stage3_theta_mode, ("track", "hold", "free")),
+                                     ("stage3_backoff", stage3_backoff, ("qu", "alpha")),
+                                     ("stage3_accept_rows", stage3_accept_rows, ("xzth", "xz")),
+                                     ("stage3_fall_policy", stage3_fall_policy, ("rollback", "step"))):
+            if value not in options:
+                raise ValueError(f"{name} must be one of {options}, got {value!r}")
+        self.gain, self.gain_stage3, self.forget = float(gain), float(gain_stage3), float(forget)
+        self.theta_mode = stage3_theta_mode
+        self.theta_goal = float(landing_pitch_target)
+        self.fall_pitch_bias = float(fall_pitch_bias)
+        self.converge_any_stage = bool(converge_any_stage)
+        self.converged_requires_no_fall = bool(converged_requires_no_fall)
+        self.safeguard_growth = float(safeguard_growth)
+        self.qu3_scale_max = np.inf if stage3_qu_scale_max is None else float(stage3_qu_scale_max)
+        self.backoff = stage3_backoff
+        self.accept_rows = 2 if stage3_accept_rows == "xz" else 3
+        self.accept_tol = float(stage3_accept_tol)
+        self.best_refresh = bool(stage3_best_refresh)
+        self.fall_policy = stage3_fall_policy
         self.trial = 0                            # trials flown so far
         self.history = []
 
@@ -1248,6 +1346,7 @@ class JumpILC:
         # the safeguard's step scale carries on; its best trial does not (not recorded),
         # so the next Stage III trial becomes the best
         self.qu3_scale = float(self.history[-1].get("qu3_scale", 1.0)) if self.history else 1.0
+        self.n_rejected = int(self.history[-1].get("n_rejected", 0)) if self.history else 0
 
     def transfer_from(self, rec):
         """
@@ -1351,18 +1450,29 @@ class JumpILC:
               tau_pd (Nc, 4) per-motor torque during the trial besides J^T f of the
                      forces U (PD, and any other feedforward): the torque limits
                      apply to  T u + tau_pd
-        returns dict(trial, stage, pos_err, theta_err, clearance, converged[, solver])
+              fell   (optional) the trial failed its landing: never the best, never converged
+                     if converged_requires_no_fall
+              R1, R2 (optional, N x 2) measured lever arms, used instead of the plan's
+              measured_until (optional) first sample of the free-flight tail (fall_pitch_bias)
+        returns dict(trial, stage, pos_err, theta_err, clearance, converged, gain, forget,
+                     du_norm, dU_ref_norm[, solver, qu3_scale, n_rejected, rejected])
         """
         X = np.asarray(log["X"], float)
         stage = self.stage()
         self._secant_update(X[-1])
         pos_err, th_err = self.landing_error(X[-1])
+        fell = bool(log.get("fell", False))
         result = dict(trial=self.trial + 1, stage=stage, pos_err=pos_err, theta_err=th_err,
                       clearance=self.clearance(X),
-                      converged=stage == 3 and pos_err < self.pos_tol and th_err < self.theta_tol)
+                      converged=bool((stage == 3 or self.converge_any_stage)
+                                     and pos_err < self.pos_tol and th_err < self.theta_tol
+                                     and not (self.converged_requires_no_fall and fell)))
         self.trial += 1
         self.history.append(result)
+        gain = self.gain_stage3 if stage == 3 and self.gain_stage3 > 0 else self.gain
         if result["converged"]:
+            result.update(gain=gain, forget=self.forget, du_norm=0.0,
+                          dU_ref_norm=float(np.linalg.norm(self.U - self.u_ref)))
             return result
 
         # Safeguard. Stage III steps on the SRB model's sensitivities of the landing state
@@ -1372,27 +1482,59 @@ class JumpILC:
         # (a trial that fell never counts as best), and in Stage III a trial worse than the
         # best so far -- from any stage: Stage II, tracking the whole reference, often ends
         # with a worse landing than one of its earlier trials -- sends the next trial back
-        # to the best trial's forces with a 4x more heavily weighted (shorter) step from
-        # there; each improvement halves the weight back.
+        # to the best trial's forces with a 4x (safeguard_growth) more heavily weighted
+        # (shorter) step from there; each improvement halves the weight back.
         # (safeguard=False: none of it, as in the paper -- every trial is stepped from)
-        e = X[-1, :3] - np.array([self.goal[0], self.goal[1], 0.0])
-        cost = np.inf if log.get("fell") else float(e @ (self.Qe_diag[:3] * e))
-        is_best = np.isfinite(cost) and (self.best3 is None or cost <= self.best3["cost"])
+        # Variants: the cost on x, z alone (accept_rows), a tolerance on "worse", the best's
+        # cost re-averaged when its forces are flown again (best_refresh), a shorter step
+        # by scaling the ordinary one (backoff "alpha"), and falls stepped from (fall_policy)
+        e = X[-1, :3] - np.array([self.goal[0], self.goal[1], self.theta_goal])
+        r = self.accept_rows
+        cost = np.inf if log.get("fell") else float(e[:r] @ (self.Qe_diag[:r] * e[:r]))
+        costs = [cost]
+        if (self.best_refresh and self.best3 is not None and np.isfinite(cost)
+                and np.abs(self.U - self.best3["U"]).max() < 1e-3):
+            costs = self.best3["costs"] + [cost]          # the best's forces, flown again
+            self.best3["costs"] = costs
+            self.best3["cost"] = float(np.mean(costs))
+            result["best_refreshed"] = True
+        is_best = np.isfinite(cost) and (self.best3 is None
+                                         or cost <= self.best3["cost"] * (1.0 + self.accept_tol))
         if is_best:
-            self.best3 = dict(cost=cost, U=self.U.copy(), log=log)
+            self.best3 = dict(cost=cost if len(costs) == 1 else float(np.mean(costs)),
+                              U=self.U.copy(), log=log, costs=costs)
+        alpha = None
         if stage == 3 and self.safeguard:
             if is_best:
-                self.qu3_scale = max(1.0, 0.5 * self.qu3_scale)
-            elif self.best3 is not None:
+                self.n_rejected = 0
+                if self.backoff == "qu":
+                    self.qu3_scale = max(1.0, 0.5 * self.qu3_scale)
+            elif self.best3 is not None and not (fell and self.fall_policy == "step"):
                 self.U = self.best3["U"].copy()
                 log = self.best3["log"]
-                self.qu3_scale *= 4.0
+                self.n_rejected += 1
+                if self.backoff == "qu":
+                    self.qu3_scale = min(self.qu3_scale * self.safeguard_growth,
+                                         self.qu3_scale_max)
+                else:
+                    alpha = 0.5 ** self.n_rejected
                 result["rejected"] = True
             result["qu3_scale"] = self.qu3_scale
+            result["n_rejected"] = self.n_rejected
         du, info = self._step(log, stage)
         result["solver"] = info
-        self.U = self.U + du                              # eq. (15): u_{k+1} = u_k + du*
+        if alpha is not None:
+            du = alpha * du
+            result["alpha"] = alpha
+        if gain != 1.0:
+            du = gain * du
+        if self.forget == 1.0:
+            self.U = self.U + du                          # eq. (15): u_{k+1} = u_k + du*
+        else:                                             # leaky: decay toward u_ref
+            self.U = self.u_ref + self.forget * (self.U - self.u_ref) + du
         self.U[self.swing_mask] = 0.0
+        result.update(gain=gain, forget=self.forget, du_norm=float(np.linalg.norm(du)),
+                      dU_ref_norm=float(np.linalg.norm(self.U - self.u_ref)))
         return result
 
     def _secant_update(self, x_N):
@@ -1412,23 +1554,36 @@ class JumpILC:
         X = np.asarray(log["X"], float)
         nx, nu, N, Nc = self.nx, self.nu, self.N, self.Nc
         U_full = np.vstack([self.U, np.zeros((self.Nfl, nu))])
-        A_list, B_list = self.nominal.linearize_along_trial(X, U_full, self.R1, self.R2, self.dt)
+        # the trial's measured lever arms, when the log has them
+        R1 = np.asarray(log["R1"], float) if "R1" in log else self.R1
+        R2 = np.asarray(log["R2"], float) if "R2" in log else self.R2
+        A_list, B_list = self.nominal.linearize_along_trial(X, U_full, R1, R2, self.dt)
         G = build_lifted_G(A_list, B_list, N, Nc, nx, nu, flatten=True)
         self._origin = dict(U=self.U.copy(), x_N=X[-1].copy(), G_N=G[-nx:].copy())
         if stage == 3 and self.secant:
             G = G.copy()
             G[-nx:] += self.G_corr
+        if self.fall_pitch_bias != 0.0 and log.get("fell"):
+            # a fall: the step sees a more nose-down flight tail than measured
+            X = X.copy()
+            X[int(log.get("measured_until", N - 10)):, 2] -= self.fall_pitch_bias
         # Stages I-II track the reference; Stage III aims at the goal itself (eq. 21-23:
         # the desired landing position and pose), which is where the plan lands only when
         # the TO reached it -- and never after a transfer to a new target
         target = self.x_ref
+        Qe = self.Qe_diag
         if stage == 3:
             target = self.x_ref.copy()
             target[-1, :2] = self.goal
-            target[-1, 2] = 0.0
+            target[-1, 2] = self.theta_goal
+            if self.theta_mode == "hold":           # no pitch correction in the model
+                target[-1, 2], target[-1, 5] = X[-1, 2], X[-1, 5]
+            elif self.theta_mode == "free":         # pitch rows unweighted
+                Qe = Qe.copy()
+                Qe[..., [2, 5]] = 0.0
         return self.solver.solve(G, X, target, self.U, log["q"], log["theta"],
                                  log["qdot"], log["tau_pd"], self.swing_mask,
-                                 self.Qe_diag,
+                                 Qe,
                                  self.Qu_stage3 * self.qu3_scale if stage == 3 else self.Qu_diag,
                                  stage)
 

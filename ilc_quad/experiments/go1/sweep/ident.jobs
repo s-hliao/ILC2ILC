@@ -1,0 +1,10 @@
+f60_m85__sc__sg__real_s1|f60_m85|scratch|--act-delay 0.004 --pose-rate 240 --pose-delay 0.006 --pose-noise 0.0005 0.003 --param pose_latency:=0.006 --joint-noise 0.002 0.3 --mass-scale 1.05 --motor-curve --joint-friction 0.2 --foot-sensor 40 0.3 5 --seed 1
+b50_10_m85__sc__sg__nominal|b50_10_m85|scratch|
+b50_20_m90__sc__sg__heavy15|b50_20_m90|scratch|--mass-scale 1.15
+b50_20_m90__sc__pl__weak85|b50_20_m90|scratch|--motor-scale 0.85 --param stage3_safeguard:=false
+k_tau85__S3|b50_20_m90|scratch|--motor-scale 0.85 --param ilc_tau_scale:=0.85
+k_mdc__S4|b50_20_m90|scratch|--motor-curve --motor-speed-scale 0.85 --param ilc_mdc:=go1 --param ilc_mdc_speed_scale:=0.85
+k_gain2__S2|b50_20_m90|scratch|--mass-scale 1.15 --param ilc_gain:=2.0
+k_lever__S2|b50_20_m90|scratch|--mass-scale 1.15 --param ilc_lever_arms:=measured
+k_hold__S2|b50_20_m90|scratch|--mass-scale 1.15 --param stage3_theta_mode:=hold
+k_alpha__S2|b50_20_m90|scratch|--mass-scale 1.15 --param stage3_backoff:=alpha

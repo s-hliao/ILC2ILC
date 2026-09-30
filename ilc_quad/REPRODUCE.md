@@ -136,7 +136,7 @@ python3 robust/robust_report.py /ilc_ws/log/smoke
 On the original machine this reads:
 
 ```
-b50_10_m85__nominal  OK   n= 7 falls=[] | ... | last  -0.1 cm  +1.4 cm  +0.2° | ...
+b50_10_m85__nominal  OK   n= 8 falls=[] | ... | last  -0.2 cm  +1.2 cm  -0.5° | ...
 ```
 
 Another CPU can differ in the last digits. A different verdict means the setup
@@ -222,6 +222,10 @@ python3 robust/secant_check.py RUN_DIR plans/ref_s7_go1_f60_m85.npz     # f60 on
 ```
 
 ## 7. Where things stood (2026-09-29)
+
+> **Defaults changed on 2026-09-30** (section 9), so the numbers below were made with the
+> old defaults. To reproduce them, pass the old values:
+> `EXTRA="--param ilc_gain:=1.0 --param ilc_mdc:=legacy --param level_feet_front_lever:=false --param bal_w_lever:=0.1"`.
 
 These are the numbers a rerun should reproduce. They come from the code in this
 commit.
@@ -318,3 +322,51 @@ rsync -a old-machine:~/docker_workspaces/ilc_ws/log/final2 ~/ilc_ws/log/
 - **A reference "made for another task or TO setting":** the plan file doesn't match
   the task's settings, and the node re-solves and overwrites it. Check the margin and
   task columns in `tasks.txt`.
+
+## 9. Fall-recovery sweep and new defaults (2026-09-30)
+
+Tools: `experiments/go1/sweep/` (`sweep.sh OUT JOBSFILE` runs `run|task|scratch-or-transfer|args`
+lines on every core; `score.py`, `stick.py` and `compare.py` score and compare them).
+
+**Findings.**
+- **The ILC does learn out of falls.** With learning frozen (`qu`, `qu_stage3` 1e3), every
+  hard cell fell on all 30 trials. With learning on, most stopped falling after 3–12 trials.
+- **Recovery was slow.** The robot realizes only part of each model step, so `ilc_gain` 2
+  halved the fall streaks.
+- **The ILC asked speed-limited knees for torque they couldn't make.** Its legacy A1 motor
+  constraint never binds.
+- **Most falls were landing failures after the plan's end.** On the b50_20 plans a slightly
+  early touchdown put the front feet too far back to brake the forward momentum.
+
+**New defaults:**
+- `ilc_gain` 2.0;
+- `ilc_mdc` go1 (the Go1 torque-speed envelope in the ILC's QP);
+- `level_feet_front_lever` true (in the last `level_feet_samples` of flight, the front feet
+  are never aimed behind the plan's landing lever);
+- `bal_w_lever` 0.3.
+
+Over the 8 tasks × 21 conditions from scratch:
+
+| | old defaults | new defaults |
+|---|---|---|
+| falls | 253 | 98 |
+| falls in the last 5 trials | 39 (16 runs) | 16 (5 runs) |
+| Table I passes | 93 | 99 |
+| runs with a foot unloaded > 300 ms | 15 | 5 |
+
+What got worse is low friction (mu05plan). `level_feet_hold_x` (both pairs held at the
+landing offsets) fixed the box plans but made the 60 cm jumps fall, so it stays off.
+
+**Flight time.** Plans with 200–400 ms of flight (`phases:=[30,30,Nfl]`, Nfl 20–40; plans
+`plans/ref_x_go1_<task>_fl<Nfl>.npz`, tasks in `sweep/tasks_extra.txt`) were compared with
+the current 300 ms:
+- **400 ms:** only b50_20_m100, f40 and f60 plan exactly.
+- **350 ms:** b50_20_m90 does not plan exactly.
+- **200 ms:** four tasks don't either.
+- **On the cells that plan, under the new defaults and 7 conditions:**
+  - 200 ms: 115 vs 48 falls;
+  - 250 ms: 72 vs 69;
+  - 350 ms: 173 vs 50;
+  - 400 ms: 145 vs 34.
+- **300 ms stays.** 250 ms had fewer late falls (2 vs 11) but fewer Table I passes (19 vs
+  27), and it is worse on the b50_20_m90 gaps.
