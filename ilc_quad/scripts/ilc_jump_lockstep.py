@@ -141,6 +141,12 @@ class Reality:
         self.w_max = GO1_NO_LOAD_SPEED * args.motor_speed_scale
         self.w_knee = args.motor_knee * self.w_max
         self.act_delay = args.act_delay
+        # asynchrony: the controller and the robot run on their own clocks on the real Go1 --
+        # commands reach the motors with a varying latency (act_jitter, kept in order) or not
+        # at all (cmd_drop: the motors hold the last one), and the joint readings the
+        # controller gets are state_delay + U(0, state_jitter) old
+        self.act_jitter, self.cmd_drop = args.act_jitter, args.cmd_drop
+        self.state_delay, self.state_jitter = args.state_delay, args.state_jitter
         self.pose_rate, self.pose_delay = args.pose_rate, args.pose_delay
         self.pose_noise = args.pose_noise
         self.joint_noise = args.joint_noise
@@ -153,10 +159,18 @@ class Reality:
         self.cmds = []                            # (time it reaches the motors, cmd)
         self.poses = []                           # true (t, pos, quat), for the mocap's delay
         self.frame = None                         # (frame index, pos, quat) held by the mocap
+        self.states = []                          # true (t, q, dq), for the joint readings' age
 
     # -- actuators --
     def command(self, t, cmd):
-        self.cmds.append((t + self.act_delay - 1e-9, cmd.copy()))
+        if self.cmd_drop > 0 and self.rng.random() < self.cmd_drop:
+            return
+        arrive = t + self.act_delay - 1e-9
+        if self.act_jitter > 0:
+            arrive += self.rng.uniform(0.0, self.act_jitter)
+            if self.cmds:                         # in order: none overtakes the one before
+                arrive = max(arrive, self.cmds[-1][0])
+        self.cmds.append((arrive, cmd.copy()))
 
     def motor_torque(self, t):
         """The command the motors hold at time t, through the PD and the motor envelope."""
@@ -193,8 +207,16 @@ class Reality:
             self.frame = (idx, p, q / np.linalg.norm(q))
         return self.frame[1].copy(), self.frame[2].copy(), new
 
-    def joints(self):
+    def joints(self, t=0.0):
         q, dq = self.sim.joint_positions(), self.sim.joint_velocities()
+        if self.state_delay > 0 or self.state_jitter > 0:
+            self.states.append((t, q, dq))
+            seen = t - self.state_delay - (self.rng.uniform(0.0, self.state_jitter)
+                                           if self.state_jitter > 0 else 0.0)
+            while len(self.states) > 1 and self.states[1][0] <= seen + 1e-9:
+                self.states.pop(0)
+            _, q, dq = self.states[0]
+            q, dq = q.copy(), dq.copy()
         sq, sdq = self.joint_noise
         return q + self.rng.normal(0.0, sq, 12), dq + self.rng.normal(0.0, sdq, 12)
 
@@ -206,7 +228,9 @@ class Reality:
     def describe(self, args):
         return dict(mass_scale=args.mass_scale, com_offset=list(args.com_offset),
                     friction=args.friction, joint_friction=args.joint_friction,
-                    act_delay=args.act_delay, motor_scale=args.motor_scale,
+                    act_delay=args.act_delay, act_jitter=args.act_jitter,
+                    cmd_drop=args.cmd_drop, state_delay=args.state_delay,
+                    state_jitter=args.state_jitter, motor_scale=args.motor_scale,
                     motor_curve=args.motor_curve, motor_knee=args.motor_knee,
                     motor_speed_scale=args.motor_speed_scale, pose_rate=args.pose_rate,
                     pose_delay=args.pose_delay, pose_noise=list(args.pose_noise),
@@ -289,7 +313,7 @@ def run(args) -> list[dict]:
         while t_sim < t_end:
             # publish the state (sim_node._publish), then let the controller answer it
             _stamp(js, t_sim)
-            q_meas, dq_meas = real.joints()
+            q_meas, dq_meas = real.joints(t_sim)
             js.position = q_meas.tolist()
             js.velocity = dq_meas.tolist()
             js.effort = sim.applied_torques().tolist()
@@ -353,6 +377,13 @@ def main():
     r.add_argument("--friction", type=float, default=0.0, help="ground mu (0: the MJCF's)")
     r.add_argument("--joint-friction", type=float, default=0.0, help="N m Coulomb, added")
     r.add_argument("--act-delay", type=float, default=0.0, help="s, command -> motors")
+    r.add_argument("--act-jitter", type=float, default=0.0,
+                   help="s, extra command latency ~ U(0, this), in order")
+    r.add_argument("--cmd-drop", type=float, default=0.0,
+                   help="probability a command never reaches the motors (last one held)")
+    r.add_argument("--state-delay", type=float, default=0.0, help="s, age of the joint readings")
+    r.add_argument("--state-jitter", type=float, default=0.0,
+                   help="s, extra joint-reading age ~ U(0, this)")
     r.add_argument("--motor-scale", type=float, default=1.0, help="torque limits x")
     r.add_argument("--motor-curve", action="store_true", help="Go1 torque-speed envelope")
     r.add_argument("--motor-knee", type=float, default=0.5,

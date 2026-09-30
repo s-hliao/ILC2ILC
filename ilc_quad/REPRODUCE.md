@@ -370,3 +370,75 @@ the current 300 ms:
   - 400 ms: 145 vs 34.
 - **300 ms stays.** 250 ms had fewer late falls (2 vs 11) but fewer Table I passes (19 vs
   27), and it is worse on the b50_20_m90 gaps.
+
+## 10. Rear feet, capture-point plans and the async sim-to-real test (2026-09-30)
+
+**Rear feet lifting at landing.** The rear feet lifted for 100–200 ms after most box
+touchdowns: the trunk pitched about the front feet. Whether they lift is decided by the
+landing's capture-point margin, the front foot x minus (CoM x + vx √(h/g)) when all four feet
+are down (`sweep/capture.py`).
+- **The old plans sat right at the limit.** They land every leg in the home pose, so the
+  front feet land ~0.2 m ahead at ~1.35 m/s.
+- **The margin predicts the lifting.** Over 2600 landings the correlation is −0.78: below
+  zero, 130–180 ms unloaded; above +4 cm, almost none.
+- **Landing-controller gains only traded rear contact for falls.** That includes stiffer or
+  pushier legs, rear-only push, braking, and a pitch-moment floor.
+
+**The fix is in the plan.** `landing_capture_margin` (node and `init_trajopt`, default 0.06 m)
+frees the front legs at the landing sample and requires the front feet ahead of the capture
+point by that margin. The suite now flies these plans (`plans/ref_s8_go1_<task>.npz`, in
+`tasks.txt`). Pass `--param landing_capture_margin:=-1.0` with the old `s7`/`s4` plans.
+On the 8 × 21 grid, last 5 trials:
+
+| | before | capture plans |
+|---|---|---|
+| rear feet never unloaded | 25% | 88% |
+| trials with rear unloaded > 100 ms | 52% | 4% |
+
+**Asynchrony is standard in the sim-to-real test (`robust/conds_async.txt`).** New
+`ilc_jump_lockstep.py` options:
+- `--act-jitter`: command latency jitter, kept in order;
+- `--cmd-drop`: dropped commands, the last one held;
+- `--state-delay` / `--state-jitter`: the age of the joint readings.
+
+Every condition runs on the same async base:
+- 2 ms + U(0, 3 ms) command latency, 2% of commands dropped;
+- joint readings 0–4 ms old, encoder noise;
+- 240 Hz mocap with 6 ms latency (compensated) and noise;
+- raw foot sensors.
+
+On that base the grid varies mass (+15%, −10%), CoM ±2 cm, weak or speed-limited motors,
+μ 0.5, joint friction, hard and soft ground, a 2 kg payload, 10 ms delay, bad mocap, two
+combined "real" cases and 3 seeds. Run it with:
+
+    grep -v '^#' robust/conds_async.txt | while IFS='|' read c a; do for t in $(awk '{print $1}' tasks.txt); do
+      echo "${t}__D__$c|$t|scratch|$a"; done; done > /tmp/async.jobs
+    sweep/sweep.sh $LOG/async /tmp/async.jobs
+    python3 sweep/report.py $LOG/async D robust/conds_async.txt
+
+**Stage III back-off (new default `stage3_backoff` alpha).** Under asynchrony the safeguard's
+best trial is a lucky one, so every retry was rejected and its step weight grew to 1e3–1e9:
+Stage III froze in 123 of 152 runs. Alpha instead halves the step on each rejection.
+
+| async grid, 152 runs | old back-off | alpha |
+|---|---|---|
+| Table I passes | 53 | 68 |
+| falls | 121 | 115 |
+| median unloaded time | 6 ms | 8 ms |
+
+**Tried under async and dropped:**
+- best-trial averaging (`stage3_best_refresh` with tolerance);
+- a step-weight cap;
+- x/z-only acceptance;
+- `stage3_theta_mode:=hold`, `stage3_secant`, a Stage III gain of 1, a longer Stage II;
+- the paper's law (15/32 but late falls);
+- flight attitude feedback: both signs are worse by 7–9° of pitch, because the ILC's
+  ballistic tail then ignores the feedback's own correction;
+- `level_feet_samples` 5 or 0, and `level_feet_front_lever` off.
+
+**Still open on the async grid:**
+- **Pitch bias.** f60 settles 2–5° nose-up and f40 about 2° nose-down. The ILC's
+  extrapolated landing pitch correlates only 0.1–0.6 with the true one.
+- **Capacity limits.** Heavy15 leaves the 90% boxes 5–6 cm short; b50_15 falls late under
+  weak85, soft ground and the payload.
+- **Remaining rear unloading.** b50_20_m90 weak85 (~1 s), b60 mocapbad and b55 delay10.

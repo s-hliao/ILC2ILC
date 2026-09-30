@@ -591,7 +591,7 @@ class QuadILCStageSolver:
                      init_guess=None, ipopt_options=None, guess="line",
                      landing_pitch_rate=None, flight_pitch_rate=None, flight_min_pitch=None,
                      flight_spin_change=None, leg_clearance=None, landing_clearance=None,
-                     n_landing=15, n_landing_ramp=6):
+                     n_landing=15, n_landing_ramp=6, landing_capture_margin=None):
         """
         Reference for trial 1 and x_ref for every trial, from the full-body dynamics.
 
@@ -780,7 +780,21 @@ class QuadILCStageSolver:
             opti.subject_to(opti.bounded(-qd_lim, Sd[k, 3:].T, qd_lim))
         for k in range(N):
             opti.subject_to(opti.bounded(-tau_max, Tau[k, :].T, tau_max))
-        opti.subject_to(S[N, 3:].T == fb.q_home)
+        if landing_capture_margin is None:
+            opti.subject_to(S[N, 3:].T == fb.q_home)
+        else:
+            # the front legs land reaching ahead of the landing's capture point, CoM x + vx
+            # sqrt(h/g), by this margin: braking the landing's momentum then keeps the ground
+            # force behind the front feet and the rear feet loaded. At the home pose the
+            # front feet land right at it (~0.2 m ahead at ~1.35 m/s), so the rear feet lift
+            # while the robot stops. The rear legs still land in the home pose
+            opti.subject_to(S[N, 5:].T == fb.q_home[2:])
+            cN_, cP_ = fb.com(S[N, :].T), fb.com(S[N - 1, :].T)
+            footN = fb.feet(S[N, :].T)
+            vxN = (cN_[0] - cP_[0]) / dt
+            hN = cN_[1] - (footN[1] - radius)
+            opti.subject_to(footN[0] - cN_[0] >= vxN * ca.sqrt(ca.fmax(hN, 0.05) / 9.81)
+                            + landing_capture_margin)
 
         # legs keep clear of each other: along the trunk, every point of the front leg (hip,
         # knee, foot) stays leg_clearance ahead of every point of the rear leg, so the
@@ -1101,6 +1115,8 @@ class JumpILC:
     flight_spin_change : how far the trunk's pitch rate may move in flight, rad/s (init_trajopt)
     leg_clearance : trunk-frame x-distance kept between every point of the front leg and
                 every point of the rear leg in the plan, m (init_trajopt)
+    landing_capture_margin : None, or plan the front feet to land this far (m) ahead of the
+                landing's capture point, front legs free of the home pose (init_trajopt)
     landing_clearance : height every foot keeps above its landing surface late in flight
                 until it comes straight down onto it, m (init_trajopt)
     Qe_diag, Qu_diag : ILC weights on the state error and the trial-to-trial force step
@@ -1172,7 +1188,7 @@ class JumpILC:
                  to_guess="srb", landing_pitch_rate=np.radians(90.0),
                  flight_pitch_rate=None, flight_min_pitch=0.0,
                  flight_spin_change=np.radians(20.0), leg_clearance=0.10,
-                 landing_clearance=0.06,
+                 landing_clearance=0.06, landing_capture_margin=None,
                  ipopt_options=None,
                  mdc_params=None, Qe_diag=(1.0, 3.0, 3.0, 0.01, 0.01, 0.01), Qu_diag=1e-5,
                  Qu_stage3=None, safeguard=True, secant=False, mu=0.6, reference=None,
@@ -1219,6 +1235,8 @@ class JumpILC:
             self.config.update(box_clearance=float(box_clearance), box_setback=float(box_setback))
             if terrain_width != 0.005:
                 self.config["terrain_width"] = float(terrain_width)
+        if landing_capture_margin is not None:    # only such a plan records it
+            self.config["landing_capture_margin"] = float(landing_capture_margin)
         if self.mdc_params["mu"] != 0.6:    # a plan for other friction (0.6: older references)
             self.config["mu"] = float(self.mdc_params["mu"])
 
@@ -1246,7 +1264,8 @@ class JumpILC:
                              flight_min_pitch=flight_min_pitch,
                              flight_spin_change=flight_spin_change,
                              leg_clearance=leg_clearance,
-                             landing_clearance=landing_clearance)
+                             landing_clearance=landing_clearance,
+                             landing_capture_margin=landing_capture_margin)
             steps = int(to_steps) if self.box is not None else 1
             c_home = fb.com(self.s_home).full().ravel()
             guess, self.to_trace = None, []
