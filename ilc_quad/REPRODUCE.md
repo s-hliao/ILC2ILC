@@ -442,3 +442,41 @@ Stage III froze in 123 of 152 runs. Alpha instead halves the step on each reject
 - **Capacity limits.** Heavy15 leaves the 90% boxes 5–6 cm short; b50_15 falls late under
   weak85, soft ground and the payload.
 - **Remaining rear unloading.** b50_20_m90 weak85 (~1 s), b60 mocapbad and b55 delay10.
+
+## 11. Measured landing state (2026-09-30)
+
+**The problem.** The ILC's landing sample (N) was a free-flight extrapolation from 10 samples
+before N. Under asynchrony its pitch correlated only 0.1–0.6 with the pitch the robot landed
+with, which is what Table I scores.
+
+**New defaults.**
+- `ilc_landing_state` all: the ILC's landing x, z and pitch come from a line through the
+  mocap frames within `ilc_landing_window` (15 ms) of N.
+- `ilc_landing_fell_tail` true: a trial that fell keeps the extrapolation. Its early, low
+  touchdown made the measured landing read short and low, and the ILC pushed harder every
+  trial.
+
+Both runs below use the stage3_backoff alpha default. A run "ends falling" if it falls in its
+last 5 trials.
+
+| | extrapolated | measured x/z/pitch + fallback |
+|---|---|---|
+| async grid (152 runs), Table I passes | 68 | 78 (+20 / −10) |
+| async grid, median eθ | 1.4° | 1.0° |
+| async grid, falls | 115 | 120 |
+| async grid, runs ending falling | 4 | 8 |
+| suite (`validate.sh`), converged to Table I on the last trial | 6 of 8 | 7 of 8 |
+
+**Where it costs.** The 8 runs that end falling are all b50_15 and b50_20_m90 under
+capacity-limited conditions: weak85, curvesag, payload, soft ground, μ 0.5 and real_s1.
+
+**Suite details.**
+- It fails `validate.sh`'s no-falls rule on b55 (falls on trials 2–3), b50_20_m100 (trial 2)
+  and b60 (trial 3).
+- b60 ends 1.6 cm short.
+- The capture plans' landings dip 5–12° nose-down after touchdown, with the rear feet down.
+
+**Tried and dropped.**
+- **Measuring pitch only, or x and pitch only:** the measured z is what earns the passes.
+- **No rollback at all (`stage3_safeguard` false):** 19/32 on the subset, but more runs end
+  falling, and in the suite b60 tips over on trial 20 and several tasks never converge.

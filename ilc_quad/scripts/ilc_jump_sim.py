@@ -307,6 +307,16 @@ class IlcJumpNode(Node):
         # the landing's capture point (CoM x + vx sqrt(h/g)) is behind the front feet; the
         # plans land right at that limit (front lever ~0.2 m at ~1.35 m/s)
         p("level_feet_front_extra", 0.0)
+        # the ILC's landing sample (N): "tail" = carried on from where the touchdown
+        # controllers start (see _free_flight_tail), "pitch" = its pitch as measured around
+        # N, "xpitch" = x and pitch, "all" = x, z and pitch as measured -- what Table I scores.
+        # all (with ilc_landing_fell_tail): async grid Table I 68 -> 78 of 152, suite 7 of 8
+        # converged; the tail's pitch correlated only 0.1-0.6 with the landing's (2026-09-30)
+        p("ilc_landing_state", "all")
+        p("ilc_landing_window", 0.015)            # s: frames either side of N in that fit
+        # a trial that fell keeps the tail's landing sample: it touched down early and low,
+        # and its measured landing (legs already compressing) had the ILC push ever harder
+        p("ilc_landing_fell_tail", True)
         # flight: all thighs offset by -kp (pitch - planned) - kd (pitch rate - planned),
         # the legs as a reaction wheel holding the trunk on the plan's pitch; 0: off
         p("flight_att_kp", 0.0)                   # rad of thigh per rad of pitch error
@@ -519,6 +529,12 @@ class IlcJumpNode(Node):
         self.level_feet_hold_x = bool(get("level_feet_hold_x"))
         self.level_feet_front_lever = bool(get("level_feet_front_lever"))
         self.level_feet_front_extra = float(get("level_feet_front_extra"))
+        self.ilc_landing_state = get("ilc_landing_state")
+        self.ilc_landing_window = float(get("ilc_landing_window"))
+        self.ilc_landing_fell_tail = bool(get("ilc_landing_fell_tail"))
+        if self.ilc_landing_state not in ("tail", "pitch", "xpitch", "all"):
+            raise ValueError(f"ilc_landing_state must be tail, pitch, xpitch or all, "
+                             f"got {self.ilc_landing_state!r}")
         self.touchdown_force = float(get("touchdown_force"))
         self.ff_tare, self.ff_base, self.ff_thresh = [], None, None
         self.vel_filter_hz = float(get("vel_filter_hz"))
@@ -1167,6 +1183,18 @@ class IlcJumpNode(Node):
         X = np.column_stack([at(com[:, 0]), at(com[:, 1]), at(theta_f),
                              slope(com[:, 0]), slope(com[:, 1]), slope(theta_f)])
         X = self._free_flight_tail(X, (tf, com, theta_f))
+        if self.ilc_landing_state != "tail" and not (self.fell and self.ilc_landing_fell_tail):
+            # the landing sample as measured (a line through the frames within
+            # ilc_landing_window of it), not carried on from the tail's start: the level-feet
+            # legs' last 0.1 s and an early touchdown turn the trunk, and the tail misses it --
+            # Stage III then aims at a pitch the robot does not land with
+            tN = ilc.N * ilc.dt
+            m = np.abs(tf - tN) <= self.ilc_landing_window + 1e-9
+            if m.sum() >= 3:
+                cols = {"pitch": [(2, theta_f)], "xpitch": [(0, com[:, 0]), (2, theta_f)],
+                        "all": [(0, com[:, 0]), (1, com[:, 1]), (2, theta_f)]}[self.ilc_landing_state]
+                for i, y in cols:
+                    X[ilc.N, i] = np.polyval(np.polyfit(tf[m] - tN, y[m], 1), 0.0)
         at_tick = lambda y: np.interp(grid, t, y)          # joint series: every tick
         Nc = ilc.Nc
         per_motor_pd = np.array([collapse(v) for v in rec["tau_pd"]])
