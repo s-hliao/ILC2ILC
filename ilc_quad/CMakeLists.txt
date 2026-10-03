@@ -25,6 +25,7 @@ install(PROGRAMS
   scripts/go1_bridge.py
   scripts/ilc_jump_lockstep.py
   scripts/replay_trials.py
+  scripts/dilc_execute.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

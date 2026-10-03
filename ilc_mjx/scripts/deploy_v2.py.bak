@@ -1,0 +1,289 @@
+#!/usr/bin/env python3
+"""
+deploy.py --policy DIR --member M --robots real_r1 [...] --out OUT: the hardware stage of deep ILC -- few-shot ILC
+of the goal-conditioned policy on the robot (here ilc_quad's CPU async real-like robots), the structure from the
+nominal simulator, every trial used. Per robot, from the same starting policy:
+
+  each iteration (--iters, one jump at each of --goals: 10 x 3 = 30 jumps)
+    1. the current policy flies --goals on the robot (dilc_execute.py run in the container, recorded)
+    2. the gradient of each trial's MEASURED stage cost in its actions, g = d J / d a_k:
+         fd   the nominal GPU sim's one-step FD Jacobians along the same goal, chained into closed-loop co-states
+              with the policy's feedback K = d pi / d e at the REAL states (ilc_mjx)
+         srb  the SRB model's closed-loop co-states along the real trial (JumpILC's model, dilc_execute)
+    3. the ILC step per goal along -g (normalized; --momentum averages a goal's directions over its trials), of a
+       fixed rms (--step-rms, shrinking as 1/sqrt(trials at the goal); halved after a fall, which rolls the goal's
+       targets back to its best trial)
+    4. the network regresses onto every trial's targets (weights halving with age: all runs used, the latest count
+       most), anchored to its own previous actions on the GPU sim's states over the goal range, weight
+       --anchor-w x N0 / (N0 + real trials)
+  then the evaluation on the robot: --eval val (goals between the training goals, seed 301: for tuning) or final
+  (the reserved test, goals 0.4375..0.5625 x 4 seeds from 701, and --perturbed its 8 perturbations).
+-> OUT/<robot>/: per iteration the policy and the real trials, deploy.log, summary.json.
+Run from src/ilc_mjx with the ilcmjx env; the container must be up.
+"""
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+ap = argparse.ArgumentParser()
+ap.add_argument("--policy", required=True)
+ap.add_argument("--member", required=True)
+ap.add_argument("--robots", nargs="+", required=True)
+ap.add_argument("--out", required=True)
+ap.add_argument("--goals", type=float, nargs="+", default=[0.425, 0.5, 0.575])
+ap.add_argument("--iters", type=int, default=10)
+ap.add_argument("--grad", default="fd", choices=("fd", "srb"))
+ap.add_argument("--step-rms", type=float, default=0.05)
+ap.add_argument("--momentum", type=float, default=0.0)
+ap.add_argument("--update", default="grad", choices=("grad", "gn"),
+                help="grad: fixed-size steps along -dJ/da; gn: the ILC's Gauss-Newton step on the landing error "
+                     "(x, z, pitch) through the closed-loop landing sensitivity G_N (fd Jacobians), "
+                     "-gn-beta G_N' (G_N G_N' + gn-delta I)^-1 e, its rms capped at --step-rms")
+ap.add_argument("--gn-beta", type=float, default=0.5)
+ap.add_argument("--gn-delta", type=float, default=0.1, help="damping, relative to tr(G_N G_N')/3")
+ap.add_argument("--stage-w", type=float, nargs=3, default=[0.0, 0.0, 1.0])
+ap.add_argument("--anchor-n0", type=float, default=6.0)
+ap.add_argument("--anchor-w", type=float, default=1.0)
+ap.add_argument("--age-decay", type=float, default=0.5)
+ap.add_argument("--steps", type=int, default=1500)
+ap.add_argument("--lr", type=float, default=1e-4)
+ap.add_argument("--seed", type=int, default=9001)
+ap.add_argument("--eval", default="val", choices=("val", "final", "none"))
+ap.add_argument("--perturbed", action="store_true")
+ap.add_argument("--gpu", default="1")
+a = ap.parse_args()
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", a.gpu)
+os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+
+import jax  # noqa: E402
+import jax.numpy as jnp  # noqa: E402
+import numpy as np  # noqa: E402
+
+from ilc_mjx import host_path  # noqa: E402
+from ilc_mjx.jump import JumpEnv  # noqa: E402
+
+WS, CWS = "/home/henry/ilc_ws", "/ilc_ws"
+cpath = lambda p: CWS + os.path.abspath(p)[len(WS):]
+EVAL = dict(val=([0.45, 0.4625, 0.5375, 0.55], 301), final=([0.4375, 0.4875, 0.5125, 0.5625], 701))
+
+bank = json.load(open(os.path.join(a.policy, "bank.json")))
+env = JumpEnv(bank)
+Nc, Ndc = env.Nc, env.Ndc
+gamma = float(bank.get("gamma", 0.99))
+D = np.asarray(bank["sx"], float)
+c = np.asarray(a.stage_w, float)
+mask = np.ones((Nc, 4))
+mask[Ndc:, :2] = 0.0
+W0 = {k: jnp.asarray(v, jnp.float32) for k, v in np.load(os.path.join(a.policy, a.member + ".npz")).items()
+      if k != "n_hidden"}
+actor_mean = jax.jit(jax.vmap(lambda w_, o: JumpEnv.actor(w_, o), (None, 0)))
+dpi_fn = jax.jit(jax.vmap(jax.jacfwd(lambda o, w_: JumpEnv.actor(w_, o)), (0, None)))
+srb_maker = None
+if a.grad == "srb" or a.update == "gn":
+    from dilc_execute import EpisodeMaker, GoalBank
+    gb = GoalBank(dict(bank, plans=[dict(p, path=host_path(p["path"])) for p in bank["plans"]]))
+    srb_maker = EpisodeMaker(gb, "/home/henry/mujoco_menagerie")
+
+
+def export(w, d):
+    os.makedirs(d, exist_ok=True)
+    np.savez(os.path.join(d, "policy.npz"), **{k: np.asarray(v) for k, v in w.items()}, n_hidden=np.array(2))
+    for f in ("bank.json", "ilc_U.npz", "ilc_best.json"):
+        if os.path.exists(os.path.join(a.policy, f)):
+            shutil.copy(os.path.join(a.policy, f), d)
+    json.dump(dict(best="policy", eval_goals=None, members=[dict(name="policy", group=0, variant="policy", tag="policy",
+                                                                 episodes=0, updates=0, score=None)]),
+              open(os.path.join(d, "manifest.json"), "w"))
+
+
+def fly(pdir, conds, jumps, seed, json_out, save_dir="", episodes=1):
+    """dilc_execute.py run on the robot (the container's CPU async sim)."""
+    j = " ".join(f"--jump {g} 0" for g in jumps)
+    sd = f"--save-dir {cpath(save_dir)}" if save_dir else ""
+    cmd = (f"cd /ilc_ws && source install/setup.bash && export ROS_LOCALHOST_ONLY=1 OMP_NUM_THREADS=1 && "
+           f"python3 install/ilc_quad/lib/ilc_quad/dilc_execute.py run --policy {cpath(pdir)} --member policy "
+           f"--conds {conds} {j} --episodes {episodes} --seed {seed} --jobs 8 --json {cpath(json_out)} {sd}")
+    subprocess.run(["sg", "docker", "-c", f"docker exec ilc_quad bash -lc '{cmd}'"], stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL, check=False)
+    return json.load(open(json_out)) if os.path.exists(json_out) else []
+
+
+def score(r):
+    return 0.01 * r["landing_cost"] + 20.0 * r["fell"]
+
+
+def adam_fit(w, loss, steps):
+    vg = jax.jit(jax.value_and_grad(loss, has_aux=True))
+    mo = jax.tree_util.tree_map(jnp.zeros_like, w)
+    vo = jax.tree_util.tree_map(jnp.zeros_like, w)
+    aux = None
+    for s in range(1, steps + 1):
+        (_, aux), gr = vg(w)
+        mo = jax.tree_util.tree_map(lambda m_, g_: 0.9 * m_ + 0.1 * g_, mo, gr)
+        vo = jax.tree_util.tree_map(lambda v_, g_: 0.999 * v_ + 0.001 * g_ ** 2, vo, gr)
+        w = jax.tree_util.tree_map(lambda p, m_, v_: p - a.lr * (m_ / (1 - 0.9 ** s))
+                                   / (jnp.sqrt(v_ / (1 - 0.999 ** s)) + 1e-8), w, mo, vo)
+    return w, aux
+
+
+def gradient(z, w, gi, An, Bn, g):
+    """d J / d a_k of one real trial (J its discounted stage cost, 0.01 x), normalized action units."""
+    obs = np.asarray(z["obs"], float)
+    if a.grad == "srb":
+        rf = srb_maker.bank.reference(np.array([g, 0.0]))[0]
+        lab = srb_maker.ilc_labels(rf, np.asarray(z["U"], float), np.asarray(z["logX"], float), np.array([g, 0.0]), rf)
+        return 0.01 * np.einsum("ksa,s->ka", lab["mca_cl"], c) * (gamma ** np.arange(Nc))[:, None] * mask
+    K = np.asarray(dpi_fn(jnp.asarray(obs[:Nc], jnp.float32), w))[..., :6]        # at the REAL states
+    gk = 0.01 * np.einsum("ksi,s->ki", np.asarray(z["gn"], float), c)               # measured cost gradients
+    m = gk[Nc - 1]
+    G = np.zeros((Nc, 4))
+    for k in range(Nc - 1, -1, -1):
+        if k < Nc - 1:
+            m = gk[k] + gamma * (An[gi, k + 1] + Bn[gi, k + 1] @ K[k + 1]).T @ m
+        G[k] = gamma ** k * (Bn[gi, k].T @ m) * mask[k]
+    return G
+
+
+PHI = None
+if a.update == "gn":                     # the ballistic flight map takeoff -> touchdown (exact for the CoM)
+    Af = srb_maker.srb.f_lin(np.zeros(6), np.zeros(4), np.zeros(2), np.zeros(2), env.dt)[0].full()
+    PHI = np.linalg.matrix_power(Af, env.N - Nc)
+
+
+def landing_sensitivity(z, w, gi, An, Bn):
+    """G_N (3, Nc, 4): d (landing x, z, pitch) / d a_k, closed loop (the policy's feedback at the REAL states)."""
+    K = np.asarray(dpi_fn(jnp.asarray(np.asarray(z["obs"], float)[:Nc], jnp.float32), w))[..., :6]
+    S = np.zeros((3, Nc, 4))
+    for i in range(3):
+        m = PHI[i] * D                                              # d x_N,i / d e_Nc (normalized)
+        for k in range(Nc - 1, -1, -1):
+            if k < Nc - 1:
+                m = (An[gi, k + 1] + Bn[gi, k + 1] @ K[k + 1]).T @ m
+            S[i, k] = (Bn[gi, k].T @ m) * mask[k]
+    return S
+
+
+def run_robot(robot):
+    out = os.path.join(a.out, robot)
+    os.makedirs(out, exist_ok=True)
+    logf = open(os.path.join(out, "deploy.log"), "w")
+
+    def say(msg):
+        print(f"[{robot}] {msg}", flush=True)
+        logf.write(msg + "\n")
+        logf.flush()
+    w = dict(W0)
+    g_lo, g_hi = min(a.goals) - 0.025, max(a.goals) + 0.025
+    trials, best, hist = [], {g: None for g in a.goals}, []
+    scale = {g: 1.0 for g in a.goals}
+    mom = {g: None for g in a.goals}
+    for it in range(a.iters + 1):
+        pdir = os.path.join(out, f"it{it}", "policy")
+        export(w, pdir)
+        if it == a.iters:
+            break
+        t0 = time.time()
+        rdir = os.path.join(out, f"it{it}", "real")
+        shutil.rmtree(rdir, ignore_errors=True)
+        fly(pdir, robot, a.goals, a.seed + 101 * it, os.path.join(out, f"it{it}", "real.json"), rdir)
+        eps = {}
+        for f in os.listdir(rdir) if os.path.isdir(rdir) else []:
+            z = np.load(os.path.join(rdir, f))
+            eps[round(float(z["goal"][0]), 4)] = z
+        An = Bn = None
+        if a.grad == "fd" or a.update == "gn":
+            goals = np.array([[g, 0.0] for g in a.goals])
+            sim = env.rollout(w, env.references(goals), jax.random.PRNGKey(it), stochastic=False, fd=True)
+            An = sim["A"] * D[None, None, None, :] / D[None, None, :, None]
+            Bn = sim["B"] / D[None, None, :, None]
+        line = []
+        for gi, g in enumerate(a.goals):
+            z = eps.get(round(g, 4))
+            if z is None:
+                line.append(f"g{g:.3f} missing")
+                continue
+            obs, act, fell = np.asarray(z["obs"], float), np.asarray(z["act"], float), bool(z["fell"])
+            J = float(0.01 * (np.asarray(z["rc"]) @ c * gamma ** np.arange(Nc)).sum())
+            hist.append(dict(it=it, goal=g, J=J, fell=fell))
+            if fell:                                               # back to the best trial, half the steps
+                scale[g] *= 0.5
+                if best[g] is not None:
+                    trials.append(dict(goal=g, it=it, obs=best[g][1], tgt=best[g][2]))
+                line.append(f"g{g:.3f} FELL (rollback, scale {scale[g]:.2f})")
+                continue
+            if best[g] is None or J < best[g][0]:
+                best[g] = (J, obs[:Nc], act)
+            if a.update == "gn":
+                S = landing_sensitivity(z, w, gi, An, Bn).reshape(3, -1)
+                e3 = np.asarray(z["info"], float)[:3]                      # measured landing error (m, m, rad)
+                M_ = S @ S.T
+                stp = a.gn_beta * (S.T @ np.linalg.solve(M_ + a.gn_delta * np.trace(M_) / 3 * np.eye(3), e3))
+                step = stp.reshape(Nc, 4) * scale[g]
+                rms = np.sqrt((step ** 2).sum() / mask.sum())
+                step *= min(1.0, a.step_rms / max(rms, 1e-12))
+                trials.append(dict(goal=g, it=it, obs=obs[:Nc], tgt=np.clip((act - step) * mask, -0.999, 0.999)))
+                line.append(f"g{g:.3f} J {J:.2f} e {e3[0] * 100:+.1f}/{e3[1] * 100:+.1f}cm {np.degrees(e3[2]):+.1f}deg "
+                            f"(gn rms {min(rms, a.step_rms):.3f})")
+                continue
+            G = gradient(z, w, gi, An, Bn, g)
+            d = G / max(np.linalg.norm(G), 1e-12)
+            if a.momentum > 0 and mom[g] is not None:
+                d = a.momentum * mom[g] + (1 - a.momentum) * d
+                d = d / max(np.linalg.norm(d), 1e-12)
+            mom[g] = d
+            n_g = sum(1 for t in trials if t["goal"] == g) + 1
+            size = a.step_rms * scale[g] / np.sqrt(n_g)
+            step = d * size * np.sqrt(mask.sum())
+            trials.append(dict(goal=g, it=it, obs=obs[:Nc], tgt=np.clip((act - step) * mask, -0.999, 0.999)))
+            line.append(f"g{g:.3f} J {J:.2f} (step {size:.3f})")
+        say(f"it {it}: " + " | ".join(line) + f"  [{time.time() - t0:.0f} s]")
+        if not trials:
+            continue
+        lam = a.anchor_w * a.anchor_n0 / (a.anchor_n0 + 3 * (it + 1))
+        ga = np.stack([np.linspace(g_lo, g_hi, 16), np.zeros(16)], 1)
+        anc = env.rollout(w, env.references(ga), jax.random.PRNGKey(1000 + it), stochastic=False)
+        Oa = jnp.asarray(anc["obs"][:, :Nc].reshape(-1, anc["obs"].shape[-1]), jnp.float32)
+        Ma = jnp.asarray(np.tile(mask, (16, 1)), jnp.float32)
+        Aa = actor_mean(w, Oa)
+        To = jnp.asarray(np.concatenate([t["obs"] for t in trials]), jnp.float32)
+        Tt = jnp.asarray(np.concatenate([t["tgt"] for t in trials]), jnp.float32)
+        Tw = jnp.asarray(np.concatenate([np.full(Nc, a.age_decay ** (it - t["it"])) for t in trials]), jnp.float32)
+        Tm = jnp.asarray(np.tile(mask, (len(trials), 1)), jnp.float32)
+
+        def loss(w_):
+            l_t = ((((actor_mean(w_, To) - Tt) * Tm) ** 2).sum(-1) * Tw).sum() / Tw.sum()
+            l_a = (((actor_mean(w_, Oa) - Aa) * Ma) ** 2).sum(-1).mean()
+            return l_t + lam * l_a, (l_t, l_a)
+        w, (lt, la) = adam_fit(w, loss, a.steps)
+        say(f"   update: {len(trials)} targets, fit {float(lt):.2e}, anchor {float(la):.2e} (weight {lam:.2f})")
+    res = dict(robot=robot, hist=hist, args=vars(a))
+    if a.eval != "none":
+        goals, seed = EVAL[a.eval]
+        for tag, pd_ in (("start", os.path.join(out, "it0", "policy")), ("final", os.path.join(out, f"it{a.iters}", "policy"))):
+            rr = fly(pd_, robot, goals, seed, os.path.join(out, f"eval_{a.eval}_{tag}.json"), episodes=4)
+            res[f"{a.eval}_{tag}"] = float(np.mean([score(r) for r in rr])) if rr else None
+            res[f"{a.eval}_{tag}_falls"] = int(sum(r["fell"] for r in rr))
+            if a.perturbed and a.eval == "final":
+                rp = fly(pd_, f"/ilc_ws/log/dilc/final701/rob_{robot}.txt", goals, seed,
+                         os.path.join(out, f"eval_final_rob_{tag}.json"), episodes=4)
+                res[f"rob_{tag}"] = float(np.mean([score(r) for r in rp])) if rp else None
+                res[f"rob_{tag}_falls"] = int(sum(r["fell"] for r in rp))
+        say(f"{a.eval}: start {res[f'{a.eval}_start']:.2f} -> final {res[f'{a.eval}_final']:.2f} "
+            f"(falls {res[f'{a.eval}_start_falls']} -> {res[f'{a.eval}_final_falls']})"
+            + (f"; perturbed {res['rob_start']:.2f} -> {res['rob_final']:.2f}" if "rob_final" in res else ""))
+    json.dump(res, open(os.path.join(out, "summary.json"), "w"), indent=1)
+    return res
+
+
+allres = [run_robot(r) for r in a.robots]
+if a.eval != "none":
+    k = a.eval
+    s = [r[f"{k}_start"] for r in allres]
+    f = [r[f"{k}_final"] for r in allres]
+    print(f"ALL {k}: start {np.mean(s):.2f} -> final {np.mean(f):.2f} ({' '.join(f'{x:.2f}' for x in f)})")
+    json.dump(allres, open(os.path.join(a.out, "summary.json"), "w"), indent=1)

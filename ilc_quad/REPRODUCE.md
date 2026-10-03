@@ -480,3 +480,309 @@ capacity-limited conditions: weak85, curvesag, payload, soft ground, μ 0.5 and 
 - **Measuring pitch only, or x and pitch only:** the measured z is what earns the passes.
 - **No rollback at all (`stage3_safeguard` false):** 19/32 on the subset, but more runs end
   falling, and in the suite b60 tips over on trial 20 and several tasks never converge.
+
+## 12. Deep-ILC: a goal-conditioned policy from a few ILC'd goals (2026-10-01)
+
+`scripts/dilc_train.py` (host: torch, 4 GPUs) and `scripts/dilc_execute.py` (container)
+extract one state-feedback, goal-conditioned force policy from ILC runs on a few goals. It
+then jumps zero-shot to goals between them, without re-running the ILC. Everything runs on
+the asynchronous reality model. Training sees only the nominal robot, with no domain
+randomization; the hard robots are deployment targets only.
+
+**Pipeline.**
+1. **ILC on the nominal robot:** 5 goals (f40 to f60) × 2 seeds, 91 jumps (`--stages ilc`).
+2. **Dataset:** every trial becomes an episode twice, for the goal it aimed at and in
+   hindsight for where it landed. Each episode carries labels from its own linearization (its
+   A_t, B_t, as `JumpILC._step` builds them) and the ILC's Stage III Q's:
+   - the Stage III step S;
+   - the Riccati gains K_t;
+   - the outcome metric G_N;
+   - closed-loop co-states.
+3. **Offline training,** many members batched per GPU:
+   - Sobolev actor terms (value through G_N, dπ/de = −K_t, dπ/dg), held over a
+     neighbourhood of each trial by its own gain;
+   - a critic fitted to the trials' closed-loop co-states;
+   - a SAC step on that critic, bounded by the ILC QP's curvature R + BᵀPB.
+4. **Adapting to a new robot** (`--stages explore`, then fine-tune). The critics predict which
+   goals will land worst. Short Stage III ILC runs explore those goals on the new robot,
+   warm-started from the policy's jumps. Their trials become labelled episodes, and the critic's
+   co-states use B corrected by the secant measured on the new robot.
+
+Driver scripts are in `log/dilc/`: `explore_cond.sh`, `ctl.sh` and `cond_report.py`.
+
+```bash
+P=~/miniconda3/envs/dilc/bin/python; T=src/ilc_quad/scripts/dilc_train.py
+$P $T log/dilc/cov5 --stages bank,ilc,dataset --goals f40_m85,f45_m85,f50_m85,f55_m85,f60_m85 \
+   --ilc-conds nominal --ilc-seeds 1 2
+$P $T log/dilc/off10 --stages train,eval --online-episodes 0 --pretrain-updates 15000 \
+   --rl-start 0.6667 --pretrain-snapshots 0.6667 --seeds-per-group 4 --variants "$VARIANTS"
+ACQ=critic TAG=_lab SECANT_RUNS=heavy15 log/dilc/explore_cond.sh dilc_cl_h3 heavy15 1 log/dilc/off10
+```
+
+**Bugs found along the way (all fixed):**
+- **Reward:** a plan-tracking floor outweighed the landing cost 5–35× on converged trials.
+- **One-step value-gradient bootstrap (paper eq. 14), offline:** it drifts from the trials' A, B
+  chain until early-stance action gradients point against the ILC's (cosine −0.7). The trials'
+  co-states replace it.
+- **Open-loop co-states paired with closed-loop curvature:** every sample's step corrected the
+  whole landing error. Closed-loop co-states, iLQR's V_x, fixed it.
+- **Hidden behaviour-cloning term:** members with `rl=0` silently cloned the best trials.
+- **Concurrent evaluations deadlocked:** ROS domain IDs above 100 collide with ephemeral ports.
+  Domains are now below 100, with per-jump timeouts.
+
+**Offline results.** The held-out goals are 0.425, 0.475, 0.525 and 0.575, under 8 async hard
+conditions. Lower is better.
+
+| controller | score |
+|---|---|
+| Deep-ILC (closed-loop co-states) | 4.55 |
+| Sobolev network | 4.65 |
+| ILC + LQR | 4.2–4.4 |
+| ILC forces replayed | 11.5–12.3 |
+
+Offline, RL neither helps nor hurts: the critic has no information beyond the labels.
+
+**Adapting to a hard robot, zero-shot at the held-out goals.**
+- **Setup:** 2 rounds × 8 goals × ≤4 ILC trials = 80 jumps on that robot.
+- **Fresh robots:** seed base 301; no seed used for any choice.
+- **Statistics:** 16 seeds × 8 jumps per row.
+- **ILC rows:** the same robots and goals, 20 trials each.
+
+| robot | not fine-tuned | ILC from nearest ILC'd goal, best of 20 (converged) | ILC from scratch, best of 20 | Sobolev + its own exploration | Deep-ILC (value-guided) |
+|---|---|---|---|---|---|
+| heavy15 | 5.25 | 5.80 (0/8) | 3.19 | 1.57 | **0.93** (Table I 22 %) |
+| payload2 | 6.29 | 3.92 (0/8) | 1.94 | 2.34 | **1.26–1.53** |
+| real_s1 | 3.56 | 6.48 (0/8) | 1.86 | 2.06 | 2.17 (median 1.60 vs 1.50) |
+
+- **Deep-ILC beats:**
+  - its own not-fine-tuned policy, 2–6× on all three robots;
+  - the ILC re-converging from the nearest ILC'd goal: that ILC never matches it within 20
+    trials in 74–98 % of jumps, and never converges itself.
+- **Against Sobolev:** better on the mass perturbations (heavy15, payload2), and level on
+  real_s1, which mixes motor curve, joint friction, CoM offset and +5 % mass.
+- **Where the edge comes from:** exploration, not the learner. Given the same exploration
+  data, the Sobolev learner equals or beats the Deep-ILC learner on all three robots (`ctl_*`).
+  - Deep-ILC's critic predicts where the policy will land worst. After round 1 it sends the
+    ILC to the untested low goals, while Sobolev's ensemble keeps exploring only the upper half.
+  - The secant-corrected critic (pitch error 9.6° → 1.7° on heavy15) and the trust region
+    anchored on the labels narrowed the learner gap on real_s1 (1.85 → 1.70 on equal data),
+    but did not close it.
+
+**Closing the real_s1 gap: a critic of the deployed robot (supersedes the attribution above).**
+The critic was fitted to every transition in the replay. About 290 of the roughly 400
+episodes came from the nominal robot. At a jump's start the state is the same on every
+robot, so the critic learned a mixture of robots. On real_s1 it ranked the goals backwards:
+it predicted the highest cost at 0.40, where real_s1 actually lands best. That inverted
+ranking sent value-guided exploration to the near goals. It also pulled the SAC step toward
+the nominal robot. Two changes, both in the paper's spirit of fine-tuning in the target
+environment:
+- **`crit_t=1`:** the critic's TD and co-state losses use only the new robot's
+  transitions (`--extra-data`).
+- **`--target-frac 0.5`:** half of every batch, and half of the trials for the value term,
+  come from the new robot.
+
+The Sobolev actor terms still see all the data. On fixed data (Deep-ILC's own real_s1
+exploration, rounds 1–2), this moves Deep-ILC from 2.11 to 1.90, while Sobolev stays at
+2.12 → 2.09 (`ctl_tf0_real_s1`, `ctl_tf5_real_s1`). The critic's start-of-jump prediction is
+still nearly flat over the goals, so the acquisition is now the members' disagreement,
+exactly as Sobolev's.
+
+To rerun: `log/dilc/dct_chain.sh COND`, which runs `explore_cond2.sh` for 3 rounds × 8 goals
+× ≤4 trials, ≤96 jumps on the robot. Sobolev gets the same budget through `explore_cond.sh`.
+`explore_cond2.sh` adds `TF`, `EXPLORE_VAR` and `EX_SECANT`.
+
+Fresh robots (seed base 301), 16 seeds × 8 jumps per row. Mean, with the median in brackets.
+
+| robot | not fine-tuned | ILC from nearest, best of 20 | ILC from scratch, best of 20 | Sobolev r3 | old Deep-ILC r2 | **Deep-ILC r3** |
+|---|---|---|---|---|---|---|
+| real_s1 | 3.56 | 6.48 | 1.86 | 1.88 (1.17) | 2.52 | **1.54 (0.82)** |
+| heavy15 | 5.23 | 5.80 | 3.19 | 1.53 (1.16) | 0.95–1.07 | 1.20 (0.89) |
+| payload2 | 6.24 | 3.92 | 1.94 | 2.21 (1.75) | 1.26 | **0.87 (0.56)** |
+
+- **Deep-ILC r3 against Sobolev r3,** over 16 member seeds per arm, as a 95 % bootstrap
+  interval for (Sobolev − Deep-ILC): real_s1 [0.19, 0.50], heavy15 [0.16, 0.49], payload2
+  [1.19, 1.50]. Deep-ILC is better on all three robots.
+- **It also beats:**
+  - the not-fine-tuned policy, 2.3–7×;
+  - ILC from the nearest ILC'd goal, which does not match it within 20 trials in 77–100 % of
+    jumps;
+  - the ILC's best of 20 trials from scratch, on every robot.
+- **heavy15:** the earlier pipeline (critic acquisition, mixed-robot critic) remains better,
+  at 0.95 against 1.20.
+- **Exploration ILC with a pooled secant prior** (`stage3_secant_prior`, `--secant-prior`,
+  `EX_SECANT=1`): Stage III plans with G_N + C. C is a ridge fit over this robot's earlier
+  exploration trial pairs. On real_s1 the best score by trial 4 improves from 1.36 to 1.16
+  (`log/dilc/sectest`). A prior fitted on nominal data does not help early (1.52). It was
+  not used in the table above.
+- **What is left on real_s1** is a landing pitch bias of about −2 to −7°, nose-down, growing
+  with distance. The ILC itself removes little of it within 8 trials, even with the secant
+  prior.
+
+## 13. A critic that carries the problem's structure: learned landing sensitivity (2026-10-01)
+
+> **Superseded (2026-10-03).** This structured critic was trained on measured, task-specific landing
+> sensitivities, so it doesn't carry across robots and tasks. It was dropped, and its scripts
+> (`critic_sens.py`, `grad_ilc.py`, `critic_*`) were removed. See section 14 for the general pipeline.
+
+Section 12's critics did not encode the jump's local structure. We tested that directly.
+`scripts/value_bench.py` flies the policy's own jumps again with every action pushed along a
+direction d, at ±ε with common random numbers. The resulting dJ/dε is what −Σ_k ∇_aQ·d_k
+should predict. Repeat measurements agree at r = 0.99.
+
+On 204 fresh nominal points, the gradient models score r = 0.20 (SRB closed-loop co-states)
+and r = 0.16 (the Deep-ILC critic). Pooling the measured gradients of other seeds at nearby
+goals already reaches r = 0.72. The structure is there to learn; the models get it wrong.
+
+**Fitting a plain critic's action gradients to the measurements (`critic_truegrad.py`).**
+- **Nominal test:** r = 0.64 on the reserved test set, against 0.23 for the SRB.
+- **Transfer:** it fails on the real-like robots (r = 0.11 pooled, −0.28 on real_r5).
+- **Why:** Q(s, a) has to predict the landing error from the state alone. On a mismatched robot
+  it predicts the nominal one.
+
+**The structured critic (`critic_sens.py`).** The landing cost is quadratic in the landing
+error, so the critic is
+
+    Q(s, a) = −c μ(s, a)ᵀ Qe μ(s, a),     dJ/da_k = 2c (Qe μ)ᵀ ∂μ/∂a_k.
+
+- μ is the landing error the jump will end with.
+- The sim teaches ∂μ/∂a, the landing's sensitivity to the forces: the local structure.
+- On a robot, μ is replaced by the landing error the robot actually measured. That is the part
+  of the actual dynamics hardware supplies.
+
+`value_bench.py` now also stores the landing error vectors (e0, E±). `∂μ/∂a` is trained on
+(E₊ − E₋)/2ε, six numbers per flown pair.
+
+State coverage comes from the nominal sim only, with no domain randomization: `--offset S` flies
+the policy plus a smooth random action offset, so landing errors reach the size a mismatched
+robot produces. The training sets are biga, bigd, offa, offb and offc, with weights selected on
+offv. Generate them with `log/dilc/vbench/gen_e.sh`.
+
+r of predicted against measured dJ/dε, random directions only:
+
+| set | structured critic (measured e) | SRB | sensitivity r (x / z / pitch) |
+|---|---|---|---|
+| nominal reserved test (tst) | **0.94** | 0.23 | 0.98 / 0.94 / 0.89 |
+| real_r1 | **0.83** | 0.40 | 0.96 / 0.94 / 0.77 |
+| real_s1 | **0.89** | 0.22 | 0.95 / 0.81 / 0.89 |
+| real_r4 | 0.35 | 0.40 | 0.71 / 0.54 / 0.23 |
+| real_r5 | **0.44** | 0.28 | 0.91 / 0.60 / 0.64 |
+
+real_r4's measurements are reliable (half-differences agree at r = 0.98–1.00), so its
+sensitivity genuinely differs from nominal. Likely causes are its 14 % weak motors and 15 ms
+pose delay. Sim structure cannot know either.
+
+**ILC with the learned sensitivity (`grad_ilc.py`).**
+- **Setup:** 3 goals, 6 trials, a fresh seed every trial, so only the robot's systematic error
+  can be learned.
+- **Gauss–Newton step on the measured landing error:** ff ← ff − β Sᵀ(SSᵀ + δI)⁻¹ e, with S the
+  critic's ∂μ/∂a over x, z and pitch.
+- **Safeguards:** backtracking (`--backtrack 1.5`) and a damped Broyden secant correction of S
+  from the robot's own trial pairs (`--broyden 0.5`). Without them, goal 0.60 on real_r5
+  diverged.
+
+Mean landing score over the last 2 trials and 3 goals (`log/dilc/vbench/gi`, `gi_sum.py`):
+
+| robot | none | SRB gradient | JumpILC | learned-S Gauss–Newton |
+|---|---|---|---|---|
+| real_r1 | 3.73 | 2.44 | 2.77 | **0.16–0.23** |
+| real_s1 | 1.39 | 0.96 | 1.50 | **0.25–0.29** |
+| real_r4 | 6.34 | 4.37 | 2.45 | **1.45–1.57** |
+| real_r5 | 5.09 | 3.51 | 11.5 | **1.39** (safeguarded) |
+
+**Converge then correct, ≤ 30 real jumps, one network** (`log/dilc/ctc_sens.sh`;
+the baseline is `ctc.sh`, now single-network).
+- **Round 1:** ILC at 0.40 / 0.50 / 0.60 × 5 from the sim policy.
+- **Policy update:** `ilc_policy_update.py` moves the policy toward the best trials.
+- **Rounds 2 and 3:** at 0.45 / 0.55 × 4 and × 3, the `cov` variant. The default re-runs
+  0.40 / 0.50 / 0.60.
+- **Selection:** the variant was chosen on the validation midpoints (seed 301).
+- **Final numbers:** from the reserved set, goals 0.4375 / 0.4875 / 0.5125 / 0.5625 × seeds from
+  701, 16 jumps per cell. Mean ± s.e. (median); the last column is the 95 % CI of
+  structured − JumpILC, paired by jump:
+
+| robot | sim policy | JumpILC + update | structured critic + update | difference |
+|---|---|---|---|---|
+| real_r1 | 2.50 (2.23) | 0.65 (0.48) | **0.15 ± 0.03 (0.09)** | [−0.77, −0.23] |
+| real_s1 | 3.29 (2.99) | 2.97 (1.26) | **0.44 ± 0.18 (0.07)** | [−3.89, −1.36] |
+| real_r4 | 8.77 (8.72) | 2.66 (2.46) | 2.02 ± 0.48 (1.42) | [−1.60, +0.34] |
+| real_r5 | 8.05 (8.05) | 6.31 (5.79) | **1.10 ± 0.36 (0.28)** | [−6.36, −4.06] |
+| mean | 5.65 | 3.15 | **0.93** | |
+
+No falls in any cell. On validation the default goal schedule also beat the baseline, mean 1.23
+against 2.78, so the gain is not only the coverage schedule.
+
+**What did not work, and caveats.**
+- **Stepping the network in nominal sim along any gradient** did nothing measurable
+  (`critic_policy_step.py`, `vbench/ps`). In nominal sim the remaining error is per-seed noise.
+- **real_r4:** the learned sensitivity transfers worst there, and on the validation goals the
+  JumpILC pipeline beat it, 0.26 against 1.72.
+- **One pipeline run per robot:** the update's own seed-to-seed spread is not measured.
+
+```bash
+cd log/dilc/vbench && ./gen_e.sh        # gradient sets with landing errors (~11k sim jumps)
+P=~/miniconda3/envs/dilc/bin/python; S=src/ilc_quad/scripts
+$P $S/critic_sens.py cs/s2.pt --data biga bigd offa offb offc --val offv --steps 6000   # also writes cs/s2_np.npz
+$P $S/critic_sens.py x.pt --data offb --load cs/s2.pt --eval tst x_real_r1 x_real_s1 x_real_r4 x_real_r5
+cd .. && TAG=cov G2="0.45 0.55" N2=4 G3="0.45 0.55" N3=3 ./ctc_sens.sh real_s1
+./final_test.sh                          # the reserved test, final701/
+```
+
+## 14. Deep ILC: structure in simulation, specifics on hardware (2026-10-03)
+
+This is the general pipeline: no task-specific critic and no domain randomization. Working notes, every
+sweep and the numbers are in `log/dilc/deploy/NOTES.md`. The GPU simulator is `src/ilc_mjx` (see its
+README), and the tools for the gradient audit, descent test and hardware stage are in `src/ilc_mjx/scripts`.
+
+**Why the VG-SAC critic was replaced.** Audited against exact closed-loop gradients on the
+deterministic GPU sim (`audit_truth.py`, `audit_critic.py`):
+- **Wrong target.** VG with a′ held (the paper's released code) targets the *open-loop* gradient. That
+  gradient is uncorrelated with the truth for a state-feedback policy (r = 0.00).
+- **Right ingredients.** The simulator's finite-difference Jacobians, chained with the policy's own
+  feedback (the ILC's closed-loop co-states), reach r ≈ 0.6.
+- **Unstable fix.** Teaching the critic those co-states diverges: the targets depend on the actor's
+  gains, and the actor follows the critic.
+
+**What replaced it: the ILC's own update, lifted into the network.** Each trial takes the ILC step,
+computed from its closed-loop co-states, and the network regresses onto the stepped actions:
+- In Stage III the step is Gauss–Newton on the landing error through the closed-loop landing
+  sensitivity; the earlier stages use the normalized gradient step (Nguyen et al.'s stages as a
+  curriculum).
+- Each batch of rollouts is one ILC iteration; the network amortizes the steps across goals.
+- Trainer: `dilc_train.py`, variant `co_fd=1, co_ilc=1, co_gn=1, rl=0`.
+
+**Sim stage (GPU, nominal, no domain randomization).** `log/dilc/vgpre.sh coilc`, environment:
+```
+GPUR=<gpu> GB=128 COREC=128 UTD=0.25 EPS=1200 TE=-13 FALL=2 FRESH=1 ALR=1e-4 \
+SCHED="0.2 0.5" FLOOR=0.1 GN=1 EXPL="0.08 0.15" TAG=ex1 SEED=0 ./vgpre.sh coilc <gpu>
+```
+`EXPL` is exploration, not randomization: each jump starts from its own stance (planar joint offsets
+~ N(0, 0.08) rad) and gets smooth action offsets of rms 0.15 during stance. Without it the policy
+never sees states off its nominal trajectory: it transfers poorly and has no robustness (perturbed
+~40 vs ~10).
+
+**Hardware stage.** Few-shot ILC on the robot, here the async real-like robots in the container:
+```
+cd src/ilc_mjx && ~/miniconda3/envs/ilcmjx/bin/python scripts/deploy.py --policy <run>/policy \
+  --member g0_coilc.s0_e1200 --robots real_r1 real_s1 real_r4 real_r5 --out <dir> \
+  --update gn --gn-beta 0.5 --step-rms 0.08 --target-base own --bold 0.3 [--eval final --perturbed]
+```
+- **Budget:** 10 iterations × 3 goals = 30 jumps per robot.
+- **Each trial:** a Gauss–Newton step on its measured landing error, through the nominal GPU sim's
+  closed-loop landing sensitivity, with the policy's feedback taken at the real states.
+- **Safeguard:** a step-size safeguard with a noise margin (`--bold`).
+- **Regression:** the network regresses onto every trial's targets, with weights halving with age,
+  anchored to its own previous behaviour.
+- **Noise:** single-trial landings are noisy (std 0.5–3 at a fixed goal). Never size steps or roll
+  back on one trial's cost, and evaluate with replicates.
+
+Reserved test (mean of `real_r1`, `real_s1`, `real_r4`, `real_r5`; 0.01 × landing cost + 20 × fall):
+
+| | unperturbed | perturbed (8 perturbations) |
+|---|---|---|
+| JumpILC (3 repeats) | 3.16 | 28.6 |
+| VG-SAC-FD zero-shot | 3.57 | 10.7 |
+| Deep ILC, sim without exploration → hardware ILC | 1.62 | 41.8 |
+| Deep ILC, sim with exploration → hardware ILC (2 sim seeds, no stall guard) | 2.24 | 10.4 |
+| the same with the stall guard (3 sim seeds) | 2.67 (seeds 2.09 / 2.49 / 3.43) | 10.8 |
+
+Add `--stall 3` to the hardware stage when a goal may be out of the robot's reach.
