@@ -86,6 +86,7 @@ _BASE_BODY_NAMES = ("base", "trunk")
 # on both robots: the condim=6 priority=1 spheres at the end of each calf.
 _FLOOR_GEOM = "floor"
 _BOX_GEOM = "box"
+_STEP_GEOM = "step"
 _PAYLOAD_BODY = "payload"
 
 _MENAGERIE_ENV = "MUJOCO_MENAGERIE_PATH"
@@ -125,6 +126,9 @@ class QuadModel:
     ground : optional dict(kp, kd), a compliant floor (and box): per-foot contact
         stiffness in N/m and damping in N s/m, the paper's (K_p^G, K_d^G). See
         `_set_ground`. None keeps the MJCF's contact.
+    step : optional dict(x0, x1, height): a low block on the floor from x0 to x1 (m, world),
+        e.g. under the front feet at the start; the robot is reset high enough to settle
+        onto it (a perturbed initial configuration)
     payload : optional dict(mass[, pos, size]), an extra rigid box welded to the
         base -- `pos` is its centre in the base frame (default on top of the
         trunk). Sim-only uncertainties: a controller building its own QuadModel
@@ -133,7 +137,7 @@ class QuadModel:
 
     def __init__(self, robot: str = "go2", menagerie_root: str | None = None,
                  box: dict | None = None, ground: dict | None = None,
-                 payload: dict | None = None):
+                 payload: dict | None = None, step: dict | None = None):
         if robot not in SUPPORTED_ROBOTS:
             raise ValueError(
                 f"unsupported robot {robot!r}; expected one of {SUPPORTED_ROBOTS}"
@@ -150,11 +154,11 @@ class QuadModel:
                 f"${_MENAGERIE_ENV}) at a mujoco_menagerie checkout."
             )
 
-        self.box, self.ground, self.payload = box, ground, payload
-        if box is None and payload is None:
+        self.box, self.ground, self.payload, self.step = box, ground, payload, step
+        if box is None and payload is None and step is None:
             self.model = mujoco.MjModel.from_xml_path(self.scene_path)
         else:
-            self.model = self._compile_with_extras(box, payload)
+            self.model = self._compile_with_extras(box, payload, step)
         self.data = mujoco.MjData(self.model)
 
         torque_limit_model_order = self._to_torque_actuators()
@@ -168,7 +172,8 @@ class QuadModel:
 
     # -- setup ---------------------------------------------------------------
 
-    def _compile_with_extras(self, box: dict | None, payload: dict | None) -> mujoco.MjModel:
+    def _compile_with_extras(self, box: dict | None, payload: dict | None,
+                             step: dict | None = None) -> mujoco.MjModel:
         """The scene with a static box geom in the world body and/or a payload on the base.
 
         The box takes the geom defaults the floor does (same friction, contype and
@@ -190,6 +195,14 @@ class QuadModel:
                 pos=[float(box["x_front"]) + length / 2, 0.0, height / 2],
                 rgba=[0.6, 0.45, 0.3, 1.0],
             )
+        if step is not None:
+            x0, x1, h = float(step["x0"]), float(step["x1"]), float(step["height"])
+            if x1 <= x0 or h <= 0:
+                raise ValueError(f"step needs x1 > x0 and a positive height, got {step}")
+            spec.worldbody.add_geom(
+                name=_STEP_GEOM, type=mujoco.mjtGeom.mjGEOM_BOX,
+                size=[(x1 - x0) / 2, 0.5, h / 2], pos=[(x0 + x1) / 2, 0.0, h / 2],
+                rgba=[0.3, 0.45, 0.6, 1.0])
         if payload is not None:
             mass = float(payload["mass"])
             size = np.asarray(payload.get("size", (0.15, 0.10, 0.05)), float)
@@ -341,6 +354,10 @@ class QuadModel:
             self.terrain_geom_ids.add(
                 mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_GEOM, _BOX_GEOM)
             )
+        if self.step is not None:
+            self.terrain_geom_ids.add(
+                mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_GEOM, _STEP_GEOM)
+            )
 
     def _find_base_body(self) -> int:
         for name in _BASE_BODY_NAMES:
@@ -375,6 +392,8 @@ class QuadModel:
     def reset_home(self) -> None:
         """Reset to the MJCF `home` keyframe with no actuation."""
         mujoco.mj_resetDataKeyframe(self.model, self.data, 0)
+        if self.step is not None:            # above the block: it settles onto it standing
+            self.data.qpos[2] += float(self.step["height"]) + 0.005
         self.data.ctrl[:] = 0.0
         mujoco.mj_forward(self.model, self.data)
 

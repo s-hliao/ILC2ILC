@@ -244,7 +244,8 @@ def run(args) -> list[dict]:
     ground = dict(kp=args.ground[0], kd=args.ground[1]) if args.ground else None
     payload = dict(mass=args.payload) if args.payload else None
     root = args.menagerie_root or default_menagerie_root()
-    sim = QuadModel(args.robot, root, box=box, ground=ground, payload=payload)
+    step = dict(x0=args.step[0], x1=args.step[1], height=args.step[2]) if args.step else None
+    sim = QuadModel(args.robot, root, box=box, ground=ground, payload=payload, step=step)
     rate = 500.0
     substeps = sim.substeps_for(rate)
     period = substeps * sim.dt
@@ -270,9 +271,10 @@ def run(args) -> list[dict]:
 
     rclpy.init(args=["ilc_jump_lockstep"] + ros_args)
     node = IlcJumpNode()
+    node.lockstep_sim = sim       # instrumentation only (dilc_execute.FDJac); the controller never reads it
     real = Reality(args, sim, period)
     if node.recorder is not None:         # what the controller is not told, for the record
-        node.recorder.annotate(sim=dict(box=box, ground=ground, payload=payload,
+        node.recorder.annotate(sim=dict(box=box, ground=ground, payload=payload, step=step,
                                         runner="ilc_jump_lockstep", reality=real.describe(args)))
     sink = _CommandSink()
     node.cmd_pub = sink
@@ -359,7 +361,7 @@ def run(args) -> list[dict]:
     return history
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--robot", default="go2")
     ap.add_argument("--menagerie-root", default="")
@@ -370,6 +372,9 @@ def main():
     ap.add_argument("--ground", type=float, nargs=2, metavar=("KP", "KD"),
                     help="ground stiffness N/m and damping N s/m per foot (sim only)")
     ap.add_argument("--payload", type=float, default=0.0, help="kg on the trunk (sim only)")
+    ap.add_argument("--step", type=float, nargs=3, metavar=("X0", "X1", "HEIGHT"),
+                    help="a block on the floor from X0 to X1 (m), e.g. under the front feet "
+                         "at the start (sim only; the controller is not told)")
     r = ap.add_argument_group("reality gap (sim only; see Reality)")
     r.add_argument("--mass-scale", type=float, default=1.0, help="robot mass and inertia x")
     r.add_argument("--com-offset", type=float, nargs=2, default=(0.0, 0.0), metavar=("DX", "DZ"),
@@ -414,7 +419,11 @@ def main():
                     help="any other ilc_jump parameter, e.g. --param margin:=0.8")
     ap.add_argument("--viewer", action="store_true")
     ap.add_argument("--realtime", action="store_true", help="pace the sim to wall time")
-    args = ap.parse_args()
+    return ap
+
+
+def main():
+    args = build_parser().parse_args()
 
     history = run(args)
     if args.summary:

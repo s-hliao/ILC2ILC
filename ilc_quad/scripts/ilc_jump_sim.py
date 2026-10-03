@@ -181,6 +181,9 @@ class IlcJumpNode(Node):
         # Stage III plans with the landing sensitivities corrected from the trials flown
         # (JumpILC secant: Broyden updates of the SRB model's G)
         p("stage3_secant", False)
+        # a fixed correction of G's landing rows (npz with C), fitted offline from earlier
+        # trials on this robot (dilc_train.secant_fit); Stage III plans with G_N + C
+        p("stage3_secant_prior", "")
         # ILC step variants (JumpILC; the defaults are the law above)
         # learning gain: U <- U + gain du*. 2: the robot realizes only part of each model step,
         # and at 1 falls from a reality gap took ~2x the trials to stop (sweep, 2026-09-30)
@@ -232,6 +235,13 @@ class IlcJumpNode(Node):
         p("run_name", "")
         p("resume_from", "")
         p("resume_file", "")                      # older name for resume_from
+        # npz with U (Nc, 4): trial 1 flies these forces instead of the plan's (a warm start,
+        # e.g. what dilc_execute.py's policy flew); clipped into the force limits
+        p("initial_forces", "")
+        # the stance the robot stands in before the jump, planar joint offsets from the home
+        # pose [F thigh, F calf, R thigh, R calf] (rad): a perturbed initial configuration
+        # the plan does not know of (e.g. crouched, or the nose raised)
+        p("stand_offset", [0.0, 0.0, 0.0, 0.0])
         p("transfer_from", "")
         p("transfer_mode", "retarget")
         # low-level gains (per motor) and timing
@@ -458,6 +468,13 @@ class IlcJumpNode(Node):
             self.ilc.restore(src)
             parent = dict(resume_from=src["path"], source_trial=src["trial"])
             self.get_logger().info(f"resumed from {src['path']}: next trial {self.ilc.trial + 1}")
+        if get("stage3_secant_prior"):
+            self.ilc.set_secant_prior(np.load(get("stage3_secant_prior"))["C"])
+            self.get_logger().info(f"Stage III with the secant prior {get('stage3_secant_prior')}")
+        if get("initial_forces"):
+            self.ilc.U = self.ilc._clip_forces(np.load(get("initial_forces"))["U"])
+            parent = dict(parent or {}, initial_forces=get("initial_forces"))
+            self.get_logger().info(f"trial 1 flies the forces in {get('initial_forces')}")
         self.max_trials = int(get("max_trials"))
         self.recorder = None
         if get("log_dir"):
@@ -477,6 +494,7 @@ class IlcJumpNode(Node):
         self.fb = fb
         self.tau_limit = self.qm.torque_limit
         self.q_stand = expand(fb.q_home)
+        self.q_stand_jump = expand(fb.q_home + np.asarray(get("stand_offset"), float))
         # standing feedforward: the weight shared by the two leg pairs
         f_static = np.array([0.0, 0.5, 0.0, 0.5]) * fb.total_mass * fb.g
         self.tau_stand = expand(fb.torque_map(fb.q_home, 0.0) @ f_static)
@@ -550,6 +568,12 @@ class IlcJumpNode(Node):
         self.feet_off_ref = np.array([fb.feet(sk).full().ravel().reshape(2, 2) - sk[:2]
                                       for sk in s_ref])
         self.vel = None                       # filtered (time, pos, theta, [vx, vz, theta_d])
+        # a state-feedback force policy in place of the ILC's feedforward (dilc_execute.py):
+        # called on the first tick of each TO sample k <= Nc as force_policy(node, k, q, dq);
+        # for k < Nc it returns that sample's forces U[k] (held for the sample), at Nc (the
+        # takeoff sample) it only observes. None: fly self.ilc.U as learned
+        self.force_policy = None
+        self.policy_k = -1
         self.touched_down = False
         self.anchor = None                    # landing: where each pair's foot is held
         self.pair_up = [0, 0]                 # ticks each pair's feet have read unloaded
@@ -962,7 +986,7 @@ class IlcJumpNode(Node):
         if t >= self.stand_time + self.settle_time:
             self._start_jump(now)
             return self._tick_jump(now, q, dq)
-        q_des = (1 - a) * self.stand_from + a * self.q_stand
+        q_des = (1 - a) * self.stand_from + a * self.q_stand_jump
         return q_des, np.zeros(NU), a * kp, kd, a * self.tau_stand
 
     def _start_jump(self, now):
@@ -973,6 +997,7 @@ class IlcJumpNode(Node):
                         dq_des=[], tau_total=[], effort=[], contacts=[], bal_f=[],
                         pose_new=[])
         self.U_flown = self.ilc.U.copy()
+        self.policy_k = -1
         self.fell = False
         self.touched_down = False
         self.t_touchdown = None
@@ -999,6 +1024,11 @@ class IlcJumpNode(Node):
         ilc, dt = self.ilc, self.ilc.dt
         k = min(int(t / dt + 1e-6), ilc.N - 1)
         a = t / dt - k
+        if self.force_policy is not None and self.policy_k < k <= ilc.Nc:
+            self.policy_k = k
+            u = self.force_policy(self, k, q, dq)
+            if k < ilc.Nc:
+                self.U_flown[k] = u
         # touchdown before the plan's last sample: the landing controller takes over there
         # and then (late in flight only, so push-off contact never trips it). The foot
         # sensors are tared over the first half of the flight

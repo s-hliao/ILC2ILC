@@ -1300,6 +1300,9 @@ class JumpILC:
         self.safeguard = bool(safeguard)
         self.secant = bool(secant)
         self.G_corr = np.zeros((nx, self.Nc * nu))    # learned correction to G's landing rows
+        # a correction given up front (set_secant_prior): fitted offline from many trials on
+        # this robot, held fixed (no Broyden updates unless `secant`)
+        self.secant_prior = False
         self._origin = None                           # what the last step started from
         self.best3 = None
         self.qu3_scale = 1.0
@@ -1556,6 +1559,14 @@ class JumpILC:
                       dU_ref_norm=float(np.linalg.norm(self.U - self.u_ref)))
         return result
 
+    def set_secant_prior(self, C):
+        """Stage III plans with G_N + C: C (nx x Nc*nu, raw units) the landing-sensitivity
+        correction a ridge fit over earlier trials' pairs gives (dilc_train.secant_fit)."""
+        C = np.asarray(C, float)
+        assert C.shape == self.G_corr.shape, (C.shape, self.G_corr.shape)
+        self.G_corr = C.copy()
+        self.secant_prior = True
+
     def _secant_update(self, x_N):
         """Broyden: the landing x_N of the trial just flown (self.U) against what the model
         predicted for the step that led to it (see `secant`)."""
@@ -1579,7 +1590,7 @@ class JumpILC:
         A_list, B_list = self.nominal.linearize_along_trial(X, U_full, R1, R2, self.dt)
         G = build_lifted_G(A_list, B_list, N, Nc, nx, nu, flatten=True)
         self._origin = dict(U=self.U.copy(), x_N=X[-1].copy(), G_N=G[-nx:].copy())
-        if stage == 3 and self.secant:
+        if stage == 3 and (self.secant or self.secant_prior):
             G = G.copy()
             G[-nx:] += self.G_corr
         if self.fall_pitch_bias != 0.0 and log.get("fell"):
