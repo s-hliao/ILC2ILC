@@ -53,7 +53,7 @@ ap.add_argument("--age-decay", type=float, default=0.5)
 ap.add_argument("--steps", type=int, default=1500)
 ap.add_argument("--lr", type=float, default=1e-4)
 ap.add_argument("--seed", type=int, default=9001)
-ap.add_argument("--eval", default="val", choices=("val", "final", "none"))
+ap.add_argument("--eval", default="val", choices=("val", "final", "holdout", "none"))
 ap.add_argument("--perturbed", action="store_true")
 ap.add_argument("--target-base", default="flown", choices=("flown", "own"),
                 help="the step starts from the action the robot flew (after the controller's clipping: stays "
@@ -82,6 +82,17 @@ ap.add_argument("--jac-at", default="sim", choices=("sim", "real"),
                 help="gn: the one-step Jacobians of the nominal sim along its own trajectory for the goal (sim), or with the "
                      "sim restored to each trial's measured states (real: mocap pose and joint encoders, the stance feet "
                      "at the sim's contact depth), the trial's flown actions")
+ap.add_argument("--backend", default="container", choices=("container", "manual"),
+                help="container: the sim robots fly (dilc_execute in the ilc_quad container); manual: a real robot -- "
+                     "each iteration writes OUT/<robot>/it<k>/REQUEST.md (the jumps to fly with policy_jump_node) and "
+                     "waits for their episodes in OUT/<robot>/it<k>/real; --robots are then just labels")
+ap.add_argument("--gate", type=float, nargs=3, default=None, metavar=("FALLS", "RATIO", "DA"),
+                help="safety gate on every update before it may fly (default on with --backend manual: 0 1.5 0.3): "
+                     "in the nominal GPU sim over the goal range, nominal and from perturbed stances, the new policy "
+                     "may fall at most FALLS more jumps and score at most RATIO x the current one (+0.5), and its "
+                     "actions on the robot's own recent states may move at most DA (normalized) from the current "
+                     "ones; else the update is rejected (the current policy flies again, its steps halved)")
+ap.add_argument("--manual-timeout", type=float, default=24 * 3600, help="manual: seconds to wait for the jumps")
 ap.add_argument("--gpu", default="1")
 a = ap.parse_args()
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", a.gpu)
@@ -96,7 +107,8 @@ from ilc_mjx.jump import JumpEnv  # noqa: E402
 
 WS, CWS = "/home/henry/ilc_ws", "/ilc_ws"
 cpath = lambda p: CWS + os.path.abspath(p)[len(WS):]
-EVAL = dict(val=([0.45, 0.4625, 0.5375, 0.55], 301), final=([0.4375, 0.4875, 0.5125, 0.5625], 701))
+EVAL = dict(val=([0.45, 0.4625, 0.5375, 0.55], 301), final=([0.4375, 0.4875, 0.5125, 0.5625], 701),
+            holdout=([0.4375, 0.4625, 0.4875, 0.5125, 0.5375, 0.5625], 1301))   # holdout: the frozen final test only
 
 bank = json.load(open(os.path.join(a.policy, "bank.json")))
 env = JumpEnv(bank)
@@ -202,6 +214,75 @@ def landing_sensitivity(z, w, gi, An, Bn):
     return S
 
 
+GATE = a.gate if a.gate is not None else ([0, 1.5, 0.3] if a.backend == "manual" else None)
+
+
+def gate(w_old, w_new, O_real, g_lo, g_hi, it):
+    """The safety gate (--gate): the update in the nominal GPU sim against the current policy, and how far it moves
+    the actions on the robot's own states."""
+    goals = np.stack([np.linspace(g_lo, g_hi, 16), np.zeros(16)], 1)
+    ref = env.references(np.concatenate([goals, goals]))
+    q_off, _ = env.explore_noise(32, np.random.default_rng(777 + it), 0.08, 0.0)
+    q_off[:16] = 0.0                                     # 16 nominal stances, 16 perturbed ones
+    xr = np.asarray(ref["x_ref"])
+    tg = xr[:, env.N].copy()
+    tg[:, :2] = xr[:, 0, :2] + np.concatenate([goals, goals])
+    tg[:, 2] = 0.0
+    qe, rs = np.asarray(bank["qe"], float), float(bank["r_scale"])
+    res = []
+    for w_ in (w_old, w_new):
+        o = env.rollout(w_, ref, jax.random.PRNGKey(0), stochastic=False, q_offset=q_off)
+        e = o["X"][:, env.N] - tg
+        sc = 0.01 * rs * (e * qe * e).sum(1) + 20 * o["fell"]
+        res.append((int(o["fell"].sum()), float(np.nanmean(sc))))
+    da = float(np.abs((np.asarray(actor_mean(w_new, O_real)) - np.asarray(actor_mean(w_old, O_real)))
+                      * np.tile(mask, (len(O_real) // Nc, 1))).max())
+    (f0, s0), (f1, s1) = res
+    ok = f1 <= f0 + GATE[0] and s1 <= GATE[1] * s0 + 0.5 and da <= GATE[2]
+    return ok, (f"{'pass' if ok else 'REJECTED'}: sim falls {f0} -> {f1}, sim score {s0:.2f} -> {s1:.2f}, "
+                f"max action change on the robot's states {da:.3f}")
+
+
+def request_jumps(pdir, robot, it, rdir, out):
+    """--backend manual: the jumps this iteration needs, written for the operator (REQUEST.md), then wait for their
+    episodes (policy_jump_node.py writes them) in rdir."""
+    os.makedirs(rdir, exist_ok=True)
+    need = {round(g, 4): a.reps for g in a.goals}
+    lines = [f"# {robot}, iteration {it}: {len(a.goals) * a.reps} jumps", "",
+             f"Policy: `{pdir}`. Save the episodes to `{rdir}` (episode_dir). For each goal, {a.reps} jump(s):", ""]
+    for g in a.goals:
+        ref = os.path.join(rdir, f"ref_{g:.4f}.npz")
+        lines += [f"## goal {g:.4f} m", "```",
+                  f"python3 policy_jump_node.py prepare --policy {pdir} --goal {g} 0 --out {ref}",
+                  f"ros2 launch ilc_quad policy_jump_go1.launch.py pose_topic:=<mocap topic> policy_dir:={pdir} \\",
+                  f"    reference_file:={ref} jump_dx:={g} jump_dz:=0.0 episode_dir:={rdir} episode_tag:={robot}_it{it}",
+                  f"ros2 service call /start_trial std_srvs/srv/Trigger    # x{a.reps}", "```", ""]
+    lines += ["A fall is data too: keep its episode (the update rolls that goal back). To abort the run, write "
+              f"`{os.path.join(rdir, 'ABORT')}`.", ""]
+    open(os.path.join(out, f"it{it}", "REQUEST.md"), "w").write("\n".join(lines))
+    json.dump(dict(robot=robot, it=it, policy=pdir, episode_dir=rdir, goals=a.goals, reps=a.reps),
+              open(os.path.join(out, f"it{it}", "REQUEST.json"), "w"), indent=1)
+    print(f"[{robot}] it {it}: waiting for {len(a.goals) * a.reps} jumps -- {os.path.join(out, f'it{it}', 'REQUEST.md')}",
+          flush=True)
+    t0 = time.time()
+    while True:
+        if os.path.exists(os.path.join(rdir, "ABORT")):
+            raise SystemExit(f"[{robot}] aborted by the operator")
+        have = {}
+        for f in os.listdir(rdir):
+            if f.endswith(".npz") and not f.startswith("ref_"):
+                try:
+                    have[round(float(np.load(os.path.join(rdir, f))["goal"][0]), 4)] = \
+                        have.get(round(float(np.load(os.path.join(rdir, f))["goal"][0]), 4), 0) + 1
+                except Exception:                        # still being written
+                    pass
+        if all(have.get(g, 0) >= n for g, n in need.items()):
+            return
+        if time.time() - t0 > a.manual_timeout:
+            raise SystemExit(f"[{robot}] timed out waiting for the jumps")
+        time.sleep(5)
+
+
 def run_robot(robot):
     out = os.path.join(a.out, robot)
     os.makedirs(out, exist_ok=True)
@@ -228,10 +309,17 @@ def run_robot(robot):
             break
         t0 = time.time()
         rdir = os.path.join(out, f"it{it}", "real")
-        shutil.rmtree(rdir, ignore_errors=True)
-        fly(pdir, robot, a.goals, a.seed + 101 * it, os.path.join(out, f"it{it}", "real.json"), rdir, episodes=a.reps)
+        if a.backend == "container":                    # (manual: jumps already flown for this iteration are kept)
+            shutil.rmtree(rdir, ignore_errors=True)
+        if a.backend == "manual":
+            request_jumps(pdir, robot, it, rdir, out)
+        else:
+            fly(pdir, robot, a.goals, a.seed + 101 * it, os.path.join(out, f"it{it}", "real.json"), rdir,
+                episodes=a.reps)
         eps = {}
         for f in sorted(os.listdir(rdir)) if os.path.isdir(rdir) else []:
+            if not f.endswith(".npz") or f.startswith("ref_"):
+                continue
             z = np.load(os.path.join(rdir, f))
             eps.setdefault(round(float(z["goal"][0]), 4), []).append(z)
         An = Bn = None
@@ -350,8 +438,16 @@ def run_robot(robot):
             l_t = ((((actor_mean(w_, To) - Tt) * Tm) ** 2).sum(-1) * Tw).sum() / Tw.sum()
             l_a = (((actor_mean(w_, Oa) - Aa) * Ma) ** 2).sum(-1).mean()
             return l_t + lam * l_a, (l_t, l_a)
+        w_prev = w
         w, (lt, la) = adam_fit(w, loss, a.steps)
         say(f"   update: {len(trials)} targets, fit {float(lt):.2e}, anchor {float(la):.2e} (weight {lam:.2f})")
+        if GATE is not None:
+            ok, msg = gate(w_prev, w, To, g_lo, g_hi, it)
+            say(f"   gate: {msg}")
+            if not ok:                                   # the current policy flies again, smaller steps
+                w = w_prev
+                for g in a.goals:
+                    scale[g] *= 0.5
     res = dict(robot=robot, hist=hist, args=vars(a))
     if a.eval != "none":
         goals, seed = EVAL[a.eval]

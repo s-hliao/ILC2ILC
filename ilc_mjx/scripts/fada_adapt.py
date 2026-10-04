@@ -30,7 +30,7 @@ ap.add_argument("--rank", type=int, default=4)
 ap.add_argument("--steps", type=int, default=500)
 ap.add_argument("--lr", type=float, default=1e-3)
 ap.add_argument("--seed", type=int, default=9001)
-ap.add_argument("--eval", default="final", choices=("val", "final", "none"))
+ap.add_argument("--eval", default="final", choices=("val", "final", "holdout", "none"))
 ap.add_argument("--perturbed", action="store_true")
 ap.add_argument("--eval-episodes", type=int, default=4)
 ap.add_argument("--gpu", default="0")
@@ -46,7 +46,8 @@ from ilc_mjx.jump import JumpEnv  # noqa: E402
 
 WS, CWS = "/home/henry/ilc_ws", "/ilc_ws"
 cpath = lambda p: CWS + os.path.abspath(p)[len(WS):]
-EVAL = dict(val=([0.45, 0.4625, 0.5375, 0.55], 301), final=([0.4375, 0.4875, 0.5125, 0.5625], 701))
+EVAL = dict(val=([0.45, 0.4625, 0.5375, 0.55], 301), final=([0.4375, 0.4875, 0.5125, 0.5625], 701),
+            holdout=([0.4375, 0.4625, 0.4875, 0.5125, 0.5375, 0.5625], 1301))   # holdout: the frozen final test only
 bank = json.load(open(os.path.join(a.policy, "bank.json")))
 Ndc, Nsc, _ = bank["phases"]
 Nc = Ndc + Nsc

@@ -26,6 +26,7 @@ install(PROGRAMS
   scripts/ilc_jump_lockstep.py
   scripts/replay_trials.py
   scripts/dilc_execute.py
+  scripts/policy_jump_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
