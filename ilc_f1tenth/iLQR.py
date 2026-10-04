@@ -8,6 +8,19 @@ R = 0.1 * np.eye(2)
 
 alpha_values = [1.0, 0.5, 0.25, 0.125, 0.0625]
 
+STATE_MASK = np.diag([
+        1,  # x
+        1,  # y
+        1,  # phi
+        1,  # vx
+        1,  # vy
+        1,  # omega
+        0,  # omega_w   -> mask
+        0,  # current   -> mask
+        0   # delta
+    ])
+
+'''Ingnore the STATEMASK I used in the code, I used this for debug tests '''
 
 
 def backward(ref_trajectory, cur_trajectory, cur_controls, p, params_car, exact, dt):
@@ -52,6 +65,62 @@ def backward(ref_trajectory, cur_trajectory, cur_controls, p, params_car, exact,
         A_k = np.array(A_func(x,u,p))
         B_k = np.array(B_func(x,u,p))
 
+        A_k = STATE_MASK @ A_k @ STATE_MASK
+        B_k = STATE_MASK @ B_k
+
+        ''' used for debug
+        A_idx = np.unravel_index(
+            np.argmax(np.abs(A_k)),
+            A_k.shape
+        )
+
+        B_idx = np.unravel_index(
+            np.argmax(np.abs(B_k)),
+            B_k.shape
+        )
+
+        state_names = [
+            "x", "y", "phi", "vx", "vy",
+            "omega", "omega_w", "current", "delta"
+        ]
+
+        control_names = [
+            "current_slew_rate",
+            "steer_rate"
+        ]
+
+        print(
+            f"\nbackward step {i}"
+        )
+
+        print(
+            f"max A = A{A_idx} = {A_k[A_idx]:.3e}"
+        )
+
+        print(
+            f"meaning: d({state_names[A_idx[0]]}_next) / "
+            f"d({state_names[A_idx[1]]})"
+        )
+
+        print(
+            f"max B = B{B_idx} = {B_k[B_idx]:.3e}"
+        )
+
+        print(
+            f"meaning: d({state_names[B_idx[0]]}_next) / "
+            f"d({control_names[B_idx[1]]})"
+        )
+
+        print("state =", x)
+
+        print(
+            f"backward step {i}: "
+            f"max|A|={np.max(np.abs(A_k)):.3e}, "
+            f"max|B|={np.max(np.abs(B_k)):.3e}, "
+            f"max|Vxx|={np.max(np.abs(V_xx)):.3e}"
+        )
+        '''
+
         #quadratic approximation
         l_x = Q @ error[i]
         l_u = R @ u
@@ -64,6 +133,11 @@ def backward(ref_trajectory, cur_trajectory, cur_controls, p, params_car, exact,
         Q_u = l_u + B_k.T @ V_x
         Q_xx = l_xx + A_k.T @ V_xx @ A_k
         Q_uu = l_uu + B_k.T @ V_xx @ B_k
+
+        print(
+            f"    max|Quu|={np.max(np.abs(Q_uu)):.3e}, "
+            f"cond(Quu)={np.linalg.cond(Q_uu):.3e}"
+        )
         Q_ux = l_ux + B_k.T @ V_xx @ A_k
 
         #solve for optimal control rule
@@ -75,6 +149,14 @@ def backward(ref_trajectory, cur_trajectory, cur_controls, p, params_car, exact,
         #update V for time step i-1
         V_x = Q_x + K.T @ Q_uu @ k + K.T @ Q_u + Q_ux.T @ k
         V_xx = Q_xx + K.T @ Q_uu @ K + K.T @ Q_ux + Q_ux.T @ K
+
+        V_x = STATE_MASK @ V_x
+        V_xx = STATE_MASK @ V_xx @ STATE_MASK
+
+        if not np.all(np.isfinite(V_xx)):
+            print("V_xx exploded at backward step:", i)
+            print("state =", x)
+            break
 
     total_cost += l_terminal
 
@@ -100,11 +182,48 @@ def forward(k_list, K_list, ref_trajectory, cur_trajectory, cur_controls, p, par
     for i in range(cur_trajectory.shape[0] - 1):
         x = cur_trajectory[i]
         u = cur_controls[i]
+        
+        delta_x = x_new - x
+        delta_x = STATE_MASK @ delta_x
 
+        feedforward = alpha * k_list[i]
+        feedback = K_list[i] @ delta_x
+
+        '''
+        if i <= 1:
+            print(f"\nSTEP {i}")
+            print("x_new =", x_new)
+            print("x_nominal =", x)
+            print("delta_x =", delta_x)
+            print("largest delta index =", np.argmax(np.abs(delta_x)))
+    
+        print(
+            f"step {i}: "
+            f"max|dx|={np.max(np.abs(delta_x)):.3e}, "
+            f"max|ff|={np.max(np.abs(feedforward)):.3e}, "
+            f"max|fb|={np.max(np.abs(feedback)):.3e}"
+        )
+        '''
+
+        delta_u = feedforward + feedback
+
+        '''
         delta_x = x_new - x
         delta_u = alpha * k_list[i] + K_list[i] @ delta_x
-
+        print("max |delta_x|:", np.max(np.abs(delta_x)))
+        print("max |alpha*k|:", np.max(np.abs(alpha * k_list[i])))
+        print("max |K*delta_x|:", np.max(np.abs(K_list[i] @ delta_x)))
+        '''
+        
         u_new = u + delta_u
+
+        if i < 5:
+            print(f"\nFORWARD STEP {i}")
+            print("u nominal =", u)
+            print("feedforward =", feedforward)
+            print("feedback =", feedback)
+            print("u new =", u_new)
+        
 
         #cost at each step
         error_new = x_new - ref_trajectory[i]
@@ -123,25 +242,3 @@ def forward(k_list, K_list, ref_trajectory, cur_trajectory, cur_controls, p, par
 
     return np.array(new_controls), np.array(new_trajectory), total_cost
 
-
-def alpha_search(k_list, K_list, ref_trajectory, cur_trajectory, cur_controls, current_cost, p, params_car, exact, dt):
-
-    for alpha in alpha_values:
-
-        new_controls, new_trajectory, new_cost = forward(
-            k_list,
-            K_list,
-            ref_trajectory,
-            cur_trajectory,
-            cur_controls,
-            p,
-            params_car,
-            exact,
-            dt,
-            alpha
-        )
-
-        if new_cost < current_cost:
-            return alpha, new_controls, new_trajectory, new_cost
-
-    return 0.0, cur_controls, cur_trajectory, current_cost
