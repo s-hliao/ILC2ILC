@@ -93,6 +93,10 @@ ap.add_argument("--gate", type=float, nargs=3, default=None, metavar=("FALLS", "
                      "actions on the robot's own recent states may move at most DA (normalized) from the current "
                      "ones; else the update is rejected (the current policy flies again, its steps halved)")
 ap.add_argument("--manual-timeout", type=float, default=24 * 3600, help="manual: seconds to wait for the jumps")
+ap.add_argument("--jac-dyn", type=float, nargs=8, default=None, metavar="P",
+                help="the ILC's Jacobians from a fixed, deliberately different model (JumpEnv.DYN_KEYS: mass_scale com_x "
+                     "motor_scale curve speed_scale friction joint_friction payload) -- how wrong may the model be?")
+ap.add_argument("--jac-flip", action="store_true", help="gn: the landing sensitivity negated (the 180-degree control)")
 ap.add_argument("--gpu", default="1")
 a = ap.parse_args()
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", a.gpu)
@@ -154,7 +158,7 @@ def fly(pdir, conds, jumps, seed, json_out, save_dir="", episodes=1):
             break
         except subprocess.TimeoutExpired:
             tag = os.path.abspath(json_out)[len(WS):]
-            subprocess.run(["sg", "docker", "-c", f"docker exec ilc_quad pkill -f {CWS + tag}"], check=False)
+            subprocess.run(["sg", "docker", "-c", f"docker exec ilc_quad pkill -9 -f {CWS + tag}"], check=False)   # -9: rclpy keeps SIGTERM
             print(f"flight timed out ({json_out}), attempt {attempt + 1}", flush=True)
     return json.load(open(json_out)) if os.path.exists(json_out) else []
 
@@ -325,7 +329,8 @@ def run_robot(robot):
         An = Bn = None
         if a.grad == "fd" or a.update == "gn":
             goals = np.array([[g, 0.0] for g in a.goals])
-            sim = env.rollout(w, env.references(goals), jax.random.PRNGKey(it), stochastic=False, fd=True)
+            sim = env.rollout(w, env.references(goals), jax.random.PRNGKey(it), stochastic=False, fd=True,
+                              dyn=None if a.jac_dyn is None else env.dyn_arrays(np.tile(a.jac_dyn, (len(goals), 1))))
             An = sim["A"] * D[None, None, None, :] / D[None, None, :, None]
             Bn = sim["B"] / D[None, None, :, None]
         line = []
@@ -391,6 +396,8 @@ def run_robot(robot):
                         da_, de_ = prev[g][1].ravel(), e3 - prev[g][0]
                         sec[g] += a.secant * np.outer(de_ - (S + sec[g]) @ da_, da_) / (da_ @ da_)
                     S = S + sec[g]
+                if a.jac_flip:
+                    S = -S
                 M_ = S @ S.T
                 stp = a.gn_beta * (S.T @ np.linalg.solve(M_ + a.gn_delta * np.trace(M_) / 3 * np.eye(3), e3))
                 step = stp.reshape(Nc, 4) * scale[g]

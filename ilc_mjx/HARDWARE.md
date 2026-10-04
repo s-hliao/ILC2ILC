@@ -36,36 +36,50 @@ ros2 launch ilc_quad policy_jump_sim.launch.py policy_dir:=$P policy_member:=g0_
     reference_file:=/tmp/ref.npz jump_dx:=0.425 episode_dir:=/tmp/pre max_trials:=2
 ```
 - Expect a landing error of a few cm and no fall.
-- If anything errors here, it will error on the robot.
+- If anything errors here, it will error on the robot. If ROS nodes stop seeing each other after many
+  launches, clean stale shared memory: `fastdds shm clean` (`hw_session.py` does this at start).
 
-## 3. The hardware stage (30 jumps)
+## 3. The hardware stage (9–15 jumps)
+
+**Budget.** In sim-to-sim nearly all of the gain came from the first iteration: 3 jumps took the score from 3.48 to
+2.71, against 2.67 after 30 (`log/dilc/deploy/NOTES.md`, "Fewer real jumps"). Run `--iters 4` (12 jumps); 3–5
+iterations leave margin for a bad first trial.
 
 **On the GPU machine:**
 ```bash
 cd src/ilc_mjx
-~/miniconda3/envs/ilcmjx/bin/python scripts/deploy.py --backend manual --robots go1 --out <RUN> \
+~/miniconda3/envs/ilcmjx/bin/python scripts/deploy.py --backend manual --robots go1 --out <RUN> --iters 4 \
   --policy log/dilc/pre_coilcex1/policy --member g0_coilc.s0_e1200 \
   --update gn --gn-beta 0.3 --step-rms 0.05 --target-base own --bold 0.3 --stall 3 --eval none
 ```
-The safety gate is on by default with `--backend manual` (`--gate 0 1.5 0.3`).
+The safety gate is on by default with `--backend manual`. The first iteration's update takes ~2.5 min (one-time
+compilation); start `deploy.py` while you set up. Later updates take ~30–60 s, while the robot is reset.
 
-**Each iteration** (3 jumps, one per goal 0.425 / 0.5 / 0.575):
-- `deploy.py` writes `<RUN>/go1/it<k>/REQUEST.md` with the exact commands and waits for the episodes.
-- **On the robot workstation**, per goal:
-  ```bash
-  python3 policy_jump_node.py prepare --policy <it k policy> --goal <g> 0 --out <episode_dir>/ref_<g>.npz
-  ros2 launch ilc_quad policy_jump_go1.launch.py pose_topic:=<topic> pose_latency:=<measured> \
-      mocap_offset:="[x, y, z]" policy_dir:=<it k policy> reference_file:=<episode_dir>/ref_<g>.npz \
-      jump_dx:=<g> jump_dz:=0.0 episode_dir:=<episode_dir> episode_tag:=go1_it<k>
-  ros2 service call /start_trial std_srvs/srv/Trigger      # one jump; the node logs the landing error
-  ```
-- The episode lands in `<episode_dir>` = `<RUN>/go1/it<k>/real`. Both machines must see it (shared mount or rsync).
-- `deploy.py` then takes the ILC step and refits.
-- **The gate checks the refit before it may fly:**
-  - in the nominal GPU sim over the goal range, nominal and from perturbed stances, the update must not fall more,
-    nor score worse than 1.5× the current policy (+0.5);
-  - its actions on the robot's own recent states must not move more than 0.3 (normalized).
-  - Otherwise the update is rejected: the current policy flies again with halved steps.
+**On the robot workstation, once per session:**
+```bash
+ros2 launch ilc_quad go1_bridge.launch.py sdk_path:=<sdk>            # kept up all session
+python3 hw_session.py <RUN>/go1 --pose-topic <topic> --pose-latency <measured> --mocap-offset x y z \
+    [--path-map <GPU machine's ws>=<this machine's ws>]
+```
+`hw_session.py` follows `deploy.py` for you:
+- for each iteration's request, goal by goal, it prepares the plan and launches the policy node for the jumps owed;
+- **at each prompt**, reset the robot at the start mark, then press **Enter** to jump (`d` = damp, `a` = abort);
+- it prints each landing error, then waits while `deploy.py` takes the ILC step, refits and runs the gate;
+- it stops when `deploy.py` is done.
+
+The episodes land in `<RUN>/go1/it<k>/real`, which both machines must see (shared mount, or `--path-map`).
+
+**The gate.** It checks the refit before it may fly:
+- in the nominal GPU sim over the goal range, nominal and from perturbed stances, the update must not fall more,
+  nor score worse than 1.5× the current policy (+0.5);
+- its actions on the robot's own recent states must not move more than 0.3 (normalized).
+- Otherwise the update is rejected: the current policy flies again with halved steps.
+
+Tested end to end in sim: `hw_session.py --backend sim` against `deploy.py --backend manual`, 2 iterations,
+`log/dilc/hwtest/session`.
+
+**Manual alternative.** Without `hw_session.py`, each `<RUN>/go1/it<k>/REQUEST.md` lists the exact commands:
+`policy_jump_node.py prepare`, `policy_jump_go1.launch.py`, `/start_trial`.
 
 **Safety, as on the sim robots:**
 - **Steps are small:** Gauss–Newton β 0.3, rms ≤ 0.05.

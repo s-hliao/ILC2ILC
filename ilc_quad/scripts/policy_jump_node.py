@@ -73,6 +73,9 @@ def node_main(argv=None):
             self.episode_dir, self.episode_tag = gp("episode_dir"), gp("episode_tag")
             os.makedirs(self.episode_dir, exist_ok=True)
             self.n_flown = 0
+            # a session (hw_session.py) launches one node per goal for the jumps it owes: exit when they are flown,
+            # on hardware too (the bridge, launched apart, damps once the commands stop)
+            self.exit_when_done = bool(gp("exit_when_done"))
             self._new_driver()
             self.get_logger().info(f"policy {gp('policy_dir')} ({gp('policy_member')}) flies goal {self.goal}; "
                                    f"episodes -> {self.episode_dir}")

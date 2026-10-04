@@ -13,6 +13,7 @@ Flat ground only (box_height 0). The same safety layers as ilc_jump_go1.launch.p
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -37,6 +38,8 @@ ARGS = [
     ("margin", "0.85", "share of each hard limit the TO may use (Go1 validation: 0.85 for flat and 10 cm boxes, 0.9-1.0 for taller)"),
     ("pose_latency", "0.006", "mocap latency, s (MEASURE it: the policy's state estimator dates every frame by it)"),
     ("mocap_offset", "[0.0, 0.0, 0.0]", "the tracked point in the base frame, m"),
+    ("with_bridge", "true", "launch the go1 bridge too (false: hw_session.py keeps one bridge up for the session)"),
+    ("exit_when_done", "false", "exit after max_trials jumps (hw_session.py)"),
     ("policy_dir", "", "the policy folder deploy.py exported (required)"),
     ("policy_member", "policy", "its member"),
     ("episode_dir", "", "where each jump's episode is saved (required)"),
@@ -54,7 +57,7 @@ def generate_launch_description():
         [DeclareLaunchArgument(n, default_value=d, description=h) for n, d, h in ARGS]
         + [
             Node(package="ilc_quad", executable="go1_bridge.py", name="go1_bridge",
-                 output="screen", emulate_tty=True,
+                 output="screen", emulate_tty=True, condition=IfCondition(LaunchConfiguration("with_bridge")),
                  parameters=[{"menagerie_root": root, "rate_hz": 500.0,
                               "sdk_path": LaunchConfiguration("sdk_path"),
                               "power_level": ParameterValue(LaunchConfiguration("power_level"),
@@ -86,6 +89,7 @@ def generate_launch_description():
                      "policy_member": LaunchConfiguration("policy_member"),
                      "episode_dir": LaunchConfiguration("episode_dir"),
                      "episode_tag": LaunchConfiguration("episode_tag"),
+                     "exit_when_done": ParameterValue(LaunchConfiguration("exit_when_done"), value_type=bool),
                      "auto_start": False,
                      "use_sim_time": False,
                  }]),

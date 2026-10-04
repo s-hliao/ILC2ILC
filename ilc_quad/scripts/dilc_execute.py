@@ -1157,7 +1157,9 @@ def rollouts(args):
     """The policy's own jumps on the robot (real rollouts, the paper's fine-tuning setting):
     goals spread over the bank's hull, each labeled from its own A, B like an ILC trial --
     for one policy across every goal, instead of an ILC run per goal."""
-    from multiprocessing import Pool
+    # forkserver, not fork: a worker forked from the threaded parent (the pool's own threads) can deadlock on an
+    # inherited lock, past the per-jump alarm
+    from multiprocessing import get_context
     bank = GoalBank(json.load(open(os.path.join(args.policy, "bank.json"))))
     G = bank.goals
     D = G - G[0]
@@ -1170,7 +1172,7 @@ def rollouts(args):
     jobs = [(args.policy, args.member, g, cname, cond, args.seed + 97 * i,
              args.menagerie_root) for i, g in enumerate(goals)]
     eps, rows = [], []
-    with Pool(min(args.jobs, len(jobs)), maxtasksperchild=8) as pool:
+    with get_context("forkserver").Pool(min(args.jobs, len(jobs)), maxtasksperchild=8) as pool:
         for e, r in pool.imap_unordered(_rollout_one, jobs):
             eps += e
             rows.append(r)
@@ -1220,11 +1222,11 @@ def _dataset_run(job):
 
 
 def dataset(args):
-    from multiprocessing import Pool
+    from multiprocessing import get_context
     jobs = [(r, args.bank, args.menagerie_root) for r in args.runs
             if os.path.exists(os.path.join(r, "meta.json"))]
     eps, names = [], []
-    with Pool(args.jobs) as pool:
+    with get_context("forkserver").Pool(args.jobs) as pool:
         for run_dir, cond, run_eps in pool.imap_unordered(_dataset_run, jobs):
             for ep in run_eps:
                 eps.append(ep)
@@ -1401,7 +1403,7 @@ def summarize(rows, key=("mode",)):
 
 
 def run(args):
-    from multiprocessing import Pool
+    from multiprocessing import get_context
     conds = conditions(args.conds, args.seed)
     modes = ["policy", "ilc_interp", "to"] if args.compare else args.mode.split(",")
     ilc_U = os.path.join(args.policy, "ilc_U.npz")
@@ -1424,7 +1426,7 @@ def run(args):
                                  args.menagerie_root, ilc_U, args.reference_file,
                                  args.save_dir))
     rows = []
-    with Pool(min(args.jobs, len(jobs)), maxtasksperchild=8) as pool:
+    with get_context("forkserver").Pool(min(args.jobs, len(jobs)), maxtasksperchild=8) as pool:
         for r in pool.imap_unordered(_run_one, jobs):
             if r is None:
                 continue
@@ -1533,7 +1535,7 @@ def _ilc_one(job):
 
 
 def ilc_bench(args):
-    from multiprocessing import Pool
+    from multiprocessing import get_context
     os.makedirs(args.out, exist_ok=True)
     conds = conditions(args.conds, args.seed)
     jobs, jid = [], 0
@@ -1546,7 +1548,7 @@ def ilc_bench(args):
                                  start, args.out, args.max_trials, args.menagerie_root, jid,
                                  args.secant_prior))
     rows = []
-    with Pool(min(args.jobs, len(jobs)), maxtasksperchild=8) as pool:
+    with get_context("forkserver").Pool(min(args.jobs, len(jobs)), maxtasksperchild=8) as pool:
         for r in pool.imap_unordered(_ilc_one, jobs):
             rows.append(r)
             pj = r["policy_jump"]

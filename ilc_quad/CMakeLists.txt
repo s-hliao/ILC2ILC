@@ -27,6 +27,7 @@ install(PROGRAMS
   scripts/replay_trials.py
   scripts/dilc_execute.py
   scripts/policy_jump_node.py
+  scripts/hw_session.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

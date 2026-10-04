@@ -1147,12 +1147,15 @@ def group_main(gi, gpu, a, variants, bank, C_sec, C_cl=None):
                     if k < Nc - 1:
                         qS = qS @ Acl[:, :, k + 1]
                     S[:, :, :, k] = qS @ B_[None, :, k]
-                Sf = (S * amask_t[None, None, None]).reshape(M, E, 3, Nc * ad)
+                Sf = torch.nan_to_num(S * amask_t[None, None, None]).reshape(M, E, 3, Nc * ad)
                 e3 = buf.d["e3"][idx[:, 0]]                                 # (E, 3)
                 Mm = Sf @ Sf.transpose(-1, -2)
                 Mm = Mm + V["co_delta"].view(M, 1, 1, 1) * Mm.diagonal(dim1=-2, dim2=-1).sum(-1)[..., None, None] / 3 \
                     * torch.eye(3, device=dev)
-                xg = torch.linalg.solve(Mm, e3[None].expand(M, -1, -1).unsqueeze(-1))
+                # an absolute floor too: a degenerate jump (S = 0, e.g. a DR robot that never left the ground) would
+                # make Mm singular; its step is then 0
+                Mm = Mm + 1e-8 * torch.eye(3, device=dev)
+                xg = torch.linalg.solve(Mm, torch.nan_to_num(e3)[None].expand(M, -1, -1).unsqueeze(-1))
                 stp = (Sf.transpose(-1, -2) @ xg).squeeze(-1).view(M, E, Nc, ad) * V["co_beta"].view(M, 1, 1, 1)
                 rms_g = torch.sqrt((stp ** 2).sum((2, 3), keepdim=True) / amask_t.sum())
                 stp = stp * (V["co_max"].view(M, 1, 1, 1) / rms_g.clamp_min(1e-12)).clamp(max=1.0)
@@ -1520,8 +1523,8 @@ def group_main(gi, gpu, a, variants, bank, C_sec, C_cl=None):
                 fd_hdr = dict(eps_a=cfg["fd_jac"][0], eps_s=cfg["fd_jac"][1]) if cfg["fd_jac"] else None
                 if isinstance(w, GpuWorker):
                     hdr = dict(cmd="batch", jobs=jobs, stochastic=True)
-                if cfg["gpu_explore"]:
-                    hdr["explore"] = list(cfg["gpu_explore"])
+                    if cfg["gpu_explore"]:
+                        hdr["explore"] = list(cfg["gpu_explore"])
                 else:
                     j0 = jobs[0]
                     cond = cfg["rollout_cond"] if cfg["rollout_cond"] != "mix" else \
