@@ -151,8 +151,11 @@ class Reality:
         self.pose_noise = args.pose_noise
         self.joint_noise = args.joint_noise
         bias, spread, self.ff_noise = args.foot_sensor
-        self.ff_bias = self.rng.uniform(0.0, bias, 4) if bias > 0 else np.zeros(4)
-        self.ff_gain = self.rng.uniform(1 - spread, 1 + spread, 4) if spread > 0 else np.ones(4)
+        # the foot sensors' bias and gain are the robot's own: drawn from --sensor-seed when given (the same on every
+        # trial and seed, as on a real robot), else from the trial's seed
+        srng = np.random.default_rng(args.sensor_seed) if getattr(args, "sensor_seed", -1) >= 0 else self.rng
+        self.ff_bias = srng.uniform(0.0, bias, 4) if bias > 0 else np.zeros(4)
+        self.ff_gain = srng.uniform(1 - spread, 1 + spread, 4) if spread > 0 else np.ones(4)
         self.reset()
 
     def reset(self):
@@ -403,6 +406,8 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--foot-sensor", type=float, nargs=3, default=(0.0, 0.0, 0.0),
                    metavar=("BIAS", "GAIN_SPREAD", "NOISE"), help="raw footForce model")
     r.add_argument("--seed", type=int, default=0)
+    r.add_argument("--sensor-seed", type=int, default=-1,
+                   help="draw the foot sensors' bias and gain from this seed (fixed per robot; -1: the trial's seed)")
     ap.add_argument("--qu", type=float, default=1e-4)
     ap.add_argument("--qu3", type=float, default=1e-5, help="Qu in Stage III (0: --qu)")
     ap.add_argument("--qe", type=float, nargs=6, default=(3.0, 3.0, 3.0, 0.01, 0.01, 0.01))

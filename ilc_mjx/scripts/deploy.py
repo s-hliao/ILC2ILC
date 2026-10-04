@@ -51,6 +51,11 @@ ap.add_argument("--anchor-n0", type=float, default=6.0)
 ap.add_argument("--anchor-w", type=float, default=1.0)
 ap.add_argument("--age-decay", type=float, default=0.5)
 ap.add_argument("--steps", type=int, default=1500)
+ap.add_argument("--reg-jac", type=float, default=0.0,
+                help="feedback anchor: weight on the change of the policy's feedback d pi / d (error states) at the anchor "
+                     "and trial states (not decayed): the update moves the actions' offset, not the sim's feedback")
+ap.add_argument("--anchor-pert", action="store_true",
+                help="anchor states also from 16 perturbed stances (sigma_q 0.08), not only the 16 nominal ones")
 ap.add_argument("--lr", type=float, default=1e-4)
 ap.add_argument("--seed", type=int, default=9001)
 ap.add_argument("--eval", default="val", choices=("val", "final", "holdout", "none"))
@@ -125,6 +130,9 @@ mask[Ndc:, :2] = 0.0
 W0 = {k: jnp.asarray(v, jnp.float32) for k, v in np.load(os.path.join(a.policy, a.member + ".npz")).items()
       if k != "n_hidden"}
 actor_mean = jax.jit(jax.vmap(lambda w_, o: JumpEnv.actor(w_, o), (None, 0)))
+# the policy's feedback: d action / d (SRB error, past errors) -- obs = error 6, time 1, goal 2, past errors 18, prev action 4
+FB = np.r_[0:6, 9:27]
+feedback = jax.vmap(lambda w_, o: jax.jacfwd(lambda o_: JumpEnv.actor(w_, o_))(o)[:, FB], (None, 0))
 dpi_fn = jax.jit(jax.vmap(jax.jacfwd(lambda o, w_: JumpEnv.actor(w_, o)), (0, None)))
 srb_maker = None
 if a.grad == "srb" or a.update == "gn":
@@ -432,18 +440,31 @@ def run_robot(robot):
             continue
         lam = a.anchor_w * a.anchor_n0 / (a.anchor_n0 + len(a.goals) * a.reps * (it + 1))
         ga = np.stack([np.linspace(g_lo, g_hi, 16), np.zeros(16)], 1)
-        anc = env.rollout(w, env.references(ga), jax.random.PRNGKey(1000 + it), stochastic=False)
+        if a.anchor_pert:                                # the tube: nominal and perturbed stances
+            ga = np.concatenate([ga, ga])
+            q_a, _ = env.explore_noise(32, np.random.default_rng(5000 + it), 0.08, 0.0)
+            q_a[:16] = 0.0
+            anc = env.rollout(w, env.references(ga), jax.random.PRNGKey(1000 + it), stochastic=False, q_offset=q_a)
+        else:
+            anc = env.rollout(w, env.references(ga), jax.random.PRNGKey(1000 + it), stochastic=False)
         Oa = jnp.asarray(anc["obs"][:, :Nc].reshape(-1, anc["obs"].shape[-1]), jnp.float32)
-        Ma = jnp.asarray(np.tile(mask, (16, 1)), jnp.float32)
+        Ma = jnp.asarray(np.tile(mask, (len(ga), 1)), jnp.float32)
         Aa = actor_mean(w, Oa)
         To = jnp.asarray(np.concatenate([t["obs"] for t in trials]), jnp.float32)
         Tt = jnp.asarray(np.concatenate([t["tgt"] for t in trials]), jnp.float32)
         Tw = jnp.asarray(np.concatenate([np.full(Nc, a.age_decay ** (it - t["it"])) for t in trials]), jnp.float32)
         Tm = jnp.asarray(np.tile(mask, (len(trials), 1)), jnp.float32)
 
+        if a.reg_jac > 0:
+            Of = jnp.concatenate([Oa, To])
+            Mf = jnp.concatenate([Ma, Tm])
+            Kf = feedback(w, Of)                         # the current feedback, held
+
         def loss(w_):
             l_t = ((((actor_mean(w_, To) - Tt) * Tm) ** 2).sum(-1) * Tw).sum() / Tw.sum()
             l_a = (((actor_mean(w_, Oa) - Aa) * Ma) ** 2).sum(-1).mean()
+            if a.reg_jac > 0:
+                l_a = l_a + a.reg_jac / lam * ((((feedback(w_, Of) - Kf) * Mf[..., None]) ** 2).sum((1, 2)).mean())
             return l_t + lam * l_a, (l_t, l_a)
         w_prev = w
         w, (lt, la) = adam_fit(w, loss, a.steps)
@@ -478,7 +499,7 @@ def run_robot(robot):
 allres = [run_robot(r) for r in a.robots]
 if a.eval != "none":
     k = a.eval
-    s = [r[f"{k}_start"] for r in allres]
-    f = [r[f"{k}_final"] for r in allres]
-    print(f"ALL {k}: start {np.mean(s):.2f} -> final {np.mean(f):.2f} ({' '.join(f'{x:.2f}' for x in f)})")
+    s = [np.nan if r[f"{k}_start"] is None else r[f"{k}_start"] for r in allres]     # None: an evaluation that hung
+    f = [np.nan if r[f"{k}_final"] is None else r[f"{k}_final"] for r in allres]
+    print(f"ALL {k}: start {np.nanmean(s):.2f} -> final {np.nanmean(f):.2f} ({' '.join(f'{x:.2f}' for x in f)})")
     json.dump(allres, open(os.path.join(a.out, "summary.json"), "w"), indent=1)

@@ -128,6 +128,10 @@ _rng_real = np.random.default_rng(2026)
 for _i in range(6):
     NAMED[f"real_r{_i}"] = sample_condition(_rng_real)[1]
 del _rng_real, _i
+# the held-out robots with their foot sensors fixed per robot (not redrawn with every seed): the JumpILC fairness check
+for _i in (0, 2, 3):
+    NAMED[f"real_r{_i}f"] = NAMED[f"real_r{_i}"] + f" --sensor-seed {770 + _i}"
+del _i
 
 def conditions(spec: str, seed: int = 0) -> list[tuple[str, str]]:
     """'challenging', 'all', 'dr:N' (N randomized), a comma list of names, or a file of
