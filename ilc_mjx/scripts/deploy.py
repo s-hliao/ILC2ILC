@@ -51,6 +51,9 @@ ap.add_argument("--anchor-n0", type=float, default=6.0)
 ap.add_argument("--anchor-w", type=float, default=1.0)
 ap.add_argument("--age-decay", type=float, default=0.5)
 ap.add_argument("--steps", type=int, default=1500)
+ap.add_argument("--revisit", action="store_true",
+                help="with --train-starts: every other iteration, each goal re-flies the start of its worst jump so far "
+                     "(the hardest starts get repeated ILC steps, the rest stay random)")
 ap.add_argument("--train-starts", type=float, default=0.0, metavar="S",
                 help="container: every hardware jump starts from its own posture, the front and rear leg pairs bent by "
                      "s_f, s_r ~ U(-S, S) x (hip +0.1, knee -0.2) rad (+-1: the test's crouch / tall / nose-up / "
@@ -318,6 +321,7 @@ def run_robot(robot):
         sf = srng.uniform(-a.train_starts, a.train_starts, len(a.goals))
         sr = srng.uniform(-a.train_starts, a.train_starts, len(a.goals))
         starts.append({g: [0.1 * f, -0.2 * f, 0.1 * r, -0.2 * r] for g, f, r in zip(a.goals, sf, sr)})
+    jstart = {g: [] for g in a.goals}            # (J, start) of every jump, per goal (--revisit)
     g_lo, g_hi = min(a.goals) - 0.025, max(a.goals) + 0.025
     trials, best, hist = [], {g: None for g in a.goals}, []
     scale = {g: 1.0 for g in a.goals}
@@ -340,6 +344,10 @@ def run_robot(robot):
         else:
             # a flight that hangs returns no jumps: fly the missing goals again (same seeds, so the same jumps), and
             # abort rather than update without them (a run with skipped jumps is not the method)
+            if a.train_starts > 0 and a.revisit and it % 2 == 1:
+                for g in a.goals:                       # the worst start so far, again
+                    if jstart[g]:
+                        starts[it][g] = max(jstart[g], key=lambda t: t[0])[1]
             todo = list(a.goals)
             for attempt in range(4):
                 if a.train_starts > 0:                  # each goal's jump from its own start
@@ -398,6 +406,8 @@ def run_robot(robot):
             J = float(np.mean(Js))
             hist.extend(dict(it=it, goal=g, J=J_, fell=bool(z_["fell"])) for J_, z_ in zip(Js, zs))
             Jh[g].append(J)
+            if a.train_starts > 0:
+                jstart[g].append((J, list(starts[it][g])))
             if a.stall > 0 and not frozen[g] and len(Jh[g]) > a.stall and min(Jh[g][-a.stall:]) > 0.9 * Jh[g][-a.stall - 1]:
                 frozen[g] = True                                   # no progress: stop stepping this goal
                 trials[:] = [t for t in trials if t["goal"] != g]
