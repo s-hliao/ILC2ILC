@@ -144,6 +144,9 @@ def conditions(spec: str, seed: int = 0) -> list[tuple[str, str]]:
         for line in open(spec):
             if line.strip() and "|" in line:
                 name, _, a = line.strip().partition("|")
+                if a.startswith("="):                   # name|=ROBOT EXTRA: a named robot plus extra arguments
+                    base, _, extra = a[1:].partition(" ")
+                    a = NAMED[base] + " " + extra
                 out.append((name, " ".join(t for t in a.split()
                                            if not t.startswith("--seed")).replace("  ", " ")))
         return out
@@ -1323,6 +1326,15 @@ def _run_one(job):
         raise TimeoutError("jump timed out")
     signal.signal(signal.SIGALRM, _timeout)
     signal.alarm(300)
+    # diagnostics: a jump still running after 240 s dumps every thread's stack (works while stuck in C code too)
+    import faulthandler
+    hang_dir = os.environ.get("DILC_HANG_DIR", "/ilc_ws/log/dilc/runall/hangs")
+    fh = None
+    if os.path.isdir(hang_dir):
+        fh = open(os.path.join(hang_dir, f"hang_{os.getpid()}_{int(time.time())}.txt"), "w")
+        fh.write(f"job: {job[3]} g={job[2]} seed={job[5]} {job[1]}\n")
+        fh.flush()
+        faulthandler.dump_traceback_later(240, exit=False, file=fh)
     try:
         return _run_one_inner(job)
     except Exception as err:
@@ -1331,6 +1343,11 @@ def _run_one(job):
         return None
     finally:
         signal.alarm(0)
+        if fh is not None:
+            faulthandler.cancel_dump_traceback_later()
+            fh.close()
+            if os.path.getsize(fh.name) < 200:      # no dump: the jump finished in time
+                os.remove(fh.name)
 
 
 def _run_one_inner(job):

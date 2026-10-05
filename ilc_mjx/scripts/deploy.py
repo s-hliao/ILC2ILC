@@ -51,6 +51,10 @@ ap.add_argument("--anchor-n0", type=float, default=6.0)
 ap.add_argument("--anchor-w", type=float, default=1.0)
 ap.add_argument("--age-decay", type=float, default=0.5)
 ap.add_argument("--steps", type=int, default=1500)
+ap.add_argument("--train-starts", type=float, default=0.0, metavar="S",
+                help="container: every hardware jump starts from its own posture, the front and rear leg pairs bent by "
+                     "s_f, s_r ~ U(-S, S) x (hip +0.1, knee -0.2) rad (+-1: the test's crouch / tall / nose-up / "
+                     "nose-down); its ILC step linearizes the GPU sim flown from the same start. 0: the nominal stance")
 ap.add_argument("--reg-jac", type=float, default=0.0,
                 help="feedback anchor: weight on the change of the policy's feedback d pi / d (error states) at the anchor "
                      "and trial states (not decayed): the update moves the actions' offset, not the sim's feedback")
@@ -113,6 +117,7 @@ import numpy as np  # noqa: E402
 
 from ilc_mjx import host_path  # noqa: E402
 from ilc_mjx.jump import JumpEnv  # noqa: E402
+from ilc_mjx.robot import PLANAR_TO_CANONICAL  # noqa: E402
 
 WS, CWS = "/home/henry/ilc_ws", "/ilc_ws"
 cpath = lambda p: CWS + os.path.abspath(p)[len(WS):]
@@ -306,6 +311,13 @@ def run_robot(robot):
         logf.flush()
     w = dict(W0)
     rng = np.random.default_rng(a.seed)
+    # --train-starts: each iteration's start per goal, drawn up front (its own stream: the rest is unchanged)
+    srng = np.random.default_rng(a.seed + 7)
+    starts = []
+    for _ in range(a.iters):
+        sf = srng.uniform(-a.train_starts, a.train_starts, len(a.goals))
+        sr = srng.uniform(-a.train_starts, a.train_starts, len(a.goals))
+        starts.append({g: [0.1 * f, -0.2 * f, 0.1 * r, -0.2 * r] for g, f, r in zip(a.goals, sf, sr)})
     g_lo, g_hi = min(a.goals) - 0.025, max(a.goals) + 0.025
     trials, best, hist = [], {g: None for g in a.goals}, []
     scale = {g: 1.0 for g in a.goals}
@@ -326,8 +338,32 @@ def run_robot(robot):
         if a.backend == "manual":
             request_jumps(pdir, robot, it, rdir, out)
         else:
-            fly(pdir, robot, a.goals, a.seed + 101 * it, os.path.join(out, f"it{it}", "real.json"), rdir,
-                episodes=a.reps)
+            # a flight that hangs returns no jumps: fly the missing goals again (same seeds, so the same jumps), and
+            # abort rather than update without them (a run with skipped jumps is not the method)
+            todo = list(a.goals)
+            for attempt in range(4):
+                if a.train_starts > 0:                  # each goal's jump from its own start
+                    for g in todo:
+                        cf = os.path.join(out, f"it{it}", f"start_{g:.4f}.txt")
+                        o = starts[it][g]
+                        open(cf, "w").write(f"{robot}+start|={robot} --param stand_offset:=["
+                                            + ",".join(f"{v:.4f}" for v in o) + "]\n")
+                        fly(pdir, cpath(cf), [g], a.seed + 101 * it, os.path.join(out, f"it{it}", f"real_{g:.4f}.json"),
+                            rdir, episodes=a.reps)
+                else:
+                    fly(pdir, robot, todo, a.seed + 101 * it, os.path.join(out, f"it{it}", "real.json"), rdir,
+                        episodes=a.reps)
+                have = {}
+                for f in sorted(os.listdir(rdir)) if os.path.isdir(rdir) else []:
+                    if f.endswith(".npz") and not f.startswith("ref_"):
+                        g_ = round(float(np.load(os.path.join(rdir, f))["goal"][0]), 4)
+                        have[g_] = have.get(g_, 0) + 1
+                todo = [g for g in a.goals if have.get(round(g, 4), 0) < a.reps]
+                if not todo:
+                    break
+                say(f"   no jumps yet for goals {todo} (attempt {attempt + 1}); flying them again")
+            if todo:
+                raise SystemExit(f"{robot} it {it}: no jumps for goals {todo} after 4 attempts; aborting the run")
         eps = {}
         for f in sorted(os.listdir(rdir)) if os.path.isdir(rdir) else []:
             if not f.endswith(".npz") or f.startswith("ref_"):
@@ -337,7 +373,14 @@ def run_robot(robot):
         An = Bn = None
         if a.grad == "fd" or a.update == "gn":
             goals = np.array([[g, 0.0] for g in a.goals])
+            q_off = None
+            if a.train_starts > 0:                      # the GPU sim flown from each jump's own start
+                q_off = np.zeros((len(a.goals), 12))
+                for gi_, g_ in enumerate(a.goals):
+                    for i_, idx in enumerate(PLANAR_TO_CANONICAL):
+                        q_off[gi_, idx] = starts[it][g_][i_]
             sim = env.rollout(w, env.references(goals), jax.random.PRNGKey(it), stochastic=False, fd=True,
+                              q_offset=q_off,
                               dyn=None if a.jac_dyn is None else env.dyn_arrays(np.tile(a.jac_dyn, (len(goals), 1))))
             An = sim["A"] * D[None, None, None, :] / D[None, None, :, None]
             Bn = sim["B"] / D[None, None, :, None]
@@ -480,12 +523,19 @@ def run_robot(robot):
     if a.eval != "none":
         goals, seed = EVAL[a.eval]
         for tag, pd_ in (("start", os.path.join(out, "it0", "policy")), ("final", os.path.join(out, f"it{a.iters}", "policy"))):
-            rr = fly(pd_, robot, goals, seed, os.path.join(out, f"eval_{a.eval}_{tag}.json"), episodes=a.eval_episodes)
+            for _ in range(3):                           # an evaluation that hung: fly it again
+                rr = fly(pd_, robot, goals, seed, os.path.join(out, f"eval_{a.eval}_{tag}.json"),
+                         episodes=a.eval_episodes)
+                if rr:
+                    break
             res[f"{a.eval}_{tag}"] = float(np.mean([score(r) for r in rr])) if rr else None
             res[f"{a.eval}_{tag}_falls"] = int(sum(r["fell"] for r in rr))
             if a.perturbed:
-                rp = fly(pd_, f"/ilc_ws/log/dilc/final701/rob_{robot}.txt", goals, seed,
-                         os.path.join(out, f"eval_{a.eval}_rob_{tag}.json"), episodes=a.eval_episodes)
+                for _ in range(3):
+                    rp = fly(pd_, f"/ilc_ws/log/dilc/final701/rob_{robot}.txt", goals, seed,
+                             os.path.join(out, f"eval_{a.eval}_rob_{tag}.json"), episodes=a.eval_episodes)
+                    if rp:
+                        break
                 res[f"rob_{tag}"] = float(np.mean([score(r) for r in rp])) if rp else None
                 res[f"rob_{tag}_falls"] = int(sum(r["fell"] for r in rp))
         fm = lambda v: "n/a" if v is None else f"{v:.2f}"

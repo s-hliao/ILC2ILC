@@ -272,6 +272,13 @@ def run(args) -> list[dict]:
             continue
         ros_args += ["-p", f"{name}:={ros_value(value)}"]
 
+    # the controller never exchanges ROS messages here (its callbacks are called directly), so its DDS participant
+    # only has to exist: UDP on loopback, no shared memory (fastdds_lockstep_udp.xml says why). Set before the first
+    # rclpy.init of the process; an explicit FASTRTPS_DEFAULT_PROFILES_FILE is kept.
+    xml = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fastdds_lockstep_udp.xml")
+    if os.path.exists(xml) and "FASTRTPS_DEFAULT_PROFILES_FILE" not in os.environ:
+        os.environ["FASTRTPS_DEFAULT_PROFILES_FILE"] = xml
+        os.environ.pop("ROS_LOCALHOST_ONLY", None)   # Humble's rmw would otherwise pick its own transports
     rclpy.init(args=["ilc_jump_lockstep"] + ros_args)
     node = IlcJumpNode()
     node.lockstep_sim = sim       # instrumentation only (dilc_execute.FDJac); the controller never reads it

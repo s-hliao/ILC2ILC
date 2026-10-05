@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+<!-- ilc_jump_lockstep.py: its controller never exchanges ROS messages (callbacks are called directly), so its DDS
+     participant only has to exist. UDP on loopback, no shared-memory transport: Fast DDS 2.6 (Humble) node creation
+     deadlocks on a /dev/shm port lock (sem.fastrtps_port*_mutex) left held by a killed process, which batch runs with
+     timeouts eventually hit (2-10% of concurrent node creations hung; 0 of 200 with this profile). -->
+  <transport_descriptors>
+    <transport_descriptor>
+      <transport_id>udp_lo</transport_id>
+      <type>UDPv4</type>
+      <interfaceWhiteList>
+        <address>127.0.0.1</address>
+      </interfaceWhiteList>
+    </transport_descriptor>
+  </transport_descriptors>
+  <participant profile_name="udp_lo_participant" is_default_profile="true">
+    <rtps>
+      <userTransports>
+        <transport_id>udp_lo</transport_id>
+      </userTransports>
+      <useBuiltinTransports>false</useBuiltinTransports>
+    </rtps>
+  </participant>
+</profiles>

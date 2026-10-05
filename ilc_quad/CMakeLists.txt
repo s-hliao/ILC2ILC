@@ -30,5 +30,7 @@ install(PROGRAMS
   scripts/hw_session.py
   DESTINATION lib/${PROJECT_NAME}
 )
+# ilc_jump_lockstep.py loads it from next to itself
+install(FILES scripts/fastdds_lockstep_udp.xml DESTINATION lib/${PROJECT_NAME})
 
 ament_package()

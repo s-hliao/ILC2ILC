@@ -6,6 +6,7 @@ from params import F110
 from trajectory_generator import generate_s_curve
 from dynamics import discrete_dynamics_model
 from iLQR import backward, alpha_search
+from trajectory_analysis import plot_trials, save_trials
 
 
 def _get_tire_params(p_car):
@@ -107,6 +108,8 @@ def main():
 
     cost_history = []
     position_error_history = []
+    trials = [cur_trajectory.copy()]           # trial 0: the initial rollout
+    trial_controls = [cur_controls.copy()]
 
     for i in range(epochs):
 
@@ -153,6 +156,8 @@ def main():
         #then update cur_trajectory and cur_control
         cur_controls = new_controls
         cur_trajectory = new_trajectory
+        trials.append(cur_trajectory.copy())
+        trial_controls.append(cur_controls.copy())
 
         position_error = np.mean(
             np.linalg.norm(
@@ -172,6 +177,10 @@ def main():
             f"position error = {position_error:.4f}"
         )
 
+
+    #every trial: saved to ~/ilc_ws/log/f1tenth (re-plot with `python trajectory_analysis.py`) and plotted
+    run = save_trials("ilc", ref_trajectory, trials, trial_controls, dt, costs=cost_history)
+    plot_trials(ref_trajectory, trials, dt, costs=cost_history, out=run.replace(".npz", ".png"))
 
     #plot graphs to see the progress
     plt.figure()

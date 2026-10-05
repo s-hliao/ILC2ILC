@@ -9,7 +9,7 @@ from tf_transformations import euler_from_quaternion
 from trajectory_generator import generate_s_curve
 from dynamics import discrete_dynamics_model
 from iLQR import backward, forward
-from trajectory_analysis import compare_trajectories
+from trajectory_analysis import compare_trajectories, plot_trials, save_trials
 from tqdm import tqdm
 from ackermann_msgs.msg import AckermannDriveStamped, AckermannDrive
 from geometry_msgs.msg import PoseWithCovarianceStamped
@@ -242,6 +242,8 @@ def main():
 
     #initial rollout
     cur_trajectory = rollout(node, cur_controls, initial_state, dt, gear_ratio, pole_pairs, lam, mass, rw)
+    trials = [cur_trajectory.copy()]           # trial 0: the initial rollout
+    trial_controls = [cur_controls.copy()]
 
     for i in tqdm(range(epochs), desc="ILC epochs"):
         #reset initial pose and control
@@ -281,7 +283,11 @@ def main():
         #then update cur_trajectory and cur_control
         cur_controls = new_controls
         cur_trajectory = new_trajectory
+        trials.append(cur_trajectory.copy())
+        trial_controls.append(cur_controls.copy())
 
+    run = save_trials("f1tenth_ilc", ref_trajectory, trials, trial_controls, dt)   # ~/ilc_ws/log/f1tenth
+    plot_trials(ref_trajectory, trials, dt, out=run.replace(".npz", ".png"))
     compare_trajectories(ref_trajectory, cur_trajectory, dt)
     node.destroy_node()
     rclpy.shutdown()
