@@ -81,6 +81,21 @@ ap.add_argument("--stall", type=int, default=0,
                 help="> 0: a goal whose J has not fallen below 0.9 x its J this many trials earlier stops stepping for good: "
                      "its targets roll back to its best trial (a goal the robot cannot reach must not drag its neighbours "
                      "through the shared network)")
+ap.add_argument("--stall-sat", type=float, default=0.0, metavar="BIND",
+                help="gn, with --stall: the stall guard freezes a goal only when motor saturation explains the stall -- "
+                     "over its last --stall trials, the whole correction of the landing error (the Gauss-Newton step "
+                     "at gain 1, uncapped) lost on average at least this share of its predicted effect to the motors' "
+                     "limits (re-solved without the pushes that would ask a leg pair for more torque than it has left, "
+                     "measured from the trial's torques); a goal that "
+                     "stalls with its motors free keeps stepping. 0: any stall freezes (the blind guard). Without a "
+                     "torque record in the jumps nothing counts as saturated")
+ap.add_argument("--sat-project", action="store_true",
+                help="gn: the step is re-solved without its pushes that would ask a leg pair for more torque than it has "
+                     "left (the motors would clip them): the correction goes through the actuators and instants with "
+                     "headroom")
+ap.add_argument("--sat-thr", type=float, default=0.95,
+                help="the log's saturation share: the push's leg-pair steps whose most loaded thigh or calf motor commands "
+                     ">= this fraction of the Go1 datasheet torque-speed envelope at the measured joint speed")
 ap.add_argument("--bold", type=float, default=0.0,
                 help="> 0: a goal whose J rose past (1 + this) x its previous J halves its step scale, else it grows "
                      "x1.25 back to 1 (the ILC's step-size safeguard, with a noise margin)")
@@ -135,6 +150,66 @@ D = np.asarray(bank["sx"], float)
 c = np.asarray(a.stage_w, float)
 mask = np.ones((Nc, 4))
 mask[Ndc:, :2] = 0.0
+A_SCALE = np.asarray(bank["a_scale"], float)              # newtons per normalized action unit: front fx fz, rear fx fz
+# the Go1's datasheet motor envelope (canonical joint order, hip thigh calf per leg): the torque limit up to half the
+# no-load speed, then down linearly to none at it (while motoring) -- what the motors give, known on the real robot
+GO1_TAU = np.tile([23.7, 23.7, 35.55], 4)
+GO1_W = np.tile([30.1, 30.1, 20.06], 4)
+PAIR_J = [PLANAR_TO_CANONICAL[0] + PLANAR_TO_CANONICAL[1], PLANAR_TO_CANONICAL[2] + PLANAR_TO_CANONICAL[3]]
+
+
+def headroom(z):
+    """(Nc, 2): each leg pair's torque headroom over each control step -- 1 - the commanded torque over the envelope
+    at the measured joint speed, of its most loaded thigh or calf motor (the median over the step's motor ticks);
+    1 in swing and without a torque record (an older episode)."""
+    out = np.ones((Nc, 2))
+    if "rec_tau_total" not in z.files:
+        return out
+    t, tau, dq = np.asarray(z["rec_t"], float), np.asarray(z["rec_tau_total"], float), np.asarray(z["rec_dq"], float)
+    drop = np.clip((GO1_W - np.abs(dq)) / (0.5 * GO1_W), 0.0, 1.0)
+    avail = np.where(tau * dq > 0, GO1_TAU * drop, GO1_TAU)
+    ratio = np.abs(tau) / np.maximum(avail, 1e-3)
+    k = np.floor(t / env.dt + 1e-6).astype(int)
+    for kk in range(Nc):
+        sel = k == kk
+        if sel.any():
+            for p in range(2):
+                out[kk, p] = 1.0 - np.median(ratio[sel][:, PAIR_J[p]].max(1))
+    out[mask[:, ::2] == 0] = 1.0
+    return np.clip(out, 0.0, 1.0)
+
+
+def gn_step(S, e3, off=None, beta=None):
+    """-step of the Gauss-Newton ILC (flattened, normalized actions), the columns `off` held."""
+    if off is not None:
+        S = np.where(off[None, :], 0.0, S)
+    M_ = S @ S.T
+    return (a.gn_beta if beta is None else beta) * (S.T @ np.linalg.solve(M_ + a.gn_delta * np.trace(M_) / 3 * np.eye(3), e3))
+
+
+def sat_step(S, e3, stp, H, U, beta=None):
+    """The GN step (gain beta) re-solved without its pushes that would ask a leg pair for more torque than it has
+    left: a force change along the pair's flown force, relative to it, above the pair's headroom H at that step (an
+    active set, held entries at their flown value, a few passes); and the share of the step's predicted landing
+    correction this loses (0: the motors' limits cost nothing)."""
+    off = np.zeros(Nc * 4, bool)
+    free = stp
+    for _ in range(6):
+        du = -free.reshape(Nc, 4) * A_SCALE
+        viol = np.zeros((Nc, 4), bool)
+        for p in range(2):
+            up = U[:, 2 * p:2 * p + 2]
+            rel = (du[:, 2 * p:2 * p + 2] * up).sum(1) / np.maximum((up ** 2).sum(1), 1.0)
+            viol[:, 2 * p:2 * p + 2] = (rel > H[:, p])[:, None]
+        new = off | (viol.ravel() & (mask.ravel() > 0))
+        if (new == off).all():
+            break
+        off = new
+        free = gn_step(S, e3, off, beta)
+    lost = 1.0 - np.linalg.norm(S @ free) / max(np.linalg.norm(S @ stp), 1e-12)
+    return free, float(np.clip(lost, 0.0, 1.0)), int(off.sum())
+
+
 W0 = {k: jnp.asarray(v, jnp.float32) for k, v in np.load(os.path.join(a.policy, a.member + ".npz")).items()
       if k != "n_hidden"}
 actor_mean = jax.jit(jax.vmap(lambda w_, o: JumpEnv.actor(w_, o), (None, 0)))
@@ -329,7 +404,8 @@ def run_robot(robot):
     prev = {g: None for g in a.goals}        # (e3, commanded step, J) of the goal's previous trial
     frozen = {g: False for g in a.goals}
     Jh = {g: [] for g in a.goals}
-    mom = {g: None for g in a.goals}
+    Bh = {g: [] for g in a.goals}            # saturation bind of each GN step, per goal (--stall-sat)
+    mom ={g: None for g in a.goals}
     for it in range(a.iters + 1):
         pdir = os.path.join(out, f"it{it}", "policy")
         export(w, pdir)
@@ -408,7 +484,16 @@ def run_robot(robot):
             Jh[g].append(J)
             if a.train_starts > 0:
                 jstart[g].append((J, list(starts[it][g])))
-            if a.stall > 0 and not frozen[g] and len(Jh[g]) > a.stall and min(Jh[g][-a.stall:]) > 0.9 * Jh[g][-a.stall - 1]:
+            stalled = a.stall > 0 and not frozen[g] and len(Jh[g]) > a.stall \
+                and min(Jh[g][-a.stall:]) > 0.9 * Jh[g][-a.stall - 1]
+            sat_note = ""
+            if stalled and a.stall_sat > 0:                        # freeze only if the motors explain the stall
+                bw = Bh[g][-a.stall:]
+                sat_bound = len(bw) == a.stall and float(np.mean(bw)) >= a.stall_sat
+                sat_note = f" (stalled, saturation bind {np.mean(bw) if bw else 0:.2f}" \
+                           + (": saturation-bound)" if sat_bound else ": motors free, steps on)")
+                stalled = sat_bound
+            if stalled:
                 frozen[g] = True                                   # no progress: stop stepping this goal
                 trials[:] = [t for t in trials if t["goal"] != g]
             if frozen[g]:
@@ -417,7 +502,7 @@ def run_robot(robot):
                 for t in trials:                                   # the hold keeps full weight
                     if t["goal"] == g:
                         t["it"] = it
-                line.append(f"g{g:.3f} J {J:.2f} FROZEN (held at its best)")
+                line.append(f"g{g:.3f} J {J:.2f} FROZEN (held at its best){sat_note}")
                 continue
             runaway = bool(a.rollback) and best[g] is not None and J > a.rollback[0] * best[g][0] \
                 and J > best[g][0] + a.rollback[1]
@@ -459,8 +544,21 @@ def run_robot(robot):
                     S = S + sec[g]
                 if a.jac_flip:
                     S = -S
-                M_ = S @ S.T
-                stp = a.gn_beta * (S.T @ np.linalg.solve(M_ + a.gn_delta * np.trace(M_) / 3 * np.eye(3), e3))
+                stp = gn_step(S, e3)
+                sat_txt = ""
+                if a.sat_project or a.stall_sat > 0:
+                    Hm = np.min([headroom(z_) for z_ in zs], 0)
+                    Uf = np.mean([np.asarray(z_["U"], float)[:Nc] for z_ in zs], 0)
+                    free, _, n_off = sat_step(S, e3, stp, Hm, Uf)
+                    # the bind: of the WHOLE correction (gain 1, uncapped) -- can the motors remove this error at all?
+                    _, bind, _ = sat_step(S, e3, gn_step(S, e3, beta=1.0), Hm, Uf, beta=1.0)
+                    satf = float(((Hm < 1 - a.sat_thr) & (mask[:, ::2] > 0)).sum() / mask[:, ::2].sum())
+                    Bh[g].append(bind)
+                    for h_ in hist[-len(zs):]:
+                        h_.update(sat=satf, bind=bind)
+                    if a.sat_project:
+                        stp = free
+                    sat_txt = f", sat {100 * satf:.0f}% bind {bind:.2f} held {n_off}"
                 step = stp.reshape(Nc, 4) * scale[g]
                 rms = np.sqrt((step ** 2).sum() / mask.sum())
                 step *= min(1.0, a.step_rms / max(rms, 1e-12))
@@ -472,7 +570,7 @@ def run_robot(robot):
                                        tgt=np.clip((own(z_) - step) * mask, -0.999, 0.999)))
                 prev[g] = (e3.copy(), -step.copy(), J)                     # the change commanded: -step
                 line.append(f"g{g:.3f} J {J:.2f} e {e3[0] * 100:+.1f}/{e3[1] * 100:+.1f}cm {np.degrees(e3[2]):+.1f}deg "
-                            f"(gn rms {min(rms, a.step_rms):.3f}, scale {scale[g]:.2f})")
+                            f"(gn rms {min(rms, a.step_rms):.3f}, scale {scale[g]:.2f}{sat_txt}){sat_note}")
                 continue
             G = gradient(z, w, gi, An, Bn, g)
             d = G / max(np.linalg.norm(G), 1e-12)
