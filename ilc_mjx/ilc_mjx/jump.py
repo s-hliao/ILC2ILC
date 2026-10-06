@@ -12,6 +12,14 @@ controller (dilc_execute.Driver + ilc_jump_sim._tick_jump), synchronous and nomi
   landing   a joint PD to the home pose (Nguyen et al.'s; the controller's landing_controller:=pd);
             a jump that tilts past max_tilt (or sinks: only the feet collide) fell
 
+Box banks (plans whose config has a box: jumps onto a box, Nguyen et al.'s (x, z) targets): the model carries
+QuadModel's static box geom, and every jump has its own -- the plans' boxes (front face x_front ahead of the
+standing CoM, height) interpolated with the plans, set into the model's geom_pos / geom_size at every tick; the
+thigh and calf capsules and the trunk meet the box too (not the floor), as on the CPU robots. A bank
+may mix flat plans and box plans (one network for both): a flat plan is a box of height 0 (front face at
+FLAT_X_FRONT before its goal), and a jump whose interpolated box is under BOX_MIN high has none (the geom moved
+under the floor).
+
 The SRB state is the true one, from the planar model: [CoM x, z (shifted to start on the plan), pitch, and
 their rates]. With fd=True each contact sample also flies, alongside the jump, ten copies of it to the next
 sample -- one per action channel moved by eps_a, one per SRB coordinate moved by eps_s x sx (the joints and
@@ -34,6 +42,8 @@ from .planar import Planar
 from .robot import HIP_IDX, PLANAR_TO_CANONICAL, expand
 
 TICK = 0.002
+FLAT_X_FRONT = 0.25        # a flat plan in a mixed bank: a box of height 0, front face this far before its goal
+BOX_MIN = 0.005            # an interpolated box lower than this is none (dilc_execute.GoalBank.reference: the same)
 
 
 @dataclass
@@ -77,12 +87,18 @@ class JumpEnv:
         self.mjx = mjx
         self.cfg = cfg = cfg or Config()
         self.bank = bank
-        self.qm = qm = quad_model(bank.get("robot", "go1"))
+        self.has_box = any(p.get("box") is not None for p in bank["plans"])
+        self.boxes = [p.get("box") or dict(x_front=p["goal"][0] - FLAT_X_FRONT, height=0.0) for p in bank["plans"]]
+        self.BOX_L, self.BOX_W = 1.0, 1.0                       # QuadModel's box defaults (the CPU robots')
+        # the model's own box: the tallest, far ahead (the stand-up never meets it; each jump sets its own)
+        self.qm = qm = quad_model(bank.get("robot", "go1"),
+                                  box=dict(x_front=5.0, height=max(b["height"] for b in self.boxes))
+                                  if self.has_box else None)
         from ilc_quad.ilc_gen import PlanarQuadModel
         self.fb = fb = PlanarQuadModel(qm)
         self.pl = Planar(fb)
         self.m, self.mx = mjx_model(qm, feet_only_contacts=True, iterations=cfg.solver_iters,
-                                    ls_iterations=cfg.ls_iters)
+                                    ls_iterations=cfg.ls_iters, legs_hit_box=self.has_box)
         refs = [dict(np.load(host_path(p["path"]))) for p in bank["plans"]]
         c0 = json.loads(str(refs[0]["config"]))
         self.Ndc, self.Nsc, self.Nfl = c0["phases"]
@@ -94,6 +110,10 @@ class JumpEnv:
         self.plans = {k: f32(np.stack([r[src] for r in refs]))
                       for k, src in (("x_ref", "x_ref"), ("u_ref", "u_ref"), ("q_ref", "info_q_ref"),
                                      ("qd_ref", "info_qd_ref"), ("tau", "info_tau"), ("s", "info_s"))}
+        if self.has_box:                                         # per plan its box: front face x, height
+            import mujoco
+            self.box_geom = mujoco.mj_name2id(qm.model, mujoco.mjtObj.mjOBJ_GEOM, "box")
+            self.plans["box_xh"] = f32([[b["x_front"], b["height"]] for b in self.boxes])
         self.sx, self.a_scale = f32(bank["sx"]), f32(bank["a_scale"])
         self.g_center, self.g_scale = f32(bank["g_center"]), f32(bank["g_scale"])
         self.H, self.PA = int(bank.get("hist", 0)), bool(bank.get("prev_action", False))
@@ -196,15 +216,28 @@ class JumpEnv:
         tau_ff = jnp.clip(tau_to, -self.lim, self.lim)
         return q_des, dq_des, kp, kd, tau_ff
 
-    def _step(self, dx, cmd, p=None):
-        """One tick; p: this jump's dynamics (domain randomization, from sample_dyn), None for nominal."""
+    def _model(self, r=None):
+        """The device model for one jump: with a box bank, its own box (r: the jump's reference) moved in."""
+        if not self.has_box or r is None:
+            return self.mx
+        xf, h = r["box_xh"][0], r["box_xh"][1]
+        hh = jnp.maximum(h, BOX_MIN) / 2
+        pos = jnp.stack([xf + self.BOX_L / 2, 0.0, jnp.where(h >= BOX_MIN, hh, -1.0)])     # none: under the floor
+        size = jnp.stack([jnp.float32(self.BOX_L / 2), jnp.float32(self.BOX_W / 2), hh])
+        return self.mx.replace(geom_pos=self.mx.geom_pos.at[self.box_geom].set(pos),
+                               geom_size=self.mx.geom_size.at[self.box_geom].set(size))
+
+    def _step(self, dx, cmd, p=None, r=None):
+        """One tick; p: this jump's dynamics (domain randomization, from sample_dyn), None for nominal; r: the
+        jump's reference (its box, with a box bank)."""
         q_des, dq_des, kp, kd, tau_ff = cmd
         q, dq = dx.qpos[self.qadr], dx.qvel[self.vadr]
         tau = kp * (q_des - q) + kd * (dq_des - dq) + tau_ff
+        mx = self._model(r)
         if p is None:
             tau = jnp.clip(tau, -self.lim, self.lim)
             dx = dx.replace(ctrl=dx.ctrl.at[self.act].set(tau))
-            return self.mjx.step(self.mx, dx)
+            return self.mjx.step(mx, dx)
         # the reality model's motors (ilc_jump_lockstep.Reality.motor_torque): scaled limits, and the
         # torque-speed envelope while motoring (full torque to half the no-load speed, none at it)
         lim = self.lim * p["motor_scale"]
@@ -213,13 +246,13 @@ class JumpEnv:
         lim = jnp.where((p["curve"] > 0.5) & (tau * dq > 0), lim * drop, lim)
         tau = jnp.clip(tau, -lim, lim)
         dx = dx.replace(ctrl=dx.ctrl.at[self.act].set(tau))
-        mx = self.mx.replace(body_mass=p["body_mass"], body_inertia=p["body_inertia"], body_ipos=p["body_ipos"],
-                             geom_friction=p["geom_friction"], dof_frictionloss=p["dof_frictionloss"])
+        mx = mx.replace(body_mass=p["body_mass"], body_inertia=p["body_inertia"], body_ipos=p["body_ipos"],
+                        geom_friction=p["geom_friction"], dof_frictionloss=p["dof_frictionloss"])
         return self.mjx.step(mx, dx)
 
     def _fly_sample(self, dx, k, u, ref, contact, p=None):
         def tick(dx, i):
-            return self._step(dx, self._command(dx, k, i, u, ref, contact), p), None
+            return self._step(dx, self._command(dx, k, i, u, ref, contact), p, ref), None
         return jax.lax.scan(tick, dx, jnp.arange(self.tps))[0]
 
     # -- domain randomization (baselines only: our method trains on the nominal dynamics) ----------
@@ -466,7 +499,7 @@ class JumpEnv:
         B = qpos.shape[0]
         dx = jax.tree_util.tree_map(lambda x: jnp.broadcast_to(x, (B,) + x.shape), tmpl)
         dx = dx.replace(qpos=qpos, qvel=qvel)
-        dx = jax.vmap(lambda d: self.mjx.forward(self.mx, d))(dx)
+        dx = jax.vmap(lambda d, r: self.mjx.forward(self._model(r), d))(dx, ref)
         da = jnp.concatenate([jnp.zeros((1, 4)), self.cfg.eps_a * jnp.eye(4), jnp.zeros((6, 4))])
 
         def one(d, k, a, r):
@@ -571,7 +604,7 @@ class JumpEnv:
 
         def land_tick(carry, _):
             dx, fell = carry
-            dx = jax.vmap(lambda d, p: self._step(d, cmd, p))(dx, dyn)
+            dx = jax.vmap(lambda d, p, r: self._step(d, cmd, p, r))(dx, dyn, ref)
             quat = dx.qpos[:, 3:7]
             tilt = jnp.arccos(jnp.clip(1.0 - 2.0 * (quat[:, 1] ** 2 + quat[:, 2] ** 2), -1.0, 1.0))
             fell = fell | (tilt > self.cfg.max_tilt) | (dx.qpos[:, 2] < self.cfg.min_height)

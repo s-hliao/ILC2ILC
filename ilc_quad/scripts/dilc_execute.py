@@ -190,9 +190,15 @@ class GoalBank:
             c = json.loads(str(r["config"]))
             if c["phases"] != c0["phases"] or c["dt"] != c0["dt"]:
                 raise ValueError("every plan in the bank needs the same phases and dt")
-        self.boxes = [p.get("box") for p in self.plans]
-        if any(b is None for b in self.boxes) and not all(b is None for b in self.boxes):
-            raise ValueError("the bank mixes flat and box plans")
+        # a bank may mix flat and box plans: a flat plan is a box of height 0 (ilc_mjx.jump.FLAT_X_FRONT), and an
+        # interpolated box lower than BOX_MIN is none
+        self.has_box = any(p.get("box") is not None for p in self.plans)
+        self.boxes = [p.get("box") or dict(x_front=p["goal"][0] - 0.25, height=0.0) for p in self.plans]
+        # an interpolated reference's settings: a box plan's for a jump onto a box (the node's box TO settings,
+        # box_clearance / box_setback, are part of its task), a flat plan's for a flat jump
+        cfgs = [json.loads(str(r["config"])) for r in self.refs]
+        self.box_config = next((c for c in cfgs if c.get("box") is not None), self.base_config)
+        self.flat_config = next((c for c in cfgs if c.get("box") is None), self.base_config)
         self.sx = np.asarray(bank["sx"], float)
         self.a_scale = np.asarray(bank["a_scale"], float)
         self.g_center = np.asarray(bank["g_center"], float)
@@ -269,8 +275,10 @@ class GoalBank:
             return J
         w, _ = self.weights(g)
         tri = [i for i in range(K) if abs(w[i]) > 1e-12][:3]
-        if len(tri) < 3:                   # on an edge or a vertex: any triangle holding it
-            tri = sorted(set(tri) | set(range(K)))[:3]
+        if len(tri) < 3:                   # on an edge or a vertex: the widest non-degenerate triangle holding it
+            import itertools
+            area = lambda t: abs(np.linalg.det(np.column_stack([G[t[1]] - G[t[0]], G[t[2]] - G[t[0]]])))
+            tri = list(max((t for t in itertools.combinations(range(K), 3) if set(tri) <= set(t)), key=area))
         P = G[tri]
         Minv = np.linalg.inv(np.column_stack([P[1] - P[0], P[2] - P[0]]))
         J[tri[1]], J[tri[2]] = Minv[0], Minv[1]
@@ -343,10 +351,12 @@ class GoalBank:
             else:
                 out[key] = vals[0]
         box = None
-        if self.boxes[0] is not None:
+        if self.has_box:
             box = {k: float(sum(wi * b[k] for wi, b in zip(w, self.boxes)))
                    for k in ("x_front", "height")}
-        cfg = dict(self.base_config, jump=[float(v) for v in g], box=box)
+            if box["height"] < 0.005:                   # BOX_MIN: none
+                box = None
+        cfg = dict(self.box_config if box is not None else self.flat_config, jump=[float(v) for v in g], box=box)
         out["config"] = json.dumps(cfg)
         return out, box, extrap
 
@@ -1339,7 +1349,8 @@ def _run_one(job):
         return _run_one_inner(job)
     except Exception as err:
         g = job[2]
-        print(f"jump failed ({job[3]}, g={g[0]:.3f}, {job[1]}): {err!r}", file=sys.stderr)
+        import traceback
+        print(f"jump failed ({job[3]}, g={g[0]:.3f}, {job[1]}): {err!r}\n{traceback.format_exc()}", file=sys.stderr)
         return None
     finally:
         signal.alarm(0)
@@ -1486,7 +1497,7 @@ def landing_score(logX, x_ref, g, fell, qe, r_scale, reward_scale=0.01, fall_pen
 def _ilc_one(job):
     import glob
     import subprocess
-    (policy_dir, member, g, cname, cond, seed, start, out, max_trials, root, jid, sec_prior) = job
+    (policy_dir, member, g, cname, cond, seed, start, out, max_trials, root, jid, sec_prior, transfer, node_params) = job
     os.environ["ROS_DOMAIN_ID"] = str(1 + jid % 98)
     bank, actor, _, _ = load_policy(policy_dir, member) if start == "policy" else \
         (GoalBank(json.load(open(os.path.join(policy_dir, "bank.json")))), None, None, None)
@@ -1497,6 +1508,15 @@ def _ilc_one(job):
     np.savez(ref_path, **ref)
     cfg = json.loads(str(ref["config"]))
     extra, pre = [], None
+    if start == "paper":
+        # Nguyen et al.'s curriculum: this robot's learned trial of an easy task (transfer: robot -> trial file),
+        # its reference and forces flown aimed at this goal, Stage III only (JumpILC.from_trial)
+        extra = ["--param", f"transfer_from:={transfer[cname]}", "--param", "transfer_mode:=paper"]
+    if start == "retarget":
+        # the same warm start on this goal's own reference (its legs clear a box the easy task's would hit): its
+        # TO forces plus the correction the robot learned on the easy task (JumpILC.transfer_from), Stage III only
+        extra = ["--param", f"transfer_from:={transfer[cname]}", "--param", "transfer_mode:=retarget",
+                 "--param", "n_stage1:=0", "--param", "n_stage2:=0"]
     if start in ("interp", "policy", "nearest"):
         if start == "nearest":
             # the nearest ILC'd goal's converged forces, its correction on top of its plan
@@ -1528,6 +1548,7 @@ def _ilc_one(job):
             "--jump", str(g[0]), str(g[1]), "--reference-file", ref_path,
             "--param", "phases:=[" + ",".join(str(int(v)) for v in cfg["phases"]) + "]",
             "--param", f"margin:={cfg['margin']}", *extra,
+            *[x for p_ in node_params for x in ("--param", p_)],
             *shlex.split(strip_seed(cond)), "--seed", str(seed),
             "--log-dir", out, "--run-name", name,
             "--summary", os.path.join(out, name + ".json")]
@@ -1567,7 +1588,9 @@ def ilc_bench(args):
                     jid += 1
                     jobs.append((args.policy, args.member, np.array(g, float), cname, cond, seed,
                                  start, args.out, args.max_trials, args.menagerie_root, jid,
-                                 args.secant_prior))
+                                 args.secant_prior,
+                                 json.load(open(args.transfer)) if args.transfer else None,
+                                 args.node_param))
     rows = []
     with get_context("forkserver").Pool(min(args.jobs, len(jobs)), maxtasksperchild=8) as pool:
         for r in pool.imap_unordered(_ilc_one, jobs):
@@ -1643,7 +1666,11 @@ def main():
     b.add_argument("--episodes", type=int, default=1)
     b.add_argument("--seed", type=int, default=11)
     b.add_argument("--start", default="scratch",
-                   help="scratch | nearest | interp | policy (comma list)")
+                   help="scratch | nearest | interp | policy | paper | retarget (comma list)")
+    b.add_argument("--node-param", action="append", default=[],
+                   help="a controller parameter for every run, NAME:=VALUE (repeatable), e.g. ilc_gain:=1.0")
+    b.add_argument("--transfer", default="",
+                   help="paper: json {robot condition name: a learned trial file of an easy task on it}")
     b.add_argument("--max-trials", type=int, default=20)
     b.add_argument("--secant-prior", default="",
                    help="npz with C: Stage III plans with G_N + C (fixed, fitted offline)")

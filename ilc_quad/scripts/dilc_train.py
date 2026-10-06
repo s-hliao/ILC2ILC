@@ -1481,11 +1481,23 @@ def group_main(gi, gpu, a, variants, bank, C_sec, C_cl=None):
     Dg = G - G[0]
     collinear = np.linalg.matrix_rank(Dg, tol=1e-6) <= 1
 
+    # bank["goal_regions"] (lists of plan names): goals come from one region at a time, uniformly over the regions --
+    # a mixed flat + box bank: the flat line, and the box region (boxes ahead of the stance feet); not the whole hull
+    regions = [np.array([p["goal"] for p in bank["plans"] if p["name"] in names], float)
+               for names in bank.get("goal_regions", [])]
+
     def sample_goal():
         if cfg["rollout_goals"]:               # only these goals on the robot (few real goals)
             return np.array([cfg["rollout_goals"][rng.integers(len(cfg["rollout_goals"]))], 0.0])
         if rng.random() < cfg["p_bank_goal"]:
             return G[rng.integers(len(G))]
+        if regions:
+            R = regions[rng.integers(len(regions))]
+            if np.linalg.matrix_rank(R - R[0], tol=1e-6) <= 1:              # a line: uniform along it
+                d = R[np.argmax(np.linalg.norm(R - R[0], axis=1))] - R[0]
+                t = (R - R[0]) @ d / (d @ d)
+                return R[0] + (t.min() + rng.random() * (t.max() - t.min())) * d
+            return rng.dirichlet(np.ones(len(R))) @ R
         if collinear:
             sproj = Dg @ Dg[np.argmax(np.linalg.norm(Dg, axis=1))]
             lo, hi = G[np.argmin(sproj)], G[np.argmax(sproj)]

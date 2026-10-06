@@ -35,7 +35,8 @@ ap.add_argument("--policy", required=True)
 ap.add_argument("--member", required=True)
 ap.add_argument("--robots", nargs="+", required=True)
 ap.add_argument("--out", required=True)
-ap.add_argument("--goals", type=float, nargs="+", default=[0.425, 0.5, 0.575])
+ap.add_argument("--goals", nargs="+", default=["0.425", "0.5", "0.575"],
+                help="training goals: X (a flat jump, m) or X,H (onto a box H m high, X m ahead: a box bank)")
 ap.add_argument("--iters", type=int, default=10)
 ap.add_argument("--grad", default="fd", choices=("fd", "srb"))
 ap.add_argument("--step-rms", type=float, default=0.05)
@@ -65,7 +66,7 @@ ap.add_argument("--anchor-pert", action="store_true",
                 help="anchor states also from 16 perturbed stances (sigma_q 0.08), not only the 16 nominal ones")
 ap.add_argument("--lr", type=float, default=1e-4)
 ap.add_argument("--seed", type=int, default=9001)
-ap.add_argument("--eval", default="val", choices=("val", "final", "holdout", "none"))
+ap.add_argument("--eval", default="val", choices=("val", "final", "holdout", "boxval", "boxfinal", "comboval", "combofinal", "none"))
 ap.add_argument("--perturbed", action="store_true")
 ap.add_argument("--target-base", default="flown", choices=("flown", "own"),
                 help="the step starts from the action the robot flew (after the controller's clipping: stays "
@@ -126,6 +127,8 @@ ap.add_argument("--jac-dyn", type=float, nargs=8, default=None, metavar="P",
 ap.add_argument("--jac-flip", action="store_true", help="gn: the landing sensitivity negated (the 180-degree control)")
 ap.add_argument("--gpu", default="1")
 a = ap.parse_args()
+# goals are (x, h) pairs: h = 0 a flat jump, h > 0 onto a box h high (a box bank)
+a.goals = [tuple(float(v) for v in (g.split(",") + ["0"])[:2]) for g in a.goals]
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", a.gpu)
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 
@@ -140,7 +143,19 @@ from ilc_mjx.robot import PLANAR_TO_CANONICAL  # noqa: E402
 WS, CWS = "/home/henry/ilc_ws", "/ilc_ws"
 cpath = lambda p: CWS + os.path.abspath(p)[len(WS):]
 EVAL = dict(val=([0.45, 0.4625, 0.5375, 0.55], 301), final=([0.4375, 0.4875, 0.5125, 0.5625], 701),
-            holdout=([0.4375, 0.4625, 0.4875, 0.5125, 0.5375, 0.5625], 1301))   # holdout: the frozen final test only
+            holdout=([0.4375, 0.4625, 0.4875, 0.5125, 0.5375, 0.5625], 1301),   # holdout: the frozen final test only
+            # box banks (plans (0.50, 0.10) (0.50, 0.15) (0.50, 0.20) (0.55, 0.10) (0.60, 0.10)): goals inside
+            # their triangle, none of them a plan's or a training goal
+            boxval=([(0.53, 0.11), (0.51, 0.13), (0.56, 0.12), (0.52, 0.16)], 301),
+            boxfinal=([(0.52, 0.12), (0.54, 0.14), (0.57, 0.11), (0.51, 0.17)], 701),
+            # mixed flat + box banks: both reserved tests at once (8 goals)
+            comboval=([0.45, 0.4625, 0.5375, 0.55, (0.53, 0.11), (0.51, 0.13), (0.56, 0.12), (0.52, 0.16)], 301),
+            combofinal=([0.4375, 0.4875, 0.5125, 0.5625, (0.52, 0.12), (0.54, 0.14), (0.57, 0.11), (0.51, 0.17)], 701))
+EVAL = {k: ([tuple(g) if isinstance(g, tuple) else (float(g), 0.0) for g in v[0]], v[1]) for k, v in EVAL.items()}
+gvec = lambda g: np.array(g, float)                                  # goal -> (x, h)
+gkey = lambda v: (round(float(v[0]), 4), round(float(v[1]), 4))     # a goal or an episode's goal -> dict key
+gname = lambda g: f"{g[0]:.3f}" + (f",{g[1]:.3f}" if g[1] else "")  # for the log
+gfile = lambda g: f"{g[0]:.4f}" + (f"_{g[1]:.4f}" if g[1] else "")  # for file names (flat: as before)
 
 bank = json.load(open(os.path.join(a.policy, "bank.json")))
 env = JumpEnv(bank)
@@ -237,7 +252,7 @@ def export(w, d):
 
 def fly(pdir, conds, jumps, seed, json_out, save_dir="", episodes=1):
     """dilc_execute.py run on the robot (the container's CPU async sim)."""
-    j = " ".join(f"--jump {g} 0" for g in jumps)
+    j = " ".join(f"--jump {g[0]} {g[1]}" for g in jumps)
     sd = f"--save-dir {cpath(save_dir)}" if save_dir else ""
     cmd = (f"cd /ilc_ws && source install/setup.bash && export ROS_LOCALHOST_ONLY=1 OMP_NUM_THREADS=1 && "
            f"python3 install/ilc_quad/lib/ilc_quad/dilc_execute.py run --policy {cpath(pdir)} --member policy "
@@ -276,8 +291,8 @@ def gradient(z, w, gi, An, Bn, g):
     """d J / d a_k of one real trial (J its discounted stage cost, 0.01 x), normalized action units."""
     obs = np.asarray(z["obs"], float)
     if a.grad == "srb":
-        rf = srb_maker.bank.reference(np.array([g, 0.0]))[0]
-        lab = srb_maker.ilc_labels(rf, np.asarray(z["U"], float), np.asarray(z["logX"], float), np.array([g, 0.0]), rf)
+        rf = srb_maker.bank.reference(gvec(g))[0]
+        lab = srb_maker.ilc_labels(rf, np.asarray(z["U"], float), np.asarray(z["logX"], float), gvec(g), rf)
         return 0.01 * np.einsum("ksa,s->ka", lab["mca_cl"], c) * (gamma ** np.arange(Nc))[:, None] * mask
     K = np.asarray(dpi_fn(jnp.asarray(obs[:Nc], jnp.float32), w))[..., :6]        # at the REAL states
     gk = 0.01 * np.einsum("ksi,s->ki", np.asarray(z["gn"], float), c)               # measured cost gradients
@@ -312,10 +327,32 @@ def landing_sensitivity(z, w, gi, An, Bn):
 GATE = a.gate if a.gate is not None else ([0, 1.5, 0.3] if a.backend == "manual" else None)
 
 
+def anchor_goals(n=16, rng_seed=0):
+    """n goals spanning the training goals (flat: a line 2.5 cm past both ends; box goals: their hull, by fixed
+    Dirichlet weights, the training goals themselves among them; both, a mixed bank: half on the flat goals' line,
+    half over the box goals and the flat goals no shorter than the shortest box goal -- not the whole hull, whose
+    short jumps onto a box would put it under the standing feet)."""
+    G = np.array(a.goals, float)
+    rng = np.random.default_rng(1234 + rng_seed)
+
+    def line(F, m):
+        return np.stack([np.linspace(F[:, 0].min() - 0.025, F[:, 0].max() + 0.025, m), np.full(m, F[0, 1])], 1)
+
+    def hull(B, m):
+        return np.concatenate([B, rng.dirichlet(np.ones(len(B)), max(m - len(B), 0)) @ B])[:m]
+    if np.ptp(G[:, 1]) < 1e-9:
+        return line(G, n)
+    Gf, Gb = G[G[:, 1] < 1e-9], G[G[:, 1] >= 1e-9]
+    if not len(Gf):
+        return hull(Gb, n)
+    Bx = np.concatenate([Gb, Gf[Gf[:, 0] >= Gb[:, 0].min() - 1e-9]])
+    return np.concatenate([line(Gf, n // 2), hull(Bx, n - n // 2)])
+
+
 def gate(w_old, w_new, O_real, g_lo, g_hi, it):
     """The safety gate (--gate): the update in the nominal GPU sim against the current policy, and how far it moves
     the actions on the robot's own states."""
-    goals = np.stack([np.linspace(g_lo, g_hi, 16), np.zeros(16)], 1)
+    goals = anchor_goals()
     ref = env.references(np.concatenate([goals, goals]))
     q_off, _ = env.explore_noise(32, np.random.default_rng(777 + it), 0.08, 0.0)
     q_off[:16] = 0.0                                     # 16 nominal stances, 16 perturbed ones
@@ -342,15 +379,15 @@ def request_jumps(pdir, robot, it, rdir, out):
     """--backend manual: the jumps this iteration needs, written for the operator (REQUEST.md), then wait for their
     episodes (policy_jump_node.py writes them) in rdir."""
     os.makedirs(rdir, exist_ok=True)
-    need = {round(g, 4): a.reps for g in a.goals}
+    need = {gkey(g): a.reps for g in a.goals}
     lines = [f"# {robot}, iteration {it}: {len(a.goals) * a.reps} jumps", "",
              f"Policy: `{pdir}`. Save the episodes to `{rdir}` (episode_dir). For each goal, {a.reps} jump(s):", ""]
     for g in a.goals:
-        ref = os.path.join(rdir, f"ref_{g:.4f}.npz")
-        lines += [f"## goal {g:.4f} m", "```",
-                  f"python3 policy_jump_node.py prepare --policy {pdir} --goal {g} 0 --out {ref}",
+        ref = os.path.join(rdir, f"ref_{gfile(g)}.npz")
+        lines += [f"## goal {gname(g)} m", "```",
+                  f"python3 policy_jump_node.py prepare --policy {pdir} --goal {g[0]} {g[1]} --out {ref}",
                   f"ros2 launch ilc_quad policy_jump_go1.launch.py pose_topic:=<mocap topic> policy_dir:={pdir} \\",
-                  f"    reference_file:={ref} jump_dx:={g} jump_dz:=0.0 episode_dir:={rdir} episode_tag:={robot}_it{it}",
+                  f"    reference_file:={ref} jump_dx:={g[0]} jump_dz:={g[1]} episode_dir:={rdir} episode_tag:={robot}_it{it}",
                   f"ros2 service call /start_trial std_srvs/srv/Trigger    # x{a.reps}", "```", ""]
     lines += ["A fall is data too: keep its episode (the update rolls that goal back). To abort the run, write "
               f"`{os.path.join(rdir, 'ABORT')}`.", ""]
@@ -367,8 +404,8 @@ def request_jumps(pdir, robot, it, rdir, out):
         for f in os.listdir(rdir):
             if f.endswith(".npz") and not f.startswith("ref_"):
                 try:
-                    have[round(float(np.load(os.path.join(rdir, f))["goal"][0]), 4)] = \
-                        have.get(round(float(np.load(os.path.join(rdir, f))["goal"][0]), 4), 0) + 1
+                    k_ = gkey(np.load(os.path.join(rdir, f))["goal"])
+                    have[k_] = have.get(k_, 0) + 1
                 except Exception:                        # still being written
                     pass
         if all(have.get(g, 0) >= n for g, n in need.items()):
@@ -397,7 +434,7 @@ def run_robot(robot):
         sr = srng.uniform(-a.train_starts, a.train_starts, len(a.goals))
         starts.append({g: [0.1 * f, -0.2 * f, 0.1 * r, -0.2 * r] for g, f, r in zip(a.goals, sf, sr)})
     jstart = {g: [] for g in a.goals}            # (J, start) of every jump, per goal (--revisit)
-    g_lo, g_hi = min(a.goals) - 0.025, max(a.goals) + 0.025
+    g_lo, g_hi = None, None                       # (the gate's goals: anchor_goals)
     trials, best, hist = [], {g: None for g in a.goals}, []
     scale = {g: 1.0 for g in a.goals}
     sec = {g: None for g in a.goals}         # Broyden correction of the landing sensitivity, per goal
@@ -428,11 +465,11 @@ def run_robot(robot):
             for attempt in range(4):
                 if a.train_starts > 0:                  # each goal's jump from its own start
                     for g in todo:
-                        cf = os.path.join(out, f"it{it}", f"start_{g:.4f}.txt")
+                        cf = os.path.join(out, f"it{it}", f"start_{gfile(g)}.txt")
                         o = starts[it][g]
                         open(cf, "w").write(f"{robot}+start|={robot} --param stand_offset:=["
                                             + ",".join(f"{v:.4f}" for v in o) + "]\n")
-                        fly(pdir, cpath(cf), [g], a.seed + 101 * it, os.path.join(out, f"it{it}", f"real_{g:.4f}.json"),
+                        fly(pdir, cpath(cf), [g], a.seed + 101 * it, os.path.join(out, f"it{it}", f"real_{gfile(g)}.json"),
                             rdir, episodes=a.reps)
                 else:
                     fly(pdir, robot, todo, a.seed + 101 * it, os.path.join(out, f"it{it}", "real.json"), rdir,
@@ -440,9 +477,9 @@ def run_robot(robot):
                 have = {}
                 for f in sorted(os.listdir(rdir)) if os.path.isdir(rdir) else []:
                     if f.endswith(".npz") and not f.startswith("ref_"):
-                        g_ = round(float(np.load(os.path.join(rdir, f))["goal"][0]), 4)
+                        g_ = gkey(np.load(os.path.join(rdir, f))["goal"])
                         have[g_] = have.get(g_, 0) + 1
-                todo = [g for g in a.goals if have.get(round(g, 4), 0) < a.reps]
+                todo = [g for g in a.goals if have.get(gkey(g), 0) < a.reps]
                 if not todo:
                     break
                 say(f"   no jumps yet for goals {todo} (attempt {attempt + 1}); flying them again")
@@ -453,10 +490,10 @@ def run_robot(robot):
             if not f.endswith(".npz") or f.startswith("ref_"):
                 continue
             z = np.load(os.path.join(rdir, f))
-            eps.setdefault(round(float(z["goal"][0]), 4), []).append(z)
+            eps.setdefault(gkey(z["goal"]), []).append(z)
         An = Bn = None
         if a.grad == "fd" or a.update == "gn":
-            goals = np.array([[g, 0.0] for g in a.goals])
+            goals = np.array([gvec(g) for g in a.goals])
             q_off = None
             if a.train_starts > 0:                      # the GPU sim flown from each jump's own start
                 q_off = np.zeros((len(a.goals), 12))
@@ -470,9 +507,9 @@ def run_robot(robot):
             Bn = sim["B"] / D[None, None, :, None]
         line = []
         for gi, g in enumerate(a.goals):
-            zs = eps.get(round(g, 4))
+            zs = eps.get(gkey(g))
             if not zs:
-                line.append(f"g{g:.3f} missing")
+                line.append(f"g{gname(g)} missing")
                 continue
             z = zs[0]
             own = lambda z_: (np.asarray(actor_mean(w, jnp.asarray(np.asarray(z_["obs"], float)[:Nc], jnp.float32))) * mask
@@ -502,7 +539,7 @@ def run_robot(robot):
                 for t in trials:                                   # the hold keeps full weight
                     if t["goal"] == g:
                         t["it"] = it
-                line.append(f"g{g:.3f} J {J:.2f} FROZEN (held at its best){sat_note}")
+                line.append(f"g{gname(g)} J {J:.2f} FROZEN (held at its best){sat_note}")
                 continue
             runaway = bool(a.rollback) and best[g] is not None and J > a.rollback[0] * best[g][0] \
                 and J > best[g][0] + a.rollback[1]
@@ -510,7 +547,7 @@ def run_robot(robot):
                 scale[g] *= 0.5
                 if best[g] is not None:
                     trials.append(dict(goal=g, it=it, obs=best[g][1], tgt=best[g][2]))
-                line.append(f"g{g:.3f} {'FELL' if fell else f'J {J:.2f} RUNAWAY'} (rollback, scale {scale[g]:.2f})")
+                line.append(f"g{gname(g)} {'FELL' if fell else f'J {J:.2f} RUNAWAY'} (rollback, scale {scale[g]:.2f})")
                 continue
             if best[g] is None or J < best[g][0]:
                 best[g] = (J, obs[:Nc], act)
@@ -523,7 +560,7 @@ def run_robot(robot):
                         rec = {k_[4:]: z_[k_] for k_ in z_.files if k_.startswith("rec_")}
                         ks = np.arange(Nc)
                         Qr, Vr = env.restore(rec, ks, ks < Ndc, foot_z=sim["foot_z"][gi])
-                        refr = env.references(np.repeat([[g, 0.0]], Nc, 0))
+                        refr = env.references(np.repeat([gvec(g)], Nc, 0))
                         Ar, Br = env.fd_at(Qr, Vr, ks, np.asarray(z_["act"], float)[:Nc], refr)
                         ok_ = np.isfinite(Ar).all((1, 2)) & np.isfinite(Br).all((1, 2))
                         Ar = np.where(ok_[:, None, None], Ar, sim["A"][gi])        # a failed sample: the sim's own
@@ -569,7 +606,7 @@ def run_robot(robot):
                     trials.append(dict(goal=g, it=it, obs=np.asarray(z_["obs"], float)[:Nc],
                                        tgt=np.clip((own(z_) - step) * mask, -0.999, 0.999)))
                 prev[g] = (e3.copy(), -step.copy(), J)                     # the change commanded: -step
-                line.append(f"g{g:.3f} J {J:.2f} e {e3[0] * 100:+.1f}/{e3[1] * 100:+.1f}cm {np.degrees(e3[2]):+.1f}deg "
+                line.append(f"g{gname(g)} J {J:.2f} e {e3[0] * 100:+.1f}/{e3[1] * 100:+.1f}cm {np.degrees(e3[2]):+.1f}deg "
                             f"(gn rms {min(rms, a.step_rms):.3f}, scale {scale[g]:.2f}{sat_txt}){sat_note}")
                 continue
             G = gradient(z, w, gi, An, Bn, g)
@@ -585,12 +622,12 @@ def run_robot(robot):
                 r_ = rng.standard_normal(step.shape) * mask
                 step = r_ * np.linalg.norm(step) / max(np.linalg.norm(r_), 1e-12)
             trials.append(dict(goal=g, it=it, obs=obs[:Nc], tgt=np.clip((act - step) * mask, -0.999, 0.999)))
-            line.append(f"g{g:.3f} J {J:.2f} (step {size:.3f})")
+            line.append(f"g{gname(g)} J {J:.2f} (step {size:.3f})")
         say(f"it {it}: " + " | ".join(line) + f"  [{time.time() - t0:.0f} s]")
         if not trials:
             continue
         lam = a.anchor_w * a.anchor_n0 / (a.anchor_n0 + len(a.goals) * a.reps * (it + 1))
-        ga = np.stack([np.linspace(g_lo, g_hi, 16), np.zeros(16)], 1)
+        ga = anchor_goals(rng_seed=it)
         if a.anchor_pert:                                # the tube: nominal and perturbed stances
             ga = np.concatenate([ga, ga])
             q_a, _ = env.explore_noise(32, np.random.default_rng(5000 + it), 0.08, 0.0)
