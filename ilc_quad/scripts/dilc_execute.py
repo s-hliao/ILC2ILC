@@ -732,6 +732,7 @@ def run_jump(bank: GoalBank, g, cond: str, seed: int, driver_kw: dict, land_time
             "--reference-file", ref_path,
             "--param", "phases:=[" + ",".join(str(int(v)) for v in cfg["phases"]) + "]",
             "--param", f"margin:={cfg['margin']}", "--param", f"land_time:={land_time}"]
+    argv += [x for p_ in os.environ.get("DILC_NODE_PARAMS", "").split() for x in ("--param", p_)]   # run --node-param
     if menagerie_root:
         argv += ["--menagerie-root", menagerie_root]
     if box is not None:
@@ -1686,6 +1687,8 @@ def main():
     r.add_argument("--conds", default="challenging",
                    help="challenging | all | dr:N | name,name | conds file")
     r.add_argument("--episodes", type=int, default=1, help="seeds per goal and condition")
+    r.add_argument("--node-param", action="append", default=[],
+                   help="NAME:=VALUE passed to every jump's node (e.g. landing_controller:=pd)")
     r.add_argument("--mode", default="policy",
                    help="policy | ilc_interp | to | lqr[:R scale] (comma list)")
     r.add_argument("--compare", action="store_true", help="all three modes")
@@ -1707,6 +1710,8 @@ def main():
     s.add_argument("--bank", required=True)
     s.add_argument("--menagerie-root", default="")
     args = ap.parse_args()
+    if args.cmd == "run" and args.node_param:     # (the environment: the forkserver workers inherit it)
+        os.environ["DILC_NODE_PARAMS"] = " ".join(args.node_param)
     {"run": run, "dataset": dataset, "serve": serve, "ilc": ilc_bench,
      "lqrbank": lqr_bank, "rollouts": rollouts}[args.cmd](args)
 

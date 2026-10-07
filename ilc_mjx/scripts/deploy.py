@@ -47,6 +47,12 @@ ap.add_argument("--update", default="grad", choices=("grad", "gn"),
                      "-gn-beta G_N' (G_N G_N' + gn-delta I)^-1 e, its rms capped at --step-rms")
 ap.add_argument("--gn-beta", type=float, default=0.5)
 ap.add_argument("--gn-delta", type=float, default=0.1, help="damping, relative to tr(G_N G_N')/3")
+ap.add_argument("--est-window", type=float, default=0.0,
+                help="s: the sim's policy observes the robots' estimator (as the network was trained: jump.Config)")
+ap.add_argument("--clear", type=float, default=0.0,
+                help="m (box banks, --update gn): the legs' and trunk's clearance to the box the ILC keeps -- a trial "
+                     "whose least clearance (measured from its record, in single stance and in flight) is under it adds "
+                     "a GN row pushing it back up, through the same closed-loop chain as the landing rows (0: none)")
 ap.add_argument("--stage-w", type=float, nargs=3, default=[0.0, 0.0, 1.0])
 ap.add_argument("--anchor-n0", type=float, default=6.0)
 ap.add_argument("--anchor-w", type=float, default=1.0)
@@ -66,7 +72,8 @@ ap.add_argument("--anchor-pert", action="store_true",
                 help="anchor states also from 16 perturbed stances (sigma_q 0.08), not only the 16 nominal ones")
 ap.add_argument("--lr", type=float, default=1e-4)
 ap.add_argument("--seed", type=int, default=9001)
-ap.add_argument("--eval", default="val", choices=("val", "final", "holdout", "boxval", "boxfinal", "comboval", "combofinal", "none"))
+ap.add_argument("--eval", default="val", choices=("val", "final", "holdout", "boxval", "boxfinal", "comboval", "combofinal", "planeval", "planefinal",
+                                       "none"))
 ap.add_argument("--perturbed", action="store_true")
 ap.add_argument("--target-base", default="flown", choices=("flown", "own"),
                 help="the step starts from the action the robot flew (after the controller's clipping: stays "
@@ -137,7 +144,7 @@ import jax.numpy as jnp  # noqa: E402
 import numpy as np  # noqa: E402
 
 from ilc_mjx import host_path  # noqa: E402
-from ilc_mjx.jump import JumpEnv  # noqa: E402
+from ilc_mjx.jump import Config, JumpEnv  # noqa: E402
 from ilc_mjx.robot import PLANAR_TO_CANONICAL  # noqa: E402
 
 WS, CWS = "/home/henry/ilc_ws", "/ilc_ws"
@@ -150,7 +157,13 @@ EVAL = dict(val=([0.45, 0.4625, 0.5375, 0.55], 301), final=([0.4375, 0.4875, 0.5
             boxfinal=([(0.52, 0.12), (0.54, 0.14), (0.57, 0.11), (0.51, 0.17)], 701),
             # mixed flat + box banks: both reserved tests at once (8 goals)
             comboval=([0.45, 0.4625, 0.5375, 0.55, (0.53, 0.11), (0.51, 0.13), (0.56, 0.12), (0.52, 0.16)], 301),
-            combofinal=([0.4375, 0.4875, 0.5125, 0.5625, (0.52, 0.12), (0.54, 0.14), (0.57, 0.11), (0.51, 0.17)], 701))
+            combofinal=([0.4375, 0.4875, 0.5125, 0.5625, (0.52, 0.12), (0.54, 0.14), (0.57, 0.11), (0.51, 0.17)], 701),
+            # the 2D plane bank (log/dilc/plane: flat x 0.40-0.65, boxes up to 0.20 m, front face at x/2): goals across
+            # it, off the plans and the sim stage's eval grid; planefinal keeps boxfinal's four (the JumpILC baselines')
+            planeval=([0.4375, 0.5625, (0.53, 0.11), (0.51, 0.13), (0.56, 0.12), (0.52, 0.16), (0.4625, 0.06),
+                       (0.6125, 0.07)], 301),
+            planefinal=([0.4875, 0.6125, (0.52, 0.12), (0.54, 0.14), (0.57, 0.11), (0.51, 0.17), (0.4875, 0.035),
+                         (0.6375, 0.09)], 701))
 EVAL = {k: ([tuple(g) if isinstance(g, tuple) else (float(g), 0.0) for g in v[0]], v[1]) for k, v in EVAL.items()}
 gvec = lambda g: np.array(g, float)                                  # goal -> (x, h)
 gkey = lambda v: (round(float(v[0]), 4), round(float(v[1]), 4))     # a goal or an episode's goal -> dict key
@@ -158,7 +171,7 @@ gname = lambda g: f"{g[0]:.3f}" + (f",{g[1]:.3f}" if g[1] else "")  # for the lo
 gfile = lambda g: f"{g[0]:.4f}" + (f"_{g[1]:.4f}" if g[1] else "")  # for file names (flat: as before)
 
 bank = json.load(open(os.path.join(a.policy, "bank.json")))
-env = JumpEnv(bank)
+env = JumpEnv(bank, Config(est_window=a.est_window))
 Nc, Ndc = env.Nc, env.Ndc
 gamma = float(bank.get("gamma", 0.99))
 D = np.asarray(bank["sx"], float)
@@ -195,11 +208,13 @@ def headroom(z):
 
 
 def gn_step(S, e3, off=None, beta=None):
-    """-step of the Gauss-Newton ILC (flattened, normalized actions), the columns `off` held."""
+    """-step of the Gauss-Newton ILC (flattened, normalized actions), the columns `off` held. S, e3: the landing's 3
+    rows (and any clearance rows below them)."""
     if off is not None:
         S = np.where(off[None, :], 0.0, S)
     M_ = S @ S.T
-    return (a.gn_beta if beta is None else beta) * (S.T @ np.linalg.solve(M_ + a.gn_delta * np.trace(M_) / 3 * np.eye(3), e3))
+    r = len(e3)
+    return (a.gn_beta if beta is None else beta) * (S.T @ np.linalg.solve(M_ + a.gn_delta * np.trace(M_) / r * np.eye(r), e3))
 
 
 def sat_step(S, e3, stp, H, U, beta=None):
@@ -324,6 +339,40 @@ def landing_sensitivity(z, w, gi, An, Bn):
     return S
 
 
+def clearance_rows(zs, w, gi, An, Bn, g):
+    """Per trial at goal g, the GN rows keeping the legs' and trunk's clearance to the box at --clear: its least
+    clearance (jump.clearance_rec, from the trial's record) in single stance and in flight; under --clear, a row
+    d clearance / d a (its gradient w.r.t. the base pose through the closed-loop chain: the sim's Jacobians along
+    the goal's jump, the policy's feedback at the trial's states) and the residual clearance - --clear (m)."""
+    rows, res, cmins = [], [], []
+    bx = np.asarray(env.references([gvec(g)])["box_xh"])[0]
+    if bx[1] < 0.005:
+        return rows, res, cmins
+    N_ = env.N
+    for z_ in zs:
+        rec = {k_[4:]: z_[k_] for k_ in z_.files if k_.startswith("rec_")}
+        if "pos" not in rec:
+            continue
+        C, Gr = env.clearance_rec(rec, bx, np.arange(N_))
+        K = np.asarray(dpi_fn(jnp.asarray(np.asarray(z_["obs"], float)[:Nc], jnp.float32), w))[..., :6]
+        Dn = np.zeros((Nc + 1, 6, Nc * 4))                      # d e_k / d a (normalized state), forward
+        for k in range(Nc):
+            Dn[k + 1] = (An[gi, k] + Bn[gi, k] @ K[k]) @ Dn[k]
+            Dn[k + 1][:, 4 * k:4 * k + 4] += Bn[gi, k] * mask[k][None]
+        # the flight window ends 6 samples before the touchdown: legs coming down onto the box top then are the
+        # landing, not a clip (on the robot the touchdown's timing varies by a few samples)
+        for lo_, hi_ in ((Ndc, Nc), (Nc, N_ - 6)):
+            k = lo_ + int(np.argmin(C[lo_:hi_]))
+            cmins.append(float(C[k]))
+            if C[k] >= a.clear:
+                continue
+            Dr = D[:, None] * Dn[min(k, Nc)]                        # raw SRB units
+            Dk = Dr[:3] + max(k - Nc, 0) * env.dt * Dr[3:]           # in flight: ballistic from takeoff
+            rows.append(Gr[k] @ Dk)
+            res.append(C[k] - a.clear)
+    return rows, res, cmins
+
+
 GATE = a.gate if a.gate is not None else ([0, 1.5, 0.3] if a.backend == "manual" else None)
 
 
@@ -384,10 +433,13 @@ def request_jumps(pdir, robot, it, rdir, out):
              f"Policy: `{pdir}`. Save the episodes to `{rdir}` (episode_dir). For each goal, {a.reps} jump(s):", ""]
     for g in a.goals:
         ref = os.path.join(rdir, f"ref_{gfile(g)}.npz")
-        lines += [f"## goal {gname(g)} m", "```",
+        bx = np.asarray(env.references([gvec(g)])["box_xh"])[0] if env.has_box else np.array([0.25, 0.0])
+        box_args = f" box_x_front:={bx[0]:.4f} box_height:={bx[1]:.4f}" if bx[1] >= 0.005 else ""
+        lines += [f"## goal {gname(g)} m" + (f" -- BOX: front face {bx[0]:.3f} m ahead of the standing CoM, "
+                                            f"{bx[1]:.3f} m tall" if box_args else ""), "```",
                   f"python3 policy_jump_node.py prepare --policy {pdir} --goal {g[0]} {g[1]} --out {ref}",
                   f"ros2 launch ilc_quad policy_jump_go1.launch.py pose_topic:=<mocap topic> policy_dir:={pdir} \\",
-                  f"    reference_file:={ref} jump_dx:={g[0]} jump_dz:={g[1]} episode_dir:={rdir} episode_tag:={robot}_it{it}",
+                  f"    reference_file:={ref} jump_dx:={g[0]} jump_dz:={g[1]}{box_args} episode_dir:={rdir} episode_tag:={robot}_it{it}",
                   f"ros2 service call /start_trial std_srvs/srv/Trigger    # x{a.reps}", "```", ""]
     lines += ["A fall is data too: keep its episode (the update rolls that goal back). To abort the run, write "
               f"`{os.path.join(rdir, 'ABORT')}`.", ""]
@@ -442,6 +494,8 @@ def run_robot(robot):
     frozen = {g: False for g in a.goals}
     Jh = {g: [] for g in a.goals}
     Bh = {g: [] for g in a.goals}            # saturation bind of each GN step, per goal (--stall-sat)
+    Ch = {g: [] for g in a.goals}            # per iteration the goal's least clearance to the box (--clear)
+    Fh = {g: [] for g in a.goals}            # per iteration whether the goal's trial fell
     mom ={g: None for g in a.goals}
     for it in range(a.iters + 1):
         pdir = os.path.join(out, f"it{it}", "policy")
@@ -519,6 +573,7 @@ def run_robot(robot):
             J = float(np.mean(Js))
             hist.extend(dict(it=it, goal=g, J=J_, fell=bool(z_["fell"])) for J_, z_ in zip(Js, zs))
             Jh[g].append(J)
+            Fh[g].append(bool(fell))
             if a.train_starts > 0:
                 jstart[g].append((J, list(starts[it][g])))
             stalled = a.stall > 0 and not frozen[g] and len(Jh[g]) > a.stall \
@@ -529,7 +584,16 @@ def run_robot(robot):
                 sat_bound = len(bw) == a.stall and float(np.mean(bw)) >= a.stall_sat
                 sat_note = f" (stalled, saturation bind {np.mean(bw) if bw else 0:.2f}" \
                            + (": saturation-bound)" if sat_bound else ": motors free, steps on)")
-                stalled = sat_bound
+                # or the box explains it: a stalled goal that clipped (clearance < 0) or fell on most of its last
+                # --stall iterations is out of this robot's reach as surely as a motor-bound one -- stepping it on
+                # only drags the shared network (heavy real_r5's box goals)
+                cw, fw = Ch[g][-a.stall:], Fh[g][-a.stall:]
+                geo_bound = (len(cw) == a.stall and sum(c < 0 for c in cw) >= a.stall - 1) or \
+                    (len(fw) == a.stall and sum(fw) >= a.stall - 1)
+                if geo_bound and not sat_bound:
+                    sat_note = f" (stalled, clipping / falling on {max(sum(c < 0 for c in cw), sum(fw))} of the last " \
+                               f"{a.stall}: box-bound)"
+                stalled = sat_bound or geo_bound
             if stalled:
                 frozen[g] = True                                   # no progress: stop stepping this goal
                 trials[:] = [t for t in trials if t["goal"] != g]
@@ -543,6 +607,30 @@ def run_robot(robot):
                 continue
             runaway = bool(a.rollback) and best[g] is not None and J > a.rollback[0] * best[g][0] \
                 and J > best[g][0] + a.rollback[1]
+            if fell and a.update == "gn" and a.clear > 0 and env.has_box and An is not None:
+                # a fall with the legs or trunk too close to the box (a clip): the step on its clearance rows and its
+                # predicted landing (the measured one is the clip's), from the trial's own actions, the scale kept --
+                # a rollback would only repeat the clip with ever smaller steps
+                crow, cres, cmins = clearance_rows(zs, w, gi, An, Bn, g)
+                if cmins:
+                    Ch[g].append(min(cmins))
+                if crow:
+                    # with the measured touchdown error too (the fall comes after the touchdown; the clearance alone
+                    # would push a long jump higher, i.e. longer still). Not the ballistic prediction from the takeoff
+                    # state: on the robot that state is the estimator's, its velocity off by up to ~0.7 m/s at the
+                    # push's end -- 20-35 cm over the flight
+                    eb = np.mean([np.asarray(z_["info"], float)[:2] for z_ in zs], 0)
+                    Sl = np.mean([landing_sensitivity(z_, w, gi, An, Bn).reshape(3, -1) for z_ in zs], 0)[:2]
+                    Sc, rc = np.vstack([Sl, np.array(crow)]), np.concatenate([eb, np.array(cres)])
+                    step = gn_step(Sc, rc).reshape(Nc, 4)
+                    rms = np.sqrt((step ** 2).sum() / mask.sum())
+                    step *= min(1.0, a.step_rms / max(rms, 1e-12))
+                    for z_ in zs:
+                        trials.append(dict(goal=g, it=it, obs=np.asarray(z_["obs"], float)[:Nc],
+                                           tgt=np.clip((own(z_) - step) * mask, -0.999, 0.999)))
+                    line.append(f"g{gname(g)} FELL, clr {100 * min(cmins):.1f}cm, landing {100 * eb[0]:+.1f}/"
+                                f"{100 * eb[1]:+.1f}cm: step on both (rms {min(rms, a.step_rms):.3f}, {len(crow)} clr rows)")
+                    continue
             if fell or runaway:                                    # back to the best trial, half the steps
                 scale[g] *= 0.5
                 if best[g] is not None:
@@ -581,6 +669,15 @@ def run_robot(robot):
                     S = S + sec[g]
                 if a.jac_flip:
                     S = -S
+                e3_land = e3
+                clr_txt = ""
+                if a.clear > 0 and env.has_box:
+                    crow, cres, cmins = clearance_rows(zs, w, gi, An, Bn, g)
+                    if cmins:
+                        Ch[g].append(min(cmins))
+                    if crow:
+                        S, e3 = np.vstack([S, np.array(crow)]), np.concatenate([e3, np.array(cres)])
+                    clr_txt = f", clr {100 * min(cmins):.1f}cm rows {len(crow)}" if cmins else ""
                 stp = gn_step(S, e3)
                 sat_txt = ""
                 if a.sat_project or a.stall_sat > 0:
@@ -605,9 +702,10 @@ def run_robot(robot):
                 for z_ in zs:
                     trials.append(dict(goal=g, it=it, obs=np.asarray(z_["obs"], float)[:Nc],
                                        tgt=np.clip((own(z_) - step) * mask, -0.999, 0.999)))
+                e3 = e3_land
                 prev[g] = (e3.copy(), -step.copy(), J)                     # the change commanded: -step
                 line.append(f"g{gname(g)} J {J:.2f} e {e3[0] * 100:+.1f}/{e3[1] * 100:+.1f}cm {np.degrees(e3[2]):+.1f}deg "
-                            f"(gn rms {min(rms, a.step_rms):.3f}, scale {scale[g]:.2f}{sat_txt}){sat_note}")
+                            f"(gn rms {min(rms, a.step_rms):.3f}, scale {scale[g]:.2f}{sat_txt}{clr_txt}){sat_note}")
                 continue
             G = gradient(z, w, gi, An, Bn, g)
             d = G / max(np.linalg.norm(G), 1e-12)

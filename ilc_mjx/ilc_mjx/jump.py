@@ -44,6 +44,7 @@ from .robot import HIP_IDX, PLANAR_TO_CANONICAL, expand
 TICK = 0.002
 FLAT_X_FRONT = 0.25        # a flat plan in a mixed bank: a box of height 0, front face this far before its goal
 BOX_MIN = 0.005            # an interpolated box lower than this is none (dilc_execute.GoalBank.reference: the same)
+BOX_DEPTH = 0.3            # the GPU box's geom reaches this far under the floor (no thin box)
 
 
 @dataclass
@@ -62,6 +63,9 @@ class Config:
     ls_iters: int = 8
     eps_a: float = 0.05
     eps_s: float = 0.1
+    est_window: float = 0.0     # > 0: the policy observes the robots' estimate (dilc_execute.Estimator: a line through
+                                # the CoM x, z and pitch of every tick of the last est_window s, at now), not the true
+                                # state -- the robots' sensing (a lagged velocity at the push), not their dynamics
 
 
 def _quat_mul(a, b):
@@ -140,8 +144,26 @@ class JumpEnv:
         self.w_noload = f32(np.tile([30.1, 30.1, 20.06], 4))       # ilc_jump_lockstep.GO1_NO_LOAD_SPEED
         self.priv_dim = 0                                          # > 0: the actor also reads dyn["z"] (privileged)
         self.feet_geoms = jnp.asarray(qm.foot_geom_ids)
+        if self.has_box:                    # the geoms that can meet the box (model.mjx_model's legs_hit_box: contype 2)
+            cg = np.where(self.m.geom_contype == 2)[0]
+            loc, rad = [], []
+            for g in cg:                    # sample points in the geom's frame: a capsule's axis, a box's x-z corners
+                sz = self.m.geom_size[g]
+                if self.m.geom_type[g] == 6:
+                    loc.append([[sx_, 0.0, sz_] for sx_ in (-sz[0], sz[0]) for sz_ in (-sz[2], sz[2])] + [[0.0, 0.0, -sz[2]]])
+                    rad.append(0.0)
+                else:
+                    loc.append([[0.0, 0.0, t * sz[1]] for t in (-1.0, -0.5, 0.0, 0.5, 1.0)])
+                    rad.append(sz[0])
+            self.clr_geoms, self.clr_local, self.clr_rad = jnp.asarray(cg), jnp.asarray(loc, jnp.float32), jnp.asarray(rad, jnp.float32)
         self._stand = None
         self._jit = {}
+        self.W = int(round(cfg.est_window / TICK)) + 1 if cfg.est_window > 0 else 0
+        if self.W:                                   # least squares y = a + b h over the last W ticks, h = 0 now
+            h = -TICK * np.arange(self.W - 1, -1, -1)
+            A = np.stack([np.ones(self.W), h], 1)
+            L = np.linalg.solve(A.T @ A, A.T)        # (2, W): a, b
+            self.est_a, self.est_b = jnp.asarray(L[0], jnp.float32), jnp.asarray(L[1], jnp.float32)
 
     # -- goals ------------------------------------------------------------------------------
     def weights(self, goals):
@@ -152,6 +174,25 @@ class JumpEnv:
             gb = self._gb = GoalBank.__new__(GoalBank)
             gb.goals = self.goals
         return np.stack([GoalBank.weights(gb, g)[0] for g in goals])
+
+    def in_hull(self, goals):
+        """Whether each goal (x, h) lies in the bank's plans' hull (its interpolation weights all >= 0)."""
+        return self.weights(np.asarray(goals, float)).min(1) > -1e-9
+
+    def sample_plane_goals(self, n, rng):
+        """n goals uniform over the bank's valid region (the plans' hull): the 2D goal plane's training goals."""
+        lo, hi = self.goals.min(0), self.goals.max(0)
+        out = []
+        while len(out) < n:
+            c = lo + rng.random((4 * n, 2)) * (hi - lo)
+            out += list(c[self.in_hull(c)])
+        return np.array(out[:n])
+
+    def plane_grid(self, step=0.025):
+        """The valid region's goals on a grid (the plane's evaluation goals)."""
+        lo, hi = self.goals.min(0), self.goals.max(0)
+        G = np.array([(x, h) for h in np.arange(0.0, hi[1] + 1e-9, step) for x in np.arange(lo[0], hi[0] + 1e-9, step)])
+        return G[self.in_hull(G)]
 
     def references(self, goals):
         """Per jump the interpolated plan: x_ref, u_ref, q_ref, qd_ref, tau and the plan's feet off its base."""
@@ -216,24 +257,79 @@ class JumpEnv:
         tau_ff = jnp.clip(tau_to, -self.lim, self.lim)
         return q_des, dq_des, kp, kd, tau_ff
 
-    def _model(self, r=None):
-        """The device model for one jump: with a box bank, its own box (r: the jump's reference) moved in."""
+    def _model(self, r=None, land=False):
+        """The device model for one jump: with a box bank, its own box (r: the jump's reference) moved in. land: the
+        landing's -- the legs no longer meet the box (with the feet on the box top the folding front calves rest on
+        it, and MJX's capsule-box test, face normals only, throws the robot; on the floor the legs never collide
+        either, so a box landing is flown as a flat one is): their contacts' margin -1 m, never active (MJX takes
+        a contact as active below its summed margin; the contact set itself stays the model's)."""
+        base = self.mx
+        if self.has_box and land:
+            base = base.replace(geom_margin=base.geom_margin.at[self.clr_geoms].set(-1.0))
         if not self.has_box or r is None:
-            return self.mx
+            return base
         xf, h = r["box_xh"][0], r["box_xh"][1]
-        hh = jnp.maximum(h, BOX_MIN) / 2
-        pos = jnp.stack([xf + self.BOX_L / 2, 0.0, jnp.where(h >= BOX_MIN, hh, -1.0)])     # none: under the floor
+        # the box reaches BOX_DEPTH under the floor: a thin box (a few cm) lets a fast foot past its mid-plane with
+        # this solver's few iterations, and the contact then throws the robot (the floor hides the extra depth)
+        has = h >= BOX_MIN
+        hh = jnp.where(has, (h + BOX_DEPTH) / 2, 0.01)
+        pos = jnp.stack([xf + self.BOX_L / 2, 0.0, jnp.where(has, h - hh, -1.0)])         # none: under the floor
         size = jnp.stack([jnp.float32(self.BOX_L / 2), jnp.float32(self.BOX_W / 2), hh])
-        return self.mx.replace(geom_pos=self.mx.geom_pos.at[self.box_geom].set(pos),
-                               geom_size=self.mx.geom_size.at[self.box_geom].set(size))
+        return base.replace(geom_pos=base.geom_pos.at[self.box_geom].set(pos),
+                            geom_size=base.geom_size.at[self.box_geom].set(size))
 
-    def _step(self, dx, cmd, p=None, r=None):
+    def _hit(self, dx):
+        """Whether a leg (thigh, calf) or the trunk is in contact with the box (one jump's data)."""
+        if not self.has_box:
+            return jnp.zeros((), bool)
+        g = dx.contact.geom
+        isbox = (g[:, 0] == self.box_geom) | (g[:, 1] == self.box_geom)
+        other = jnp.where(g[:, 0] == self.box_geom, g[:, 1], g[:, 0])
+        foot = (other[:, None] == self.feet_geoms[None]).any(1)
+        return jnp.any((dx.contact.dist < 0) & isbox & ~foot)
+
+    def _clearance(self, dx, r):
+        """The legs' and trunk's least signed distance to the jump's box (m; < 0 in it), and its gradient with respect
+        to the planar base pose (CoM x, z, pitch) with the joints held: the box a quadrant x >= x_front, z <= h in the
+        sagittal plane, each geom as points (a capsule's axis less its radius, a box's corners). 1 with no box."""
+        if not self.has_box:
+            return jnp.float32(1.0), jnp.zeros(3)
+        xf, h = r["box_xh"][0], r["box_xh"][1]
+        P = dx.geom_xpos[self.clr_geoms][:, None, :] + jnp.einsum("gij,gpj->gpi", dx.geom_xmat[self.clr_geoms],
+                                                                   self.clr_local)
+        px, pz = P[..., 0], P[..., 2]
+        a, b = xf - px, pz - h                               # > 0: before the face, above the top
+        corner = (a > 0) & (b > 0)
+        dc = jnp.sqrt(a ** 2 + b ** 2 + 1e-12)
+        d = jnp.where(corner, dc, jnp.where(a > 0, a, jnp.where(b > 0, b, jnp.maximum(a, b))))
+        gx = jnp.where(corner, -a / dc, jnp.where(a > 0, -1.0, jnp.where(b > 0, 0.0, jnp.where(a > b, -1.0, 0.0))))
+        gz = jnp.where(corner, b / dc, jnp.where(a > 0, 0.0, jnp.where(b > 0, 1.0, jnp.where(a > b, 0.0, 1.0))))
+        d = d - self.clr_rad[:, None]
+        i = jnp.argmin(d.ravel())
+        com = self.pl.com(self.planar_state(dx)[0])
+        x_, z_, gx_, gz_ = px.ravel()[i], pz.ravel()[i], gx.ravel()[i], gz.ravel()[i]
+        grad = jnp.stack([gx_, gz_, -gx_ * (z_ - com[1]) + gz_ * (x_ - com[0])])     # pitch nose-up positive
+        none = h < BOX_MIN
+        return jnp.where(none, 1.0, d.ravel()[i]), jnp.where(none, 0.0, grad)
+
+    def _hit_geom(self, dx):
+        """The geom (not a foot) most in contact with the box, or -1 (diagnostics)."""
+        if not self.has_box:
+            return jnp.int32(-1)
+        g = dx.contact.geom
+        isbox = (g[:, 0] == self.box_geom) | (g[:, 1] == self.box_geom)
+        other = jnp.where(g[:, 0] == self.box_geom, g[:, 1], g[:, 0])
+        foot = (other[:, None] == self.feet_geoms[None]).any(1)
+        d = jnp.where((dx.contact.dist < 0) & isbox & ~foot, dx.contact.dist, 1.0)
+        return jnp.where(d.min() < 0, other[jnp.argmin(d)], -1).astype(jnp.int32)
+
+    def _step(self, dx, cmd, p=None, r=None, land=False):
         """One tick; p: this jump's dynamics (domain randomization, from sample_dyn), None for nominal; r: the
         jump's reference (its box, with a box bank)."""
         q_des, dq_des, kp, kd, tau_ff = cmd
         q, dq = dx.qpos[self.qadr], dx.qvel[self.vadr]
         tau = kp * (q_des - q) + kd * (dq_des - dq) + tau_ff
-        mx = self._model(r)
+        mx = self._model(r, land)
         if p is None:
             tau = jnp.clip(tau, -self.lim, self.lim)
             dx = dx.replace(ctrl=dx.ctrl.at[self.act].set(tau))
@@ -250,10 +346,18 @@ class JumpEnv:
                         geom_friction=p["geom_friction"], dof_frictionloss=p["dof_frictionloss"])
         return self.mjx.step(mx, dx)
 
-    def _fly_sample(self, dx, k, u, ref, contact, p=None):
+    def _fly_sample(self, dx, k, u, ref, contact, p=None, with_hit=False):
+        """One TO sample's ticks; with_hit: also whether a leg or the trunk touched the box at any of them."""
         def tick(dx, i):
-            return self._step(dx, self._command(dx, k, i, u, ref, contact), p, ref), None
-        return jax.lax.scan(tick, dx, jnp.arange(self.tps))[0]
+            dx = self._step(dx, self._command(dx, k, i, u, ref, contact), p, ref)
+            return dx, ((self._hit_geom(dx), self._pose3(dx)) if with_hit else None)
+        dx, ex = jax.lax.scan(tick, dx, jnp.arange(self.tps))
+        return (dx, ex[0].max(), ex[1]) if with_hit else dx
+
+    def _pose3(self, dx):
+        """The CoM x, z and the pitch (one jump's data): what the robots' estimator fits a line through."""
+        s, _ = self.planar_state(dx)
+        return jnp.concatenate([self.pl.com(s), s[2:3]])
 
     # -- domain randomization (baselines only: our method trains on the nominal dynamics) ----------
     DYN_KEYS = ("mass_scale", "com_x", "motor_scale", "curve", "speed_scale", "friction", "joint_friction", "payload")
@@ -485,6 +589,48 @@ class JumpEnv:
             V.append(d.qvel.copy())
         return np.array(Q), np.array(V)
 
+    def clearance_rec(self, rec, box_xh, ks):
+        """_clearance along a recorded jump (rec_* of a saved episode: mocap pose, joint encoders) at TO samples ks:
+        per sample the legs' and trunk's least signed distance to the box (m) and its gradient w.r.t. the base pose
+        (CoM x, z, pitch). The box is placed as the robots place it
+        (sim_quad_model: front face at world x = x_front, the robot's home at x = 0, as in this GPU model): x_front ahead of
+        the base at the record's first frame, so the robot may stand anywhere along x (hardware: the mocap frame)."""
+        import mujoco
+        m = self.m
+        d = mujoco.MjData(m)
+        t, pos, quat, q = (np.asarray(rec[k_], float) for k_ in ("t", "pos", "quat", "q"))
+        qadr = np.asarray(self.qm.qpos_adr)
+        cg, loc, rad = np.asarray(self.clr_geoms), np.asarray(self.clr_local), np.asarray(self.clr_rad)
+
+        def pose(i):
+            d.qpos[:] = m.qpos0
+            d.qpos[0:3], d.qpos[3:7] = pos[i], quat[i] / np.linalg.norm(quat[i])
+            d.qpos[qadr] = q[i]
+            mujoco.mj_kinematics(m, d)
+            mujoco.mj_comPos(m, d)
+            return float(d.subtree_com[self.base, 0]), float(d.subtree_com[self.base, 2])
+        # the face x_front ahead of the robot's start (its base at the record's first frame): sim_quad_model's world x
+        # with the home at x = 0 on the CPU robots, and on hardware wherever the robot stands in the mocap frame
+        xf, h = float(pos[0][0]) + float(box_xh[0]), float(box_xh[1])
+        C, Gr = np.ones(len(ks)), np.zeros((len(ks), 3))
+        if h < BOX_MIN:
+            return C, Gr
+        for j, k in enumerate(ks):
+            cx, cz = pose(min(int(k) * self.tps, len(t) - 1))
+            P = d.geom_xpos[cg][:, None, :] + np.einsum("gij,gpj->gpi", d.geom_xmat[cg].reshape(-1, 3, 3), loc)
+            px, pz = P[..., 0], P[..., 2]
+            a_, b_ = xf - px, pz - h
+            corner = (a_ > 0) & (b_ > 0)
+            dc = np.sqrt(a_ ** 2 + b_ ** 2 + 1e-12)
+            dd = np.where(corner, dc, np.where(a_ > 0, a_, np.where(b_ > 0, b_, np.maximum(a_, b_)))) - rad[:, None]
+            gx = np.where(corner, -a_ / dc, np.where(a_ > 0, -1.0, np.where(b_ > 0, 0.0, np.where(a_ > b_, -1.0, 0.0))))
+            gz = np.where(corner, b_ / dc, np.where(a_ > 0, 0.0, np.where(b_ > 0, 1.0, np.where(a_ > b_, 0.0, 1.0))))
+            i = int(np.argmin(dd))
+            C[j] = dd.ravel()[i]
+            x_, z_, gx_, gz_ = px.ravel()[i], pz.ravel()[i], gx.ravel()[i], gz.ravel()[i]
+            Gr[j] = [gx_, gz_, -gx_ * (z_ - cz) + gz_ * (x_ - cx)]
+        return C, Gr
+
     def fd_at(self, qpos, qvel, ks, acts, ref):
         """One-step FD Jacobians A (B, 6, 6), B (B, 6, 4) of the nominal model from given states (restore), entry b at
         contact sample ks[b] with action acts[b] (normalized, as flown), its goal's reference ref (per entry)."""
@@ -548,9 +694,15 @@ class JumpEnv:
         nc = 1 + 4 + 6 if fd else 1
 
         def contact_sample(carry, k):
-            dx, hist, prev_a, key = carry
+            dx, hist, prev_a, key, hit, pbuf = carry
             x = srb(dx, shift)
-            err = jnp.clip((x - ref["x_ref"][:, k]) / self.sx, -20.0, 20.0)
+            clr = jax.vmap(self._clearance)(dx, ref)
+            x_obs = x
+            if self.W:                               # the robots' estimate: a line through the last W ticks
+                pa = jnp.einsum("w,bwi->bi", self.est_a, pbuf)
+                pb = jnp.einsum("w,bwi->bi", self.est_b, pbuf)
+                x_obs = jnp.concatenate([pa[:, :2] + shift, pa[:, 2:3], pb], 1)
+            err = jnp.clip((x_obs - ref["x_ref"][:, k]) / self.sx, -20.0, 20.0)
             hist = jnp.concatenate([err[:, None], hist[:, :-1]], 1) if H else err[:, None]
             o = jax.vmap(lambda h, pa, g: self.obs(h, pa, k, g))(hist, prev_a, ref["goal_obs"])
             if zp is not None:
@@ -562,8 +714,10 @@ class JumpEnv:
             u, a_st = jax.vmap(lambda a_, r: self._forces(a_, k, r))(a, ref)
             fz = dx.geom_xpos[:, self.feet_geoms, 2]                          # (B, 4) the feet's height
             if not fd:
-                dx = jax.vmap(lambda d, u_, r, p: self._fly_sample(d, k, u_, r, True, p))(dx, u, ref, dyn)
-                return (dx, hist, a_st, key), (x, u, a_st, o, mu, jnp.zeros((B, 0, 6)), jnp.zeros((B, 0, 6)), fz)
+                dx, h, ps = jax.vmap(lambda d, u_, r, p: self._fly_sample(d, k, u_, r, True, p, True))(dx, u, ref, dyn)
+                if self.W:
+                    pbuf = jnp.concatenate([pbuf, ps], 1)[:, -self.W:]
+                return (dx, hist, a_st, key, hit, pbuf), (x, u, a_st, o, mu, jnp.zeros((B, 0, 6)), jnp.zeros((B, 0, 6)), fz, h, clr)
             # the jump and its ten copies, side by side: copy 0 the jump itself
             da = jnp.concatenate([jnp.zeros((1, 4)), self.cfg.eps_a * jnp.eye(4), jnp.zeros((6, 4))])
             uc, _ = jax.vmap(lambda a_, r: jax.vmap(lambda d_: self._forces(a_ + d_, k, r))(da))(a, ref)
@@ -575,27 +729,40 @@ class JumpEnv:
             dxc = jax.vmap(jax.vmap(pert, (0, 0)), (0, None))(dxc, idx)
             s0 = jax.vmap(jax.vmap(lambda d: self.srb(d, jnp.zeros(2))))(dxc)
             refc = jax.tree_util.tree_map(lambda v: jnp.repeat(v[:, None], nc, 1), ref)
-            dxc = jax.vmap(jax.vmap(lambda d, u_, r, p: self._fly_sample(d, k, u_, r, True, p), (0, 0, 0, None)))(
-                dxc, uc, refc, dyn)
+            dxc, hc, psc = jax.vmap(jax.vmap(lambda d, u_, r, p: self._fly_sample(d, k, u_, r, True, p, True),
+                                             (0, 0, 0, None)))(dxc, uc, refc, dyn)
             s1 = jax.vmap(jax.vmap(lambda d: self.srb(d, jnp.zeros(2))))(dxc)
             dx = jax.tree_util.tree_map(lambda v: v[:, 0], dxc)
-            return (dx, hist, a_st, key), (x, u, a_st, o, mu, s0, s1, fz)
+            if self.W:                               # copy 0 is the jump itself: its ticks' poses
+                pbuf = jnp.concatenate([pbuf, psc[:, 0]], 1)[:, -self.W:]
+            return (dx, hist, a_st, key, hit, pbuf), (x, u, a_st, o, mu, s0, s1, fz, hc[:, 0], clr)
 
-        def flight_sample(dx, k):
+        def flight_sample(carry, k):
+            dx, hit = carry
             x = srb(dx, shift)
-            dx = jax.vmap(lambda d, r, p: self._fly_sample(d, k, jnp.zeros(4), r, False, p))(dx, ref, dyn)
-            return dx, x
+            clr = jax.vmap(self._clearance)(dx, ref)
+            dx, h, _ = jax.vmap(lambda d, r, p: self._fly_sample(d, k, jnp.zeros(4), r, False, p, True))(dx, ref, dyn)
+            return (dx, hit), (x, h, clr)
 
         hist0 = jnp.zeros((B, H + 1, 6))
-        (dx, hist, prev_a, _), (Xc, U, A_st, O, MU, S0, S1, FZ) = jax.lax.scan(
-            contact_sample, (dx0, hist0, jnp.zeros((B, 4)), key), jnp.arange(self.Nc))
+        # the estimator's buffer: the stance's pose (it stood still) for every one of its W ticks
+        pbuf0 = jnp.repeat(jax.vmap(self._pose3)(dx0)[:, None], max(self.W, 1), 1)
+        (dx, hist, prev_a, _, hit, _), (Xc, U, A_st, O, MU, S0, S1, FZ, HC, CC) = jax.lax.scan(
+            contact_sample, (dx0, hist0, jnp.zeros((B, 4)), key, jnp.zeros(B, bool), pbuf0), jnp.arange(self.Nc))
         x_nc = srb(dx, shift)
         err = jnp.clip((x_nc - ref["x_ref"][:, self.Nc]) / self.sx, -20.0, 20.0)
         hist = jnp.concatenate([err[:, None], hist[:, :-1]], 1) if H else err[:, None]
         o_nc = jax.vmap(lambda h, pa, g: self.obs(h, pa, self.Nc, g))(hist, prev_a, ref["goal_obs"])
         if zp is not None:
             o_nc = jnp.concatenate([o_nc, zp], 1)
-        dx, Xf = jax.lax.scan(flight_sample, dx, jnp.arange(self.Nc, self.N))
+        (dx, hit), (Xf, HF, CF) = jax.lax.scan(flight_sample, (dx, hit), jnp.arange(self.Nc, self.N))
+        # per sample the geom (not a foot) touching the box, or -1; a hit: any before the last 3 flight samples
+        # (which reach for the landing: a leg on the box then is a landing)
+        hit_geom = jnp.concatenate([jnp.swapaxes(HC, 0, 1), jnp.swapaxes(HF, 0, 1)], 1)       # (B, N)
+        hit = (hit_geom[:, :self.N - 3] >= 0).any(1)
+        # per sample (its start) the legs' and trunk's clearance to the box (m) and its gradient d / d (x, z, pitch)
+        clr = jnp.concatenate([jnp.swapaxes(CC[0], 0, 1), jnp.swapaxes(CF[0], 0, 1)], 1)                 # (B, N)
+        clr_grad = jnp.concatenate([jnp.swapaxes(CC[1], 0, 1), jnp.swapaxes(CF[1], 0, 1)], 1)            # (B, N, 3)
         x_n = srb(dx, shift)
 
         # the landing: joint PD to the home pose; a fall is a trunk past max_tilt or sunk
@@ -604,18 +771,22 @@ class JumpEnv:
 
         def land_tick(carry, _):
             dx, fell = carry
-            dx = jax.vmap(lambda d, p, r: self._step(d, cmd, p, r))(dx, dyn, ref)
+            dx = jax.vmap(lambda d, p, r: self._step(d, cmd, p, r, True))(dx, dyn, ref)
             quat = dx.qpos[:, 3:7]
             tilt = jnp.arccos(jnp.clip(1.0 - 2.0 * (quat[:, 1] ** 2 + quat[:, 2] ** 2), -1.0, 1.0))
             fell = fell | (tilt > self.cfg.max_tilt) | (dx.qpos[:, 2] < self.cfg.min_height)
-            return (dx, fell), None
+            # the landing's trace every 10 ticks (diagnostics): base x, z, signed pitch, the feet's x and z
+            tr = jnp.concatenate([dx.qpos[:, jnp.array([0, 2])], jax.vmap(_pitch)(quat)[:, None],
+                                  dx.geom_xpos[:, self.feet_geoms, 0], dx.geom_xpos[:, self.feet_geoms, 2],
+                                  jax.vmap(self._hit_geom)(dx)[:, None].astype(jnp.float32)], 1)
+            return (dx, fell), tr
         n_land = int(round(self.cfg.land_time / TICK))
-        (dx, fell), _ = jax.lax.scan(land_tick, (dx, jnp.zeros(B, bool)), None, length=n_land)
+        (dx, fell), trace = jax.lax.scan(land_tick, (dx, jnp.zeros(B, bool)), None, length=n_land)
 
         sw = lambda v: jnp.swapaxes(v, 0, 1)
         X = jnp.concatenate([sw(Xc), x_nc[:, None], sw(Xf)[:, 1:], x_n[:, None]], 1)   # (B, N+1, 6)
         out = dict(X=X, U=sw(U), act=sw(A_st), obs=jnp.concatenate([sw(O), o_nc[:, None]], 1), fell=fell,
-                   mu=sw(MU) * ~self.swing[None], foot_z=sw(FZ))
+                   mu=sw(MU) * ~self.swing[None], foot_z=sw(FZ), land_trace=sw(trace[::10]), land_hit=sw(trace[:, :, 11]).max(1), hit=hit, hit_geom=hit_geom, clr=clr, clr_grad=clr_grad)
         if fd:
             S0, S1 = sw(S0), sw(S1)                                    # (B, Nc, nc, 6)
             s1 = S1[:, :, 0]                                           # copy 0: the jump itself, at k+1

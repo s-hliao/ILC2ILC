@@ -63,11 +63,17 @@ def owed(req):
         if os.path.basename(f).startswith("ref_"):
             continue
         try:
-            g = round(float(np.load(f)["goal"][0]), 4)
+            g = gkey(np.load(f)["goal"])
             have[g] = have.get(g, 0) + 1
         except Exception:
             pass
-    return {round(g, 4): max(0, req["reps"] - have.get(round(g, 4), 0)) for g in req["goals"]}
+    return {gkey(g): max(0, req["reps"] - have.get(gkey(g), 0)) for g in req["goals"]}
+
+
+def gkey(g):
+    """A goal -> (x, h): deploy.py writes (x, h) pairs; a bare x (older requests) is flat."""
+    g = np.atleast_1d(np.asarray(g, float))
+    return (round(float(g[0]), 4), round(float(g[1]) if len(g) > 1 else 0.0, 4))
 
 
 def aborted():
@@ -75,10 +81,16 @@ def aborted():
 
 
 def fly(req, g, n):
-    ref = os.path.join(req["episode_dir"], f"ref_{g:.4f}.npz")
+    gx, gh = g
+    ref = os.path.join(req["episode_dir"], f"ref_{gx:.4f}" + (f"_{gh:.4f}" if gh else "") + ".npz")
     subprocess.run([sys.executable, os.path.join(HERE, "policy_jump_node.py"), "prepare", "--policy", req["policy"],
-                    "--goal", str(g), "0", "--out", ref], check=True)
-    common = [f"policy_dir:={req['policy']}", f"reference_file:={ref}", f"jump_dx:={g}", "jump_dz:=0.0",
+                    "--goal", str(gx), str(gh), "--out", ref], check=True)
+    bx = json.load(open(os.path.splitext(ref)[0] + "_box.json"))
+    if bx["box_height"] > 0:
+        print(f"   BOX for this goal: front face {bx['box_x_front']:.3f} m ahead of the standing CoM, "
+              f"{bx['box_height']:.3f} m tall -- place it before the first jump", flush=True)
+    common = [f"policy_dir:={req['policy']}", f"reference_file:={ref}", f"jump_dx:={gx}", f"jump_dz:={gh}",
+              f"box_x_front:={bx['box_x_front']}", f"box_height:={bx['box_height']}",
               f"episode_dir:={req['episode_dir']}", f"episode_tag:={req['robot']}_it{req['it']}", f"max_trials:={n}",
               f"menagerie_root:={a.menagerie_root}"]
     if a.backend == "sim":
@@ -95,7 +107,7 @@ def fly(req, g, n):
     time.sleep(8)                                         # the node loads the plan and the policy
     for i in range(n):
         while True:
-            c = input(f"   goal {g:.4f}, jump {i + 1}/{n}: reset the robot at the start mark, then Enter "
+            c = input(f"   goal {gx:.4f},{gh:.4f}, jump {i + 1}/{n}: reset the robot at the start mark, then Enter "
                       f"(d = damp, a = abort) > ").strip().lower()
             if c == "d":
                 subprocess.run(["ros2", "service", "call", "/damp", "std_srvs/srv/Trigger"], capture_output=True)

@@ -36,6 +36,8 @@ ap.add_argument("--seed", type=int, default=0)
 ap.add_argument("--horizon", type=int, default=1, help="the planner's target and the IDM's input: the error H samples "
                 "ahead (H > 1: a less delay-sensitive inverse model; stored as P_h)")
 ap.add_argument("--gpu", default="0")
+ap.add_argument("--plane", action="store_true", help="2D goal plane: goals uniform over the bank's valid region (flat and box jumps), evals on its grid")
+ap.add_argument("--est-window", type=float, default=0.0, help="s: the policy observes the robots' estimator (jump.Config)")
 a = ap.parse_args()
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", a.gpu)
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
@@ -44,12 +46,12 @@ import jax  # noqa: E402
 import jax.numpy as jnp  # noqa: E402
 import numpy as np  # noqa: E402
 
-from ilc_mjx.jump import JumpEnv  # noqa: E402
+from ilc_mjx.jump import Config, JumpEnv  # noqa: E402
 
 os.makedirs(a.out, exist_ok=True)
 pdir0 = os.path.dirname(os.path.abspath(a.policy))
 bank = json.load(open(a.bank or os.path.join(pdir0, "bank.json")))
-env = JumpEnv(bank)
+env = JumpEnv(bank, Config(est_window=a.est_window))
 Nc, Ndc, N = env.Nc, env.Ndc, env.N
 NZ = len(JumpEnv.DYN_KEYS)
 mask = np.ones((Nc, 4))
@@ -73,7 +75,7 @@ env.priv_dim = NZ if a.priv else 0
 for b in range(a.batches):
     B = 256
     for kind in ("planner", "idm"):
-        goals = np.stack([rng.uniform(*a.goals, B), np.zeros(B)], 1)
+        goals = env.sample_plane_goals(B, rng) if a.plane else np.stack([rng.uniform(*a.goals, B), np.zeros(B)], 1)
         ref = env.references(goals)
         dyn = env.dyn_arrays(env.sample_dyn(B, rng) if a.dr else nominal(B))
         q_off, a_off = env.explore_noise(B, rng, a.explore[0], 0.0 if kind == "planner" else a.explore[1])
@@ -164,7 +166,7 @@ json.dump(dict(best="policy", eval_goals=None, members=[dict(name="policy", grou
 env.priv_dim = 0
 r_scale, qe = float(bank["r_scale"]), np.asarray(bank["qe"], float)
 for name, B, Pd in (("nominal", 16, nominal(16)), ("DR", 128, env.sample_dyn(128, np.random.default_rng(12345)))):
-    goals = np.stack([np.linspace(*a.goals, B), np.zeros(B)], 1)
+    goals = env.sample_plane_goals(B, rng) if a.plane else np.stack([np.linspace(*a.goals, B), np.zeros(B)], 1)
     ref = env.references(goals)
     xr = np.asarray(ref["x_ref"])
     tg = xr[:, N].copy()

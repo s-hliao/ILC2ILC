@@ -1174,6 +1174,13 @@ def group_main(gi, gpu, a, variants, bank, C_sec, C_cl=None):
             p.grad.mul_(s.view(M, *([1] * (p.grad.dim() - 1))) if p.shape[0] == M
                         else s.repeat_interleave(2).view(2 * M, *([1] * (p.grad.dim() - 1))))
 
+    def finite_grads(params):
+        """False (the step skipped) when any gradient is non-finite."""
+        ok = all(bool(torch.isfinite(p.grad).all()) for p in params if p.grad is not None)
+        if not ok:
+            st["bad_steps"] = st.get("bad_steps", 0) + 1
+        return ok
+
     def update(b):
         c = stage_w()
         o, act, o2, msk = b["o"], b["a"] * b["mask"], b["o2"], b["mask"]
@@ -1259,7 +1266,8 @@ def group_main(gi, gpu, a, variants, bank, C_sec, C_cl=None):
         opt_q.zero_grad(set_to_none=True)
         loss_q.backward()
         clip_members(qparams)
-        opt_q.step()
+        if finite_grads(qparams):
+            opt_q.step()
         # actor: SAC, plus the Qu-weighted pull toward the ILC's forces on its best trials
         a_pi, logp, _ = actor.sample(o)
         q_pi = qnet(o, a_pi * msk).min(1).values
@@ -1388,7 +1396,8 @@ def group_main(gi, gpu, a, variants, bank, C_sec, C_cl=None):
                    + st["b_a"] * l_a + st["b_w"] * l_w).sum()
         opt_pi.zero_grad(set_to_none=True)
         loss_pi.backward()
-        opt_pi.step()
+        if finite_grads(list(actor.parameters())):
+            opt_pi.step()
         if st.get("actor_ema") is not None:
             with torch.no_grad():
                 ep_, ap_ = list(st["actor_ema"].parameters()), list(actor.parameters())
@@ -1397,7 +1406,8 @@ def group_main(gi, gpu, a, variants, bank, C_sec, C_cl=None):
         la = -(log_alpha[:, None] * (logp.detach() + cfg["target_entropy"])).mean(1).sum()
         opt_alpha.zero_grad(set_to_none=True)
         la.backward()
-        opt_alpha.step()
+        if finite_grads([log_alpha]):
+            opt_alpha.step()
         with torch.no_grad():
             torch._foreach_mul_(tparams, 1 - cfg["tau"])
             torch._foreach_add_(tparams, qparams, alpha=cfg["tau"])
@@ -1563,7 +1573,18 @@ def group_main(gi, gpu, a, variants, bank, C_sec, C_cl=None):
                     log(f"rollout failed: {header.get('error')}")
                     n_sent -= 1
                     continue
-                buf.add(ep, online=True)
+                if np.isfinite(ep["info"][:3]).all() and all(   # (info's rear_ms is NaN by design)
+                        np.isfinite(v).all() for k, v in ep.items()
+                        if k != "info" and isinstance(v, np.ndarray) and v.dtype.kind == "f"):
+                    buf.add(ep, online=True)
+                else:   # a sim blow-up (MJX contact NaN): kept out of the replay, it would poison every update
+                    st["bad_eps"] = st.get("bad_eps", 0) + 1
+                    bad = [k for k, v in ep.items() if isinstance(v, np.ndarray) and v.dtype.kind == "f"
+                           and not np.isfinite(v[:3] if k == "info" else v).all()]
+                    log(f"rollout {n_done + 1}: non-finite episode dropped ({', '.join(bad)}; "
+                        f"{st['bad_eps']} so far)")
+                    if st["bad_eps"] > 20 and st["bad_eps"] > 0.1 * (n_done + 1):
+                        raise SystemExit("over 10% of the rollouts non-finite: the simulator, not a one-off")
                 n_done += 1
                 st["prog"] = n_done / max(cfg["online_episodes"], 1)
                 co["dirty"] = True
@@ -1683,6 +1704,7 @@ def stage_eval(a, box, bank):
     for x in rows:
         by.setdefault(x["member"], []).append(0.01 * x["landing_cost"] + 20 * x["fell"])
     score = {k: float(np.mean(v)) for k, v in by.items()}
+    score = {k: (v if np.isfinite(v) else float("inf")) for k, v in score.items()}   # a NaN snapshot is never best
     for m in man["members"]:
         m["score"] = score.get(m["name"], m.get("score"))
     man["best"] = min(score, key=score.get)

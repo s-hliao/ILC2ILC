@@ -24,13 +24,13 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--policy", required=True, help="policy dir (fada_train.py's OUT/policy)")
 ap.add_argument("--robots", nargs="+", required=True)
 ap.add_argument("--out", required=True)
-ap.add_argument("--goals", type=float, nargs="+", default=[0.425, 0.5, 0.575])
+ap.add_argument("--goals", nargs="+", default=["0.425", "0.5", "0.575"], help="X (flat) or X,H (onto a box of height H)")
 ap.add_argument("--iters", type=int, default=10)
 ap.add_argument("--rank", type=int, default=4)
 ap.add_argument("--steps", type=int, default=500)
 ap.add_argument("--lr", type=float, default=1e-3)
 ap.add_argument("--seed", type=int, default=9001)
-ap.add_argument("--eval", default="final", choices=("val", "final", "holdout", "none"))
+ap.add_argument("--eval", default="final", choices=("val", "final", "holdout", "planeval", "planefinal", "none"))
 ap.add_argument("--perturbed", action="store_true")
 ap.add_argument("--eval-episodes", type=int, default=4)
 ap.add_argument("--gpu", default="0")
@@ -47,7 +47,15 @@ from ilc_mjx.jump import JumpEnv  # noqa: E402
 WS, CWS = "/home/henry/ilc_ws", "/ilc_ws"
 cpath = lambda p: CWS + os.path.abspath(p)[len(WS):]
 EVAL = dict(val=([0.45, 0.4625, 0.5375, 0.55], 301), final=([0.4375, 0.4875, 0.5125, 0.5625], 701),
-            holdout=([0.4375, 0.4625, 0.4875, 0.5125, 0.5375, 0.5625], 1301))   # holdout: the frozen final test only
+            holdout=([0.4375, 0.4625, 0.4875, 0.5125, 0.5375, 0.5625], 1301),   # holdout: the frozen final test only
+            # the 2D goal plane (deploy.py's planeval / planefinal)
+            planeval=([0.4375, 0.5625, (0.53, 0.11), (0.51, 0.13), (0.56, 0.12), (0.52, 0.16), (0.4625, 0.06),
+                       (0.6125, 0.07)], 301),
+            planefinal=([0.4875, 0.6125, (0.52, 0.12), (0.54, 0.14), (0.57, 0.11), (0.51, 0.17), (0.4875, 0.035),
+                         (0.6375, 0.09)], 701))
+gvec = lambda g: (tuple(float(v) for v in g) if isinstance(g, (tuple, list)) else
+                  tuple(float(v) for v in g.split(",")) if isinstance(g, str) and "," in g else (float(g), 0.0))
+a.goals = [gvec(g) for g in a.goals]
 bank = json.load(open(os.path.join(a.policy, "bank.json")))
 Ndc, Nsc, _ = bank["phases"]
 Nc = Ndc + Nsc
@@ -73,7 +81,7 @@ def export(w, d):
 
 
 def fly(pdir, conds, jumps, seed, json_out, save_dir="", episodes=1):
-    j = " ".join(f"--jump {g} 0" for g in jumps)
+    j = " ".join(f"--jump {gvec(g)[0]} {gvec(g)[1]}" for g in jumps)
     sd = f"--save-dir {cpath(save_dir)}" if save_dir else ""
     cmd = (f"cd /ilc_ws && source install/setup.bash && export ROS_LOCALHOST_ONLY=1 OMP_NUM_THREADS=1 && "
            f"python3 install/ilc_quad/lib/ilc_quad/dilc_execute.py run --policy {cpath(pdir)} --member policy "
@@ -153,7 +161,7 @@ def run_robot(robot):
         line = []
         for f in sorted(os.listdir(rdir)) if os.path.isdir(rdir) else []:
             z = np.load(os.path.join(rdir, f))
-            g = float(z["goal"][0])
+            g = float(z["goal"][0]) + 10 * float(z["goal"][1])   # (a box goal's height folded in, for the log)
             obs, act, fell = np.asarray(z["obs"], float), np.asarray(z["act"], float), bool(z["fell"])
             J = float(0.01 * np.asarray(z["rc"])[:, 2].sum())
             hist.append(dict(it=it, goal=g, J=J, fell=fell))

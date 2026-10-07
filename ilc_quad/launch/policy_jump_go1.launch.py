@@ -7,7 +7,7 @@ policy_jump_node (IlcJumpNode flying the policy, no learning; each jump saved as
     ros2 service call /start_trial std_srvs/srv/Trigger      # one jump
     ros2 service call /damp std_srvs/srv/Trigger             # any time: go limp
 
-Flat ground only (box_height 0). The same safety layers as ilc_jump_go1.launch.py; see its notes before launching
+Flat ground (box_height 0) or onto a box: box_x_front / box_height from `policy_jump_node.py prepare` (its _box.json). The same safety layers as ilc_jump_go1.launch.py; see its notes before launching
 (low-level mode, OptiTrack, a hand on /damp). One goal per launch: relaunch for the next goal.
 """
 
@@ -25,7 +25,7 @@ ARGS = [
     ("pose_type", "pose", "pose (geometry_msgs/PoseStamped) or odometry (nav_msgs/Odometry)"),
     ("menagerie_root", "/mujoco_menagerie", "mujoco_menagerie checkout (model parameters)"),
     ("box_x_front", "0.25", "box front face, m ahead of the standing CoM"),
-    ("box_height", "0.0", "flat ground (the policy jumps have no box)"),
+    ("box_height", "0.0", "the box height (0: flat ground); from policy_jump_node.py prepare's _box.json"),
     ("jump_dx", "0.50", "CoM displacement forward, m"),
     ("jump_dz", "0.0", "CoM displacement up, m"),
     ("max_trials", "1000", "jumps per launch (the operator decides)"),

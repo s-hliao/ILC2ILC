@@ -15,7 +15,8 @@ Parameters on top of ilc_jump_sim's:
 reference_file must be the policy's plan for the goal (the bank's interpolation, which the policy was trained on):
 `prepare` writes it, and the node refuses any other.
 
-    python3 policy_jump_node.py prepare --policy DIR --goal 0.5 0 --out /tmp/ref_0.500.npz
+    python3 policy_jump_node.py prepare --policy DIR --goal 0.5 0 --out /tmp/ref_0.500.npz   # (or --goal 0.52 0.12: a box;
+                                                     # its placement goes to /tmp/ref_..._box.json -> box_x_front, box_height)
     ros2 launch ilc_quad policy_jump_go1.launch.py pose_topic:=... policy_dir:=DIR reference_file:=/tmp/ref_0.500.npz \
         jump_dx:=0.5 jump_dz:=0 episode_dir:=DIR/real episode_tag:=go1
     ros2 service call /start_trial std_srvs/srv/Trigger          # one jump
@@ -39,10 +40,15 @@ def prepare(argv):
     a = ap.parse_args(argv)
     bank = GoalBank(json.load(open(os.path.join(a.policy, "bank.json"))))
     ref, box, extrap = bank.reference(np.asarray(a.goal, float))
-    if box is not None:
-        raise SystemExit("prepare: this goal's plan has a box; the policy jumps are flat-ground")
     np.savez(a.out, **ref)
-    print(f"{a.out}: the plan for goal {a.goal}{' (EXTRAPOLATED past the bank: fly with care)' if extrap else ''}")
+    # the box this plan jumps onto (none: flat): the node's box_x_front / box_height, and where to put the real box --
+    # its front face box_x_front ahead of the robot's standing CoM, box_height tall
+    side = os.path.splitext(a.out)[0] + "_box.json"
+    json.dump(dict(goal=list(map(float, a.goal)), box_x_front=float(box["x_front"]) if box else 0.25,
+                   box_height=float(box["height"]) if box else 0.0), open(side, "w"), indent=1)
+    print(f"{a.out}: the plan for goal {a.goal}{' (EXTRAPOLATED past the bank: fly with care)' if extrap else ''}"
+          + (f"; BOX: front face {box['x_front']:.3f} m ahead of the standing CoM, {box['height']:.3f} m tall ({side})"
+             if box else " (flat)"))
 
 
 def node_main(argv=None):

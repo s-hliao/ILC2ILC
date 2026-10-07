@@ -46,6 +46,8 @@ ap.add_argument("--seed", type=int, default=0)
 ap.add_argument("--nominal", action="store_true", help="no DR (a control: our sim stage's update, continued)")
 ap.add_argument("--width", type=int, default=0, help="student: a fresh actor of this hidden width (the width ablation)")
 ap.add_argument("--gpu", default="0")
+ap.add_argument("--plane", action="store_true", help="2D goal plane: goals uniform over the bank's valid region (flat and box jumps), evals on its grid")
+ap.add_argument("--est-window", type=float, default=0.0, help="s: the policy observes the robots' estimator (jump.Config)")
 a = ap.parse_args()
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", a.gpu)
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
@@ -54,12 +56,12 @@ import jax  # noqa: E402
 import jax.numpy as jnp  # noqa: E402
 import numpy as np  # noqa: E402
 
-from ilc_mjx.jump import JumpEnv  # noqa: E402
+from ilc_mjx.jump import Config, JumpEnv  # noqa: E402
 
 os.makedirs(a.out, exist_ok=True)
 pdir0 = os.path.dirname(os.path.abspath(a.init))
 bank = json.load(open(a.bank or os.path.join(pdir0, "bank.json")))
-env = JumpEnv(bank)
+env = JumpEnv(bank, Config(est_window=a.est_window))
 Nc, Ndc, N = env.Nc, env.Ndc, env.N
 D = np.asarray(bank["sx"], float)
 qe = np.asarray(bank["qe"], float)
@@ -188,14 +190,14 @@ rng = np.random.default_rng(a.seed)
 # a fixed evaluation set: 128 DR robots x goals over the range, and the nominal robot at 16 goals
 erng = np.random.default_rng(12345)
 EB = 128
-e_goals = np.stack([np.linspace(a.goals[0], a.goals[1], EB), np.zeros(EB)], 1)
+e_goals = (env.sample_plane_goals(EB, np.random.default_rng(777)) if a.plane else np.stack([np.linspace(a.goals[0], a.goals[1], EB), np.zeros(EB)], 1))
 e_ref = env.references(e_goals)
 e_tg = targets_of(e_goals, e_ref)
 e_dyn = env.dyn_arrays(env.sample_dyn(EB, erng))
-n_goals = np.stack([np.linspace(a.goals[0], a.goals[1], 16), np.zeros(16)], 1)
+n_goals = (env.plane_grid(0.05) if a.plane else np.stack([np.linspace(a.goals[0], a.goals[1], 16), np.zeros(16)], 1))
 n_ref = env.references(n_goals)
 n_tg = targets_of(n_goals, n_ref)
-n_dyn = env.dyn_arrays(np.tile([1.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 0.0], (16, 1)))
+n_dyn = env.dyn_arrays(np.tile([1.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 0.0], (len(n_goals), 1)))
 
 
 def evaluate(w_):
@@ -221,7 +223,7 @@ for it in range(a.iters + 1):
         break
     t0 = time.time()
     B = a.batch
-    goals = np.stack([rng.uniform(*a.goals, B), np.zeros(B)], 1)
+    goals = env.sample_plane_goals(B, rng) if a.plane else np.stack([rng.uniform(*a.goals, B), np.zeros(B)], 1)
     ref = env.references(goals)
     P = nominal_dyn(B) if a.nominal else env.sample_dyn(B, rng)
     dyn = env.dyn_arrays(P)
