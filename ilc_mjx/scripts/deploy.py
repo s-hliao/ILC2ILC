@@ -434,9 +434,12 @@ def request_jumps(pdir, robot, it, rdir, out):
     for g in a.goals:
         ref = os.path.join(rdir, f"ref_{gfile(g)}.npz")
         bx = np.asarray(env.references([gvec(g)])["box_xh"])[0] if env.has_box else np.array([0.25, 0.0])
-        box_args = f" box_x_front:={bx[0]:.4f} box_height:={bx[1]:.4f}" if bx[1] >= 0.005 else ""
+        from dilc_execute import GoalBank as _GB
+        _gb = _GB(dict(bank, plans=[dict(p_, path=host_path(p_["path"])) for p_ in bank["plans"]]))
+        margin = json.loads(str(_gb.reference(gvec(g))[0]["config"]))["margin"]   # the plan's: the node must match it
+        box_args = (f" box_x_front:={bx[0]:.4f} box_height:={bx[1]:.4f}" if bx[1] >= 0.005 else "") + f" margin:={margin}"
         lines += [f"## goal {gname(g)} m" + (f" -- BOX: front face {bx[0]:.3f} m ahead of the standing CoM, "
-                                            f"{bx[1]:.3f} m tall" if box_args else ""), "```",
+                                            f"{bx[1]:.3f} m tall" if bx[1] >= 0.005 else " (flat)"), "```",
                   f"python3 policy_jump_node.py prepare --policy {pdir} --goal {g[0]} {g[1]} --out {ref}",
                   f"ros2 launch ilc_quad policy_jump_go1.launch.py pose_topic:=<mocap topic> policy_dir:={pdir} \\",
                   f"    reference_file:={ref} jump_dx:={g[0]} jump_dz:={g[1]}{box_args} episode_dir:={rdir} episode_tag:={robot}_it{it}",

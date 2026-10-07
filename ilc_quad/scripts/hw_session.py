@@ -90,15 +90,19 @@ def fly(req, g, n):
         print(f"   BOX for this goal: front face {bx['box_x_front']:.3f} m ahead of the standing CoM, "
               f"{bx['box_height']:.3f} m tall -- place it before the first jump", flush=True)
     common = [f"policy_dir:={req['policy']}", f"reference_file:={ref}", f"jump_dx:={gx}", f"jump_dz:={gh}",
-              f"box_x_front:={bx['box_x_front']}", f"box_height:={bx['box_height']}",
+              f"box_x_front:={bx['box_x_front']}", f"box_height:={bx['box_height']}", f"margin:={bx['margin']}",
               f"episode_dir:={req['episode_dir']}", f"episode_tag:={req['robot']}_it{req['it']}", f"max_trials:={n}",
               f"menagerie_root:={a.menagerie_root}"]
     if a.backend == "sim":
-        r = subprocess.run(["ros2", "launch", "ilc_quad", "policy_jump_sim.launch.py", *common],
-                           capture_output=True, text=True)
-        for ln in r.stdout.splitlines():
-            if "landing error" in ln:
-                print("   " + ln.split("]: ")[-1].replace("\x1b[0m", ""), flush=True)
+        # the sim scene only has a box with box:=true (else its height is forced to 0 and the box plan is refused)
+        r = subprocess.run(["ros2", "launch", "ilc_quad", "policy_jump_sim.launch.py", *common,
+                            f"box:={'true' if bx['box_height'] > 0 else 'false'}"], capture_output=True, text=True)
+        hits = [ln for ln in r.stdout.splitlines() if "landing error" in ln]
+        for ln in hits:
+            print("   " + ln.split("]: ")[-1].replace("\x1b[0m", ""), flush=True)
+        if len(hits) < n:                                 # surface the launch's failure instead of waiting silently
+            print("   the sim launch flew no jump; its last output:\n" + "\n".join(
+                "      " + ln for ln in (r.stdout + r.stderr).splitlines()[-15:]), flush=True)
         return
     p = subprocess.Popen(["ros2", "launch", "ilc_quad", "policy_jump_go1.launch.py", *common, "with_bridge:=false",
                           "exit_when_done:=true", f"pose_topic:={a.pose_topic}", f"pose_type:={a.pose_type}",

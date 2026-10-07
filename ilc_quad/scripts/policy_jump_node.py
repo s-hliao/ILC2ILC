@@ -44,8 +44,12 @@ def prepare(argv):
     # the box this plan jumps onto (none: flat): the node's box_x_front / box_height, and where to put the real box --
     # its front face box_x_front ahead of the robot's standing CoM, box_height tall
     side = os.path.splitext(a.out)[0] + "_box.json"
+    # and the plan's own TO settings the node must be launched with (else it re-solves its own plan and will not fly
+    # the policy's): margin -- the box plans' is 0.9, the launch files' default 0.85
+    cfg = json.loads(str(ref["config"]))
     json.dump(dict(goal=list(map(float, a.goal)), box_x_front=float(box["x_front"]) if box else 0.25,
-                   box_height=float(box["height"]) if box else 0.0), open(side, "w"), indent=1)
+                   box_height=float(box["height"]) if box else 0.0, margin=float(cfg["margin"])), open(side, "w"),
+              indent=1)
     print(f"{a.out}: the plan for goal {a.goal}{' (EXTRAPOLATED past the bank: fly with care)' if extrap else ''}"
           + (f"; BOX: front face {box['x_front']:.3f} m ahead of the standing CoM, {box['height']:.3f} m tall ({side})"
              if box else " (flat)"))
