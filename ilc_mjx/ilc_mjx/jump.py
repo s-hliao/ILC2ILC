@@ -167,7 +167,27 @@ class JumpEnv:
 
     # -- goals ------------------------------------------------------------------------------
     def weights(self, goals):
-        """Each goal's weights over the bank's plans (dilc_execute.GoalBank.weights)."""
+        """Each goal's weights over the bank's plans (dilc_execute.GoalBank.weights). For a 2D bank, its triangle
+        search batched over goals and triangles: the same rule (the triangle whose least barycentric weight is the
+        least negative, then the smallest area, then the first in combination order) without its per-goal loop."""
+        goals = np.asarray(goals, float).reshape(-1, 2)
+        G = np.asarray(self.goals, float)
+        if len(G) > 2 and np.linalg.matrix_rank(G - G[0], tol=1e-6) == 2:
+            if getattr(self, "_tri", None) is None:
+                import itertools
+                T = np.array(list(itertools.combinations(range(len(G)), 3)))
+                M = np.stack([G[T[:, 1]] - G[T[:, 0]], G[T[:, 2]] - G[T[:, 0]]], 2)       # (T, 2, 2) columns
+                det = np.abs(np.linalg.det(M))
+                keep = det >= 1e-12
+                self._tri = (T[keep], M[keep], det[keep])
+            T, M, det = self._tri
+            l12 = np.linalg.solve(M[None], (goals[:, None] - G[T[:, 0]][None])[..., None])[..., 0]   # (n, T, 2)
+            lam = np.concatenate([1.0 - l12.sum(-1, keepdims=True), l12], -1)             # (n, T, 3)
+            k1 = -np.minimum(lam.min(-1), 0.0)
+            j = np.argmin(np.where(k1 == k1.min(1, keepdims=True), det[None], np.inf), 1)
+            w = np.zeros((len(goals), len(G)))
+            np.put_along_axis(w, T[j], lam[np.arange(len(goals)), j], 1)
+            return w
         from dilc_execute import GoalBank
         gb = getattr(self, "_gb", None)
         if gb is None:

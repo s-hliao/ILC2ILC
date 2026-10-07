@@ -16,6 +16,8 @@ nominal simulator, every trial used. Per robot, from the same starting policy:
     4. the network regresses onto every trial's targets (weights halving with age: all runs used, the latest count
        most), anchored to its own previous actions on the GPU sim's states over the goal range, weight
        --anchor-w x N0 / (N0 + real trials)
+  (--select ig: each iteration flies only --per-iter goals of the valid plane's grid, the ones whose jumps would best
+  inform the network: the most posterior landing variance removed over the plane, the network linearized in its weights)
   then the evaluation on the robot: --eval val (goals between the training goals, seed 301: for tuning) or final
   (the reserved test, goals 0.4375..0.5625 x 4 seeds from 701, and --perturbed its 8 perturbations).
 -> OUT/<robot>/: per iteration the policy and the real trials, deploy.log, summary.json.
@@ -132,6 +134,19 @@ ap.add_argument("--jac-dyn", type=float, nargs=8, default=None, metavar="P",
                 help="the ILC's Jacobians from a fixed, deliberately different model (JumpEnv.DYN_KEYS: mass_scale com_x "
                      "motor_scale curve speed_scale friction joint_friction payload) -- how wrong may the model be?")
 ap.add_argument("--jac-flip", action="store_true", help="gn: the landing sensitivity negated (the 180-degree control)")
+ap.add_argument("--select", default="fixed", choices=("fixed", "ig", "random"),
+                help="the goals the robot flies each iteration: fixed (every --goals goal), or --per-iter goals of the "
+                     "valid plane's grid (--cand-step; --goals ignored): ig the ones whose jumps best inform the network "
+                     "-- greedy, the most posterior variance of the landing removed over the whole grid, the network "
+                     "linearized in its weights (the landing's kernel J J', J = d landing / d weights: the closed-loop "
+                     "landing sensitivity through the network's actions along the jump), given every jump flown so "
+                     "far; random a uniform draw (the control)")
+ap.add_argument("--per-iter", type=int, default=3)
+ap.add_argument("--cand-step", type=float, default=0.025)
+ap.add_argument("--ig-noise", type=float, default=0.1,
+                help="ig: a jump's landing noise variance, relative to the median prior variance of a goal's landing")
+ap.add_argument("--skip-start-eval", action="store_true",
+                help="evaluate only the final policy (the starting one's evaluation is the same zero-shot every run)")
 ap.add_argument("--gpu", default="1")
 a = ap.parse_args()
 # goals are (x, h) pairs: h = 0 a flat jump, h > 0 onto a box h high (a box bank)
@@ -172,6 +187,8 @@ gfile = lambda g: f"{g[0]:.4f}" + (f"_{g[1]:.4f}" if g[1] else "")  # for file n
 
 bank = json.load(open(os.path.join(a.policy, "bank.json")))
 env = JumpEnv(bank, Config(est_window=a.est_window))
+if a.select != "fixed":                          # the candidates: the valid plane's grid
+    a.goals = [gkey(g) for g in env.plane_grid(a.cand_step)]
 Nc, Ndc = env.Nc, env.Ndc
 gamma = float(bank.get("gamma", 0.99))
 D = np.asarray(bank["sx"], float)
@@ -339,6 +356,68 @@ def landing_sensitivity(z, w, gi, An, Bn):
     return S
 
 
+LW = np.array([1 / 0.05, 1 / 0.03, 1 / 0.1])          # the landing's tolerances (m, m, rad): its rows comparable
+_MASKJ = jnp.asarray(mask, jnp.float32)
+from jax.flatten_util import ravel_pytree  # noqa: E402
+_, UNRAVEL = ravel_pytree(W0)
+
+
+@jax.jit
+def land_param_rows(wf, O, S):
+    """(n, 3, P): d landing / d network weights per jump -- its closed-loop landing sensitivity S (n, 3, Nc, 4)
+    pulled back through the actions the network gives at the jump's states O (n, Nc, od)."""
+    def one(o, s):
+        _, vjp = jax.vjp(lambda wf_: actor_mean(UNRAVEL(wf_), o) * _MASKJ, wf)
+        return jax.vmap(lambda s_: vjp(s_)[0])(s)
+    return jax.vmap(one)(O, S)
+
+
+def select_goals(w, sim, An, Bn, seen, rng):
+    """--select: this iteration's goals (indices into a.goals) and a log note. ig: the network linearized in its
+    weights, a jump at goal g observes its landing J_g dtheta (+ noise), J_g = d landing / d weights (tolerance-
+    scaled); with an isotropic prior on dtheta the landings over the grid are jointly Gaussian with kernel J J'. Given
+    the jumps flown so far (`seen`: (goal index, real states), J at the robot's own states), greedily the goals whose
+    landings remove the most posterior variance of the landing summed over the whole grid (the learning transfers
+    through the shared weights: a goal informs every goal its J overlaps)."""
+    M = len(a.goals)
+    if a.select == "random":
+        return sorted(int(i) for i in rng.choice(M, a.per_iter, replace=False)), "random"
+    O = [np.asarray(sim["obs"][gi], float)[:Nc] for gi in range(M)] + [o for _, o in seen]
+    S = [landing_sensitivity(dict(obs=sim["obs"][gi]), w, gi, An, Bn) for gi in range(M)] \
+        + [landing_sensitivity(dict(obs=o), w, gi, An, Bn) for gi, o in seen]
+    n = len(O)
+    pad = -n % 32                                        # (few shapes for the jit)
+    Oj = np.concatenate([np.stack(O), np.zeros((pad,) + O[0].shape)])
+    Sj = np.concatenate([np.stack(S) * LW[None, :, None, None], np.zeros((pad, 3, Nc, 4))])
+    wf = ravel_pytree(w)[0]
+    R = np.asarray(land_param_rows(wf, jnp.asarray(Oj, jnp.float32), jnp.asarray(Sj, jnp.float32)), float)[:n]
+    R = R.reshape(3 * n, -1)
+    K = R @ R.T
+    C = 3 * M
+    noise = a.ig_noise * np.median(np.diag(K)[:C])
+    Sig = K[:C, :C]
+    tr0 = np.trace(Sig)
+    if seen:                                             # the posterior given the jumps flown
+        Kca = K[:C, C:]
+        Sig = Sig - Kca @ np.linalg.solve(K[C:, C:] + noise * np.eye(3 * len(seen)), Kca.T)
+    tr1 = np.trace(Sig)
+    chosen = []
+    for _ in range(a.per_iter):
+        best_m, best_r, best_u = None, -1.0, None
+        for m in range(M):
+            if m in chosen:
+                continue
+            Km = Sig[:, 3 * m:3 * m + 3]
+            U = np.linalg.solve(Sig[3 * m:3 * m + 3, 3 * m:3 * m + 3] + noise * np.eye(3), Km.T)
+            r = float((Km * U.T).sum())                  # tr(K_Tm (K_mm + noise)^-1 K_mT): the variance removed
+            if r > best_r:
+                best_m, best_r, best_u = m, r, (Km, U)
+        chosen.append(best_m)
+        Sig = Sig - best_u[0] @ best_u[1]
+    return chosen, (f"ig: grid landing variance {100 * tr1 / tr0:.0f}% of the prior left, "
+                    f"{100 * np.trace(Sig) / tr0:.0f}% after these")
+
+
 def clearance_rows(zs, w, gi, An, Bn, g):
     """Per trial at goal g, the GN rows keeping the legs' and trunk's clearance to the box at --clear: its least
     clearance (jump.clearance_rec, from the trial's record) in single stance and in flight; under --clear, a row
@@ -383,6 +462,8 @@ def anchor_goals(n=16, rng_seed=0):
     short jumps onto a box would put it under the standing feet)."""
     G = np.array(a.goals, float)
     rng = np.random.default_rng(1234 + rng_seed)
+    if a.select != "fixed":                     # the training goals are the whole plane's grid: uniform over it
+        return env.sample_plane_goals(n, rng)
 
     def line(F, m):
         return np.stack([np.linspace(F[:, 0].min() - 0.025, F[:, 0].max() + 0.025, m), np.full(m, F[0, 1])], 1)
@@ -424,14 +505,14 @@ def gate(w_old, w_new, O_real, g_lo, g_hi, it):
                 f"max action change on the robot's states {da:.3f}")
 
 
-def request_jumps(pdir, robot, it, rdir, out):
+def request_jumps(pdir, robot, it, rdir, out, goals):
     """--backend manual: the jumps this iteration needs, written for the operator (REQUEST.md), then wait for their
     episodes (policy_jump_node.py writes them) in rdir."""
     os.makedirs(rdir, exist_ok=True)
-    need = {gkey(g): a.reps for g in a.goals}
-    lines = [f"# {robot}, iteration {it}: {len(a.goals) * a.reps} jumps", "",
+    need = {gkey(g): a.reps for g in goals}
+    lines = [f"# {robot}, iteration {it}: {len(goals) * a.reps} jumps", "",
              f"Policy: `{pdir}`. Save the episodes to `{rdir}` (episode_dir). For each goal, {a.reps} jump(s):", ""]
-    for g in a.goals:
+    for g in goals:
         ref = os.path.join(rdir, f"ref_{gfile(g)}.npz")
         bx = np.asarray(env.references([gvec(g)])["box_xh"])[0] if env.has_box else np.array([0.25, 0.0])
         from dilc_execute import GoalBank as _GB
@@ -447,9 +528,9 @@ def request_jumps(pdir, robot, it, rdir, out):
     lines += ["A fall is data too: keep its episode (the update rolls that goal back). To abort the run, write "
               f"`{os.path.join(rdir, 'ABORT')}`.", ""]
     open(os.path.join(out, f"it{it}", "REQUEST.md"), "w").write("\n".join(lines))
-    json.dump(dict(robot=robot, it=it, policy=pdir, episode_dir=rdir, goals=a.goals, reps=a.reps),
+    json.dump(dict(robot=robot, it=it, policy=pdir, episode_dir=rdir, goals=goals, reps=a.reps),
               open(os.path.join(out, f"it{it}", "REQUEST.json"), "w"), indent=1)
-    print(f"[{robot}] it {it}: waiting for {len(a.goals) * a.reps} jumps -- {os.path.join(out, f'it{it}', 'REQUEST.md')}",
+    print(f"[{robot}] it {it}: waiting for {len(goals) * a.reps} jumps -- {os.path.join(out, f'it{it}', 'REQUEST.md')}",
           flush=True)
     t0 = time.time()
     while True:
@@ -500,6 +581,8 @@ def run_robot(robot):
     Ch = {g: [] for g in a.goals}            # per iteration the goal's least clearance to the box (--clear)
     Fh = {g: [] for g in a.goals}            # per iteration whether the goal's trial fell
     mom ={g: None for g in a.goals}
+    seen, n_real = [], 0                     # (goal index, real states) of every jump flown (--select ig); their count
+    selrng = np.random.default_rng(a.seed + 13)
     for it in range(a.iters + 1):
         pdir = os.path.join(out, f"it{it}", "policy")
         export(w, pdir)
@@ -509,16 +592,36 @@ def run_robot(robot):
         rdir = os.path.join(out, f"it{it}", "real")
         if a.backend == "container":                    # (manual: jumps already flown for this iteration are kept)
             shutil.rmtree(rdir, ignore_errors=True)
+        if a.backend == "container" and a.train_starts > 0 and a.revisit and it % 2 == 1:
+            for g in a.goals:                           # the worst start so far, again
+                if jstart[g]:
+                    starts[it][g] = max(jstart[g], key=lambda t: t[0])[1]
+        An = Bn = None
+        if a.grad == "fd" or a.update == "gn":
+            goals = np.array([gvec(g) for g in a.goals])
+            q_off = None
+            if a.train_starts > 0:                      # the GPU sim flown from each jump's own start
+                q_off = np.zeros((len(a.goals), 12))
+                for gi_, g_ in enumerate(a.goals):
+                    for i_, idx in enumerate(PLANAR_TO_CANONICAL):
+                        q_off[gi_, idx] = starts[it][g_][i_]
+            sim = env.rollout(w, env.references(goals), jax.random.PRNGKey(it), stochastic=False, fd=True,
+                              q_offset=q_off,
+                              dyn=None if a.jac_dyn is None else env.dyn_arrays(np.tile(a.jac_dyn, (len(goals), 1))))
+            An = sim["A"] * D[None, None, None, :] / D[None, None, :, None]
+            Bn = sim["B"] / D[None, None, :, None]
+        if a.select == "fixed":
+            sel = list(a.goals)
+        else:
+            idx, note = select_goals(w, sim, An, Bn, seen, selrng)
+            sel = [a.goals[i] for i in idx]
+            say(f"it {it}: flies {' '.join(gname(g) for g in sel)} ({note})")
         if a.backend == "manual":
-            request_jumps(pdir, robot, it, rdir, out)
+            request_jumps(pdir, robot, it, rdir, out, sel)
         else:
             # a flight that hangs returns no jumps: fly the missing goals again (same seeds, so the same jumps), and
             # abort rather than update without them (a run with skipped jumps is not the method)
-            if a.train_starts > 0 and a.revisit and it % 2 == 1:
-                for g in a.goals:                       # the worst start so far, again
-                    if jstart[g]:
-                        starts[it][g] = max(jstart[g], key=lambda t: t[0])[1]
-            todo = list(a.goals)
+            todo = list(sel)
             for attempt in range(4):
                 if a.train_starts > 0:                  # each goal's jump from its own start
                     for g in todo:
@@ -536,7 +639,7 @@ def run_robot(robot):
                     if f.endswith(".npz") and not f.startswith("ref_"):
                         g_ = gkey(np.load(os.path.join(rdir, f))["goal"])
                         have[g_] = have.get(g_, 0) + 1
-                todo = [g for g in a.goals if have.get(gkey(g), 0) < a.reps]
+                todo = [g for g in sel if have.get(gkey(g), 0) < a.reps]
                 if not todo:
                     break
                 say(f"   no jumps yet for goals {todo} (attempt {attempt + 1}); flying them again")
@@ -548,26 +651,15 @@ def run_robot(robot):
                 continue
             z = np.load(os.path.join(rdir, f))
             eps.setdefault(gkey(z["goal"]), []).append(z)
-        An = Bn = None
-        if a.grad == "fd" or a.update == "gn":
-            goals = np.array([gvec(g) for g in a.goals])
-            q_off = None
-            if a.train_starts > 0:                      # the GPU sim flown from each jump's own start
-                q_off = np.zeros((len(a.goals), 12))
-                for gi_, g_ in enumerate(a.goals):
-                    for i_, idx in enumerate(PLANAR_TO_CANONICAL):
-                        q_off[gi_, idx] = starts[it][g_][i_]
-            sim = env.rollout(w, env.references(goals), jax.random.PRNGKey(it), stochastic=False, fd=True,
-                              q_offset=q_off,
-                              dyn=None if a.jac_dyn is None else env.dyn_arrays(np.tile(a.jac_dyn, (len(goals), 1))))
-            An = sim["A"] * D[None, None, None, :] / D[None, None, :, None]
-            Bn = sim["B"] / D[None, None, :, None]
         line = []
         for gi, g in enumerate(a.goals):
+            if g not in sel:
+                continue
             zs = eps.get(gkey(g))
             if not zs:
                 line.append(f"g{gname(g)} missing")
                 continue
+            seen.extend((gi, np.asarray(z_["obs"], float)[:Nc]) for z_ in zs)
             z = zs[0]
             own = lambda z_: (np.asarray(actor_mean(w, jnp.asarray(np.asarray(z_["obs"], float)[:Nc], jnp.float32))) * mask
                               if a.target_base == "own" else np.asarray(z_["act"], float))
@@ -725,9 +817,10 @@ def run_robot(robot):
             trials.append(dict(goal=g, it=it, obs=obs[:Nc], tgt=np.clip((act - step) * mask, -0.999, 0.999)))
             line.append(f"g{gname(g)} J {J:.2f} (step {size:.3f})")
         say(f"it {it}: " + " | ".join(line) + f"  [{time.time() - t0:.0f} s]")
+        n_real += len(sel) * a.reps
         if not trials:
             continue
-        lam = a.anchor_w * a.anchor_n0 / (a.anchor_n0 + len(a.goals) * a.reps * (it + 1))
+        lam = a.anchor_w * a.anchor_n0 / (a.anchor_n0 + n_real)
         ga = anchor_goals(rng_seed=it)
         if a.anchor_pert:                                # the tube: nominal and perturbed stances
             ga = np.concatenate([ga, ga])
@@ -769,6 +862,9 @@ def run_robot(robot):
     if a.eval != "none":
         goals, seed = EVAL[a.eval]
         for tag, pd_ in (("start", os.path.join(out, "it0", "policy")), ("final", os.path.join(out, f"it{a.iters}", "policy"))):
+            if tag == "start" and a.skip_start_eval:
+                res.update({f"{a.eval}_start": None, f"{a.eval}_start_falls": 0, "rob_start": None, "rob_start_falls": 0})
+                continue
             for _ in range(3):                           # an evaluation that hung: fly it again
                 rr = fly(pd_, robot, goals, seed, os.path.join(out, f"eval_{a.eval}_{tag}.json"),
                          episodes=a.eval_episodes)

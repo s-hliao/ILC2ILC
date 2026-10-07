@@ -9,7 +9,9 @@ Every iteration (one ILC iteration amortized by the network, as dilc_train's coi
   2. the batch flown by the network with the sim's one-step FD Jacobians A_k, B_k along every jump
   3. per jump the Gauss-Newton ILC step on its landing error e = (x, z, pitch) / sx through the CLOSED-loop landing
      sensitivity S = d x_N / d a (A_k + B_k K_k, K_k = d pi / d x the network's own feedback at the jump's states,
-     and the ballistic flight): step = beta S'(SS' + delta tr/3 I)^-1 e, rms capped at cap
+     and the ballistic flight): step = beta S'(SS' + delta tr/3 I)^-1 e, rms capped at cap; with --stages /
+     --stage-floor also JumpILC's Stage I / II tracking rows (the SRB states against the plan's on the contact
+     samples / from rear-leg contact through the flight), scheduled as its stages
   4. the targets a*_k = mu_k - step_k at the jump's observations (mu the network's mean: the noise is a disturbance
      the network learns to answer, not an action to copy); none from a fall, a non-finite jump, a jump whose leg or
      trunk hit the box before touchdown, or a landing error past max_err (all outside the step's linear regime)
@@ -44,6 +46,22 @@ ap.add_argument("--rate-w", type=float, default=0.0, help="rad/s: a 4th landing 
                                                          "the plan's, this rate counting as the landing's 1 cm (0: none)")
 ap.add_argument("--clear", type=float, default=0.0, help="m: the legs' and trunk's clearance to the box the ILC keeps "
                                                         "(0: no clearance rows)")
+ap.add_argument("--stages", type=float, nargs=2, default=[0.0, 0.0],
+                help="JumpILC's stage schedule (Nguyen et al.): the share of --iters where Stage II, then Stage III takes "
+                     "over -- Stage I tracks the plan's SRB states on the contact samples, Stage II from rear-leg contact "
+                     "through the flight, Stage III the landing against the goal (0 0: Stage III from the start)")
+ap.add_argument("--stage-floor", type=float, default=0.0, help="row scale kept on the other stages' rows (0: none)")
+ap.add_argument("--track-stride", type=int, default=2, help="a Stage I / II tracking row block every this many samples")
+ap.add_argument("--vg", type=int, default=0,
+                help="value-gradient critic for the landing rows: 0 none (the jump's own FD co-states); 1 the critic's "
+                     "co-states on the flown batch; 2 also targets at the last --vg-pool iterations' states (the "
+                     "critic's predicted landing error as the residual, the current network as the base)")
+ap.add_argument("--vg-warm", type=int, default=3, help="iterations on the FD co-states before the critic's take over")
+ap.add_argument("--vg-replay", type=int, default=10, help="iterations of co-state targets the critic fits")
+ap.add_argument("--vg-steps", type=int, default=500)
+ap.add_argument("--vg-lr", type=float, default=3e-4)
+ap.add_argument("--vg-hidden", type=int, default=256)
+ap.add_argument("--vg-pool", type=int, default=5, help="--vg 2: iterations of states that get critic targets")
 ap.add_argument("--replay", type=int, default=6)
 ap.add_argument("--steps", type=int, default=300)
 ap.add_argument("--mb", type=int, default=2048)
@@ -181,6 +199,110 @@ def fit(O, T, M, steps, lr=None, anchor=None):
     return float(np.mean(ls[-20:])) if ls else float("nan")
 
 
+# -- the value-gradient critic (--vg): at a sample's observation, the predicted landing error e_n (scaled) and its
+# closed-loop co-states d e_n / d (x_k / sx) (3 x 6) -- the value and its gradient, over states, phases and goals.
+# Fitted to the flown jumps' exact closed-loop co-states (the FD chain backward: Lam_k = Lam_k+1 (A_k + B_k K_k), Lam_Nc
+# the ballistic flight's) and landing errors -- Monte Carlo targets, never its own outputs (no bootstrapping loop).
+def crit_init(key):
+    k = jax.random.split(key, 3)
+    H = a.vg_hidden
+    return {"W0": jax.random.normal(k[0], (H, od)) / np.sqrt(od), "b0": jnp.zeros(H),
+            "W1": jax.random.normal(k[1], (H, H)) / np.sqrt(H), "b1": jnp.zeros(H),
+            "W2": 1e-3 * jax.random.normal(k[2], (21, H)), "b2": jnp.zeros(21)}
+
+
+def crit(p, o):
+    h = jax.nn.relu(p["W0"] @ o + p["b0"])
+    h = jax.nn.relu(p["W1"] @ h + p["b1"])
+    return p["W2"] @ h + p["b2"]
+
+
+crit_fn = jax.jit(jax.vmap(crit, (None, 0)))
+
+
+def crit_loss(p, o, t, m):
+    d = jax.vmap(lambda x: crit(p, x))(o) - t            # in the targets' robust units (cscale): Huber
+    hub = jnp.where(jnp.abs(d) < 1.0, 0.5 * d ** 2, jnp.abs(d) - 0.5)
+    return (hub * m).sum() / jnp.maximum(m.sum(), 1.0)
+
+
+@jax.jit
+def crit_step(p, s, o, t, m, lr):
+    l, g = jax.value_and_grad(crit_loss)(p, o, t, m)
+    n = s["n"] + 1
+    mo = jax.tree_util.tree_map(lambda m_, g_: 0.9 * m_ + 0.1 * g_, s["m"], g)
+    v = jax.tree_util.tree_map(lambda v_, g_: 0.999 * v_ + 0.001 * g_ * g_, s["v"], g)
+    p = jax.tree_util.tree_map(lambda p_, m_, v_: p_ - lr * (m_ / (1 - 0.9 ** n)) / (jnp.sqrt(v_ / (1 - 0.999 ** n)) + 1e-8),
+                               p, mo, v)
+    return p, dict(n=n, m=mo, v=v), l
+
+
+cparams = crit_init(jax.random.PRNGKey(a.seed + 1000))
+copt = dict(n=0, m=jax.tree_util.tree_map(jnp.zeros_like, cparams), v=jax.tree_util.tree_map(jnp.zeros_like, cparams))
+
+
+cscale = None          # per output, the targets' robust scale (1.4826 MAD), fixed at the first fit
+CO_OUT = 30.0          # a sample whose co-states pass this many robust scales: its gradient targets dropped (a chain
+                       # exploding backward through an unstable closed loop -- a few such swamp the fit)
+
+
+def crit_fit(O, T, M):
+    """The critic on its replay, targets in robust units -> (loss, share of samples whose gradient targets were dropped)."""
+    global cparams, copt, cscale
+    if cscale is None:
+        sc = []
+        for j in range(T.shape[1]):
+            t_ = T[M[:, j] > 0, j]
+            sc.append(1.4826 * np.median(np.abs(t_ - np.median(t_))) if len(t_) else 1.0)
+        cscale = np.maximum(np.array(sc), 1e-3)
+    T = T / cscale
+    out = (np.abs(T[:, 3:]) * M[:, 3:]).max(1) > CO_OUT
+    M = M.copy()
+    M[out, 3:] = 0.0
+    O, T, M = (jnp.asarray(x, jnp.float32) for x in (O, T, M))
+    ls = []
+    for _ in range(a.vg_steps):
+        i = jnp.asarray(rng.integers(0, len(O), min(a.mb, len(O))))
+        p_new, o_new, l = crit_step(cparams, copt, O[i], T[i], M[i], a.vg_lr)
+        if not np.isfinite(float(l)):
+            continue
+        cparams, copt = p_new, o_new
+        ls.append(float(l))
+    return (float(np.mean(ls[-20:])) if ls else float("nan")), float(out.mean())
+
+
+def crit_pred(O):
+    """(n, Nc+1, od) -> the predicted landing error (n, Nc+1, 3) and co-states d e_n / d x_k (n, Nc+1, 3, 6)."""
+    C = np.asarray(crit_fn(cparams, jnp.asarray(O.reshape(-1, od), jnp.float32))).reshape(O.shape[:2] + (21,))
+    C = C * (1.0 if cscale is None else cscale)
+    return C[..., :3], C[..., 3:].reshape(O.shape[:2] + (3, 6)) / sx[None, None, None, :]
+
+
+def land_rows(Lm, Bm):
+    """Co-states (n, Nc+1, 3, 6) and control Jacobians (n, Nc, 6, 4) -> landing rows d e_n / d a (n, 3, Nc*4):
+    d e_n / d a_k = Lam_k+1 B_k."""
+    r = np.einsum("bkij,bkjl->bkil", Lm[:, 1:], Bm) * amask[None, :, None, :]
+    return r.transpose(0, 2, 1, 3).reshape(len(Lm), 3, Nc * 4)
+
+
+def gn_step(rows, res, keep):
+    """The damped Gauss-Newton step on the stacked rows (n, r, Nc*4) -> (step (n, Nc, 4), row mask (n, r))."""
+    R = np.concatenate(rows, 1)
+    r_ = np.concatenate(res, 1)
+    kp = np.concatenate(keep, 1).astype(float)
+    R, r_ = R * kp[..., None], np.nan_to_num(r_) * kp
+    Mm = R @ R.transpose(0, 2, 1)
+    nr = np.maximum(kp.sum(1), 1.0)
+    # Levenberg-Marquardt as before (delta x the mean active diagonal); an inactive row gets 1 on its diagonal (its
+    # row and residual are 0, so it takes no part)
+    Mm = Mm + a.delta * np.trace(Mm, axis1=1, axis2=2)[:, None, None] / nr[:, None, None] * np.eye(R.shape[1]) \
+        + 1e-9 * np.eye(R.shape[1]) + np.einsum("bi,ij->bij", 1.0 - kp, np.eye(R.shape[1]))
+    stp = (R.transpose(0, 2, 1) @ np.linalg.solve(Mm, r_[..., None]))[..., 0].reshape(len(R), Nc, 4) * a.beta
+    rms = np.sqrt((stp ** 2).sum((1, 2)) / amask.sum())
+    stp *= np.minimum(1.0, a.cap / np.maximum(rms, 1e-12))[:, None, None]
+    return stp, kp
+
+
 def export(tag):
     path = os.path.join(a.out, "policy", f"g0_plane_{tag}.npz")
     np.savez(path, **{k: np.asarray(v) for k, v in w.items()}, n_hidden=np.array(2))
@@ -231,6 +353,7 @@ if a.init_ilc:
 hist_json = os.path.join(a.out, "evals.json")
 evals = json.load(open(hist_json)) if os.path.exists(hist_json) else []
 replay = []
+crep, vgpool = [], []                         # --vg: the critic's co-state targets; --vg 2: the states it steps
 pool = []
 members = []
 t0 = time.time()
@@ -272,6 +395,11 @@ for it in range(a.iters + 1):
         D[:, k + 1] = Acl[:, k] @ D[:, k]
         D[:, k + 1, :, 4 * k:4 * k + 4] += B_[:, k] * amask[k][None, None]
     rows, res, keep = [], [], []
+    # the stage's row scales (--stages): 1 on this iteration's stage, --stage-floor on the other two
+    p_it = it / max(a.iters, 1)
+    stage = 0 if p_it < a.stages[0] else 1 if p_it < a.stages[1] else 2
+    cst = np.full(3, a.stage_floor)
+    cst[stage] = 1.0
     # landing rows: e_n through the ballistic flight (none for a jump that hit the box: its landing is the hit's)
     hit = np.asarray(o["hit"], bool)
     land_ok = (~fell) & (~hit) & np.isfinite(e).all(1) & (np.abs(np.nan_to_num(e[:, 0], nan=9.0)) <= a.max_err) \
@@ -282,13 +410,45 @@ for it in range(a.iters + 1):
     pred = np.stack([Xnc[:, 0] + Tf * Xnc[:, 3], Xnc[:, 1] + Tf * Xnc[:, 4] - 0.5 * 9.81 * Tf ** 2], 1) - tg[:, :2]
     far = (~hit) & (~land_ok) & np.isfinite(pred).all(1) & (np.abs(np.nan_to_num(e[:, :2], nan=9.0)).max(1) > a.max_err)
     e_use = np.where(far[:, None], np.concatenate([np.nan_to_num(pred) / sx[:2], np.zeros((B, 1))], 1), en)
-    rows.append(np.einsum("ij,bjk->bik", Pn, D[:, Nc]))                 # (B, 3, Nc*4)
-    res.append(e_use)
-    keep.append(np.stack([land_ok | far, land_ok | far, land_ok], 1))
+    R_land = np.einsum("ij,bjk->bik", Pn, D[:, Nc])                       # (B, 3, Nc*4): the jump's own FD co-states
+    use_vg = a.vg > 0 and it >= a.vg_warm
+    if a.vg:
+        Lam = np.zeros((B, Nc + 1, 3, 6))                                  # exact closed-loop co-states, backward
+        Lam[:, Nc] = Pn
+        for k in range(Nc - 1, -1, -1):
+            Lam[:, k] = Lam[:, k + 1] @ Acl[:, k]
+        obs_full = np.asarray(o["obs"])                                    # (B, Nc+1, od)
+        _, Lh = crit_pred(obs_full)                                        # the critic's, before it sees this batch
+        R_crit = land_rows(Lh, B_)
+        if use_vg:
+            R_land = R_crit
+    rows.append(cst[2] * R_land)                                           # (B, 3, Nc*4)
+    res.append(cst[2] * e_use)
+    keep.append(np.stack([land_ok | far, land_ok | far, land_ok], 1) & (cst[2] > 0))
     if a.rate_w > 0:   # the touchdown pitch rate against the plan's (constant in the ballistic flight), per rate_w rad/s
-        rows.append(D[:, Nc, 5:6] / a.rate_w)
-        res.append(((np.asarray(o["X"])[:, N, 5] - np.asarray(ref["x_ref"])[:, N, 5]) / a.rate_w)[:, None])
-        keep.append(land_ok[:, None])
+        rows.append(cst[2] * D[:, Nc, 5:6] / a.rate_w)
+        res.append(cst[2] * ((np.asarray(o["X"])[:, N, 5] - np.asarray(ref["x_ref"])[:, N, 5]) / a.rate_w)[:, None])
+        keep.append(land_ok[:, None] & (cst[2] > 0))
+    # tracking rows (JumpILC's Stages I / II): the jump's SRB state against the plan's, (x_k - x_ref,k) / sx, every
+    # --track-stride samples -- Stage I on the contact samples, Stage II from rear-leg contact through the flight
+    # (ballistic from takeoff) -- up to the jump's first hit, scaled by the stage's weight
+    n_trk = 0
+    if cst[0] > 0 or cst[1] > 0:
+        Xs, xr = np.asarray(o["X"]), np.asarray(ref["x_ref"])
+        hg = np.asarray(o["hit_geom"])
+        first = np.where((hg[:, :N - 3] >= 0).any(1), np.argmax(hg[:, :N - 3] >= 0, 1), N - 3)
+        fin = np.isfinite(o["A"]).all((1, 2, 3)) & np.isfinite(o["B"]).all((1, 2, 3)) & np.isfinite(Xs).all((1, 2))
+        for s_, ks in ((0, range(a.track_stride, Nc + 1, a.track_stride)), (1, range(env.Ndc, N, a.track_stride))):
+            if cst[s_] <= 0:
+                continue
+            for k in ks:
+                Pk = np.eye(6)
+                Pk[:3, 3:] = max(k - Nc, 0) * env.dt * np.eye(3)
+                rows.append(cst[s_] * (Pk @ D[:, min(k, Nc)]) / sx[None, :, None])
+                res.append(cst[s_] * np.nan_to_num(Xs[:, k] - xr[:, k]) / sx[None])
+                act = fin & (k < first)
+                keep.append(np.repeat(act[:, None], 6, 1))
+                n_trk += 6 * int(act.sum())
     if it == 0:
         d_ = np.abs(pred - e[:, :2])[land_ok]
         log(f"ballistic landing prediction vs measured on clean jumps: |dx| {d_[:, 0].mean() * 100:.2f} cm, "
@@ -320,19 +480,34 @@ for it in range(a.iters + 1):
             res.append(((cmin - a.clear) / 0.01)[:, None])
             keep.append(act[:, None])
             n_clr += int(act.sum())
-    R = np.concatenate(rows, 1)                                         # (B, r, Nc*4)
-    r_ = np.concatenate(res, 1)
-    kp = np.concatenate(keep, 1).astype(float)
-    R, r_ = R * kp[..., None], np.nan_to_num(r_) * kp
-    Mm = R @ R.transpose(0, 2, 1)
-    nr = np.maximum(kp.sum(1), 1.0)
-    # Levenberg-Marquardt as before (delta x the mean active diagonal); an inactive row gets 1 on its diagonal (its
-    # row and residual are 0, so it takes no part)
-    Mm = Mm + a.delta * np.trace(Mm, axis1=1, axis2=2)[:, None, None] / nr[:, None, None] * np.eye(R.shape[1]) \
-        + 1e-9 * np.eye(R.shape[1]) + np.einsum("bi,ij->bij", 1.0 - kp, np.eye(R.shape[1]))
-    stp = (R.transpose(0, 2, 1) @ np.linalg.solve(Mm, r_[..., None]))[..., 0].reshape(B, Nc, 4) * a.beta
-    rms = np.sqrt((stp ** 2).sum((1, 2)) / amask.sum())
-    stp *= np.minimum(1.0, a.cap / np.maximum(rms, 1e-12))[:, None, None]
+    stp, kp = gn_step(rows, res, keep)
+    vg_msg = ""
+    if a.vg:
+        lv = (land_ok | far) & np.isfinite(o["A"]).all((1, 2, 3)) & np.isfinite(o["B"]).all((1, 2, 3))
+        # how well the critic (not yet fitted to this batch: held-out states and goals) predicts the jumps' landing rows,
+        # and how close its step comes to the exact one
+        Rx = np.einsum("ij,bjk->bik", Pn, D[:, Nc])
+        if it == 0:
+            log(f"co-state check: backward Lam rows vs forward D rows, max |diff| "
+                f"{np.abs(land_rows(Lam, B_) - Rx)[lv].max():.2e} (|rows| max {np.abs(Rx[lv]).max():.2e})")
+        r_rows = float(np.corrcoef(R_crit[lv].ravel(), Rx[lv].ravel())[0, 1]) if lv.sum() > 1 else float("nan")
+        stp_ex, _ = gn_step([cst[2] * Rx] + rows[1:], res, keep) if use_vg else (stp, None)
+        num, den = (stp * stp_ex).sum((1, 2)), np.linalg.norm(stp, axis=(1, 2)) * np.linalg.norm(stp_ex, axis=(1, 2))
+        cos = float(np.mean((num / np.maximum(den, 1e-12))[lv])) if lv.any() else float("nan")
+        # the critic's targets from this batch: value (the landing error) and gradient (Lam_k sx), every sample
+        tv = np.repeat(np.clip(e_use, -10.0, 10.0)[:, None], Nc + 1, 1)
+        tl = (Lam * sx[None, None, None, :]).reshape(B, Nc + 1, 18)
+        mv = np.stack([land_ok | far, land_ok | far, land_ok], 1)[:, None].repeat(Nc + 1, 1).astype(float)
+        mg = np.repeat(lv[:, None, None], Nc + 1, 1) * np.ones((1, 1, 18))
+        fin = np.isfinite(obs_full).all((1, 2)) & np.isfinite(tl).all((1, 2))
+        crep.append((obs_full[fin].reshape(-1, od), np.concatenate([tv, tl], 2)[fin].reshape(-1, 21),
+                     np.concatenate([mv, mg], 2)[fin].reshape(-1, 21)))
+        crep = crep[-a.vg_replay:]
+        cl_, cout = crit_fit(*(np.concatenate([c[j] for c in crep]) for j in range(3)))
+        if a.vg == 2:
+            vgpool.append((obs_full[fin & lv], B_[fin & lv]))
+            vgpool = vgpool[-a.vg_pool:]
+        vg_msg = f" | vg {'on' if use_vg else 'warm'}: crit loss {cl_:.3f} (dropped {cout:.1%}), rows r {r_rows:.2f}, step cos {cos:.2f}"
     # targets from a jump with any row: its landing (clean jumps) or its clearance (also a jump that hit the box)
     good = (kp.sum(1) > 0) & np.isfinite(o["A"]).all((1, 2, 3)) & np.isfinite(o["B"]).all((1, 2, 3))
     tgt = np.clip(o["mu"] - stp, -0.999, 0.999) * amask
@@ -351,7 +526,23 @@ for it in range(a.iters + 1):
         tcol = PO[:, 6]                                               # the obs' time: 2 k / Nc - 1
         kk = np.clip(np.round((tcol + 1) * Nc / 2).astype(int), 0, Nc - 1)
         anc = (PO, PT, amask[kk])
-    l = fit(*(np.concatenate([r_[j] for r_ in replay]) for j in range(3)), a.steps, lr_it, anc)
+    data = list(replay)
+    n_pool = 0
+    if a.vg == 2 and use_vg:
+        # value-gradient targets at the last --vg-pool iterations' states: the critic's co-states for the rows, its
+        # predicted landing error at the jump's start as the residual, the CURRENT network's mean as the base
+        for Op, Bp in vgpool:
+            ev, Lp = crit_pred(Op)
+            stp_p, _ = gn_step([cst[2] * land_rows(Lp, Bp)], [cst[2] * np.clip(ev[:, 0], -10.0, 10.0)],
+                               [np.ones((len(Op), 3), bool) & (cst[2] > 0)])
+            mu_p = np.asarray(mean_fn(w, jnp.asarray(Op[:, :Nc].reshape(-1, od), jnp.float32))).reshape(len(Op), Nc, 4)
+            tg_p = np.clip(mu_p - stp_p, -0.999, 0.999) * amask
+            ok_p = np.isfinite(tg_p).all((1, 2))
+            data.append((Op[ok_p, :Nc].reshape(-1, od), tg_p[ok_p].reshape(-1, 4),
+                         np.broadcast_to(amask, (int(ok_p.sum()), Nc, 4)).reshape(-1, 4)))
+            n_pool += int(ok_p.sum())
+        vg_msg += f", pool targets {n_pool}"
+    l = fit(*(np.concatenate([r_[j] for r_ in data]) for j in range(3)), a.steps, lr_it, anc)
     # how much of this iteration's ILC step the network took: the projection of its change onto the step
     if len(gi):
         mu_new = np.asarray(mean_fn(w, jnp.asarray(obs[gi].reshape(-1, od), jnp.float32))).reshape(len(gi), Nc, 4) * amask
@@ -361,7 +552,7 @@ for it in range(a.iters + 1):
         real = float("nan")
     ok = (~fell) & (np.abs(np.nan_to_num(e[:, 0], nan=9)) <= 0.05) & (np.abs(np.nan_to_num(e[:, 1], nan=9)) <= 0.03)
     cl = slice(nx, None)
-    log(f"it {it:3d}: batch ok {ok.mean():.0%} (clean {ok[cl].mean():.0%}) fell {fell.mean():.0%} hit {hit.mean():.0%} targets {good.mean():.0%} clr rows {n_clr} far {int(far.sum())} "
+    log(f"it {it:3d}: stage {'I' * (stage + 1)} batch ok {ok.mean():.0%} (clean {ok[cl].mean():.0%}) fell {fell.mean():.0%} hit {hit.mean():.0%} targets {good.mean():.0%} clr rows {n_clr} trk rows {n_trk} far {int(far.sum())} "
         f"|ex| {np.abs(np.nan_to_num(e[~fell, 0])).mean() * 100:.1f} cm  step rms {np.sqrt((stp[gi] ** 2).sum((1, 2)) / amask.sum()).mean():.3f} "
-        f"loss {l:.2e} step taken {real:.0%}  {time.time() - t0:.0f} s")
+        f"loss {l:.2e} step taken {real:.0%}{vg_msg}  {time.time() - t0:.0f} s")
 log("done")
