@@ -133,6 +133,10 @@ for _i in (0, 2, 3):
     NAMED[f"real_r{_i}f"] = NAMED[f"real_r{_i}"] + f" --sensor-seed {770 + _i}"
 del _i
 
+# real_r4 with the other robots' mocap (2026-10-08, the user: drop the bad-mocap setting): its dynamics and delays kept
+assert "--pose-rate 120 --pose-delay 0.015 --pose-noise 0.002 0.01 --param pose_latency:=0.015" in NAMED["real_r4"]
+NAMED["real_r4m"] = NAMED["real_r4"].replace("--pose-rate 120 --pose-delay 0.015 --pose-noise 0.002 0.01 --param pose_latency:=0.015", "--pose-rate 240 --pose-delay 0.0060 --pose-noise 0.0005 0.003 --param pose_latency:=0.0060")
+
 def conditions(spec: str, seed: int = 0) -> list[tuple[str, str]]:
     """'challenging', 'all', 'dr:N' (N randomized), a comma list of names, or a file of
     name|args lines (conds_async.txt)."""

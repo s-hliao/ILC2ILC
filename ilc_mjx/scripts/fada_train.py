@@ -35,6 +35,7 @@ ap.add_argument("--lr", type=float, default=3e-4)
 ap.add_argument("--seed", type=int, default=0)
 ap.add_argument("--horizon", type=int, default=1, help="the planner's target and the IDM's input: the error H samples "
                 "ahead (H > 1: a less delay-sensitive inverse model; stored as P_h)")
+ap.add_argument("--load-data", default="", help="skip the collection: OUT/data.npz of an earlier run")
 ap.add_argument("--gpu", default="0")
 ap.add_argument("--plane", action="store_true", help="2D goal plane: goals uniform over the bank's valid region (flat and box jumps), evals on its grid")
 ap.add_argument("--est-window", type=float, default=0.0, help="s: the policy observes the robots' estimator (jump.Config)")
@@ -72,7 +73,7 @@ nominal = lambda B: np.tile([1.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 0.0], (B, 1))
 t0 = time.time()
 Po, Pt, Io, It, Ia, Im = [], [], [], [], [], []
 env.priv_dim = NZ if a.priv else 0
-for b in range(a.batches):
+for b in range(0 if a.load_data else a.batches):
     B = 256
     for kind in ("planner", "idm"):
         goals = env.sample_plane_goals(B, rng) if a.plane else np.stack([rng.uniform(*a.goals, B), np.zeros(B)], 1)
@@ -81,7 +82,9 @@ for b in range(a.batches):
         q_off, a_off = env.explore_noise(B, rng, a.explore[0], 0.0 if kind == "planner" else a.explore[1])
         out = env.rollout(ws, ref, jax.random.PRNGKey(int(rng.integers(2 ** 31))), stochastic=False,
                           a_offset=a_off, q_offset=q_off, dyn=dyn)
-        ok = ~out["fell"]
+        # a fallen or non-finite jump never reaches the data (the 2026-10-07 run's NaN states made every fit NaN)
+        ok = ~np.asarray(out["fell"], bool) & np.isfinite(out["obs"][:, :Nc + 1, :OD]).all((1, 2)) \
+            & np.isfinite(out["act"]).all((1, 2))
         o = out["obs"][ok][:, :, :OD]                                  # the deployable observation
         o_k, e_n = o[:, :Nc], o[:, np.minimum(np.arange(Nc) + a.horizon, Nc), :6]
         if kind == "planner":
@@ -94,8 +97,15 @@ for b in range(a.batches):
             Im.append(np.tile(mask, (int(ok.sum()), 1)))
     if b % 20 == 0:
         say(f"collect {b}/{a.batches}  [{time.time() - t0:.0f} s]")
-f32 = lambda x: jnp.asarray(np.concatenate(x), jnp.float32)
+f32 = lambda x: jnp.asarray(np.concatenate(x) if isinstance(x, list) else x, jnp.float32)
+if a.load_data:
+    _d = np.load(a.load_data)
+    Po, Pt, Io, It, Ia, Im = (_d[k] for k in ("Po", "Pt", "Io", "It", "Ia", "Im"))
+else:
+    np.savez(os.path.join(a.out, "data.npz"), **{k: np.concatenate(v) for k, v in
+                                                  dict(Po=Po, Pt=Pt, Io=Io, It=It, Ia=Ia, Im=Im).items()})
 Po, Pt, Io, It, Ia, Im = map(f32, (Po, Pt, Io, It, Ia, Im))
+assert all(bool(jnp.isfinite(x).all()) for x in (Po, Pt, Io, It, Ia, Im)), "non-finite FADA data"
 t_col = time.time() - t0
 say(f"data: planner {Po.shape[0]}, IDM {Io.shape[0]} samples ({'DR' if a.dr else 'nominal'}, source "
     f"{'privileged teacher' if a.priv else 'policy'}), collected in {t_col:.0f} s")

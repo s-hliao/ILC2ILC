@@ -145,6 +145,38 @@ ap.add_argument("--per-iter", type=int, default=3)
 ap.add_argument("--cand-step", type=float, default=0.025)
 ap.add_argument("--ig-noise", type=float, default=0.1,
                 help="ig: a jump's landing noise variance, relative to the median prior variance of a goal's landing")
+ap.add_argument("--ig-norm", action="store_true",
+                help="ig: each jump's landing rows scaled to unit prior variance (the kernel's correlation): goals chosen "
+                     "for how much they overlap the rest, not for how sensitive their own landing is to the weights "
+                     "(which otherwise makes the tall boxes win again and again)")
+ap.add_argument("--sens-adapt", default="none", choices=("none", "goal", "shared", "vres"),
+                help="gn: the landing sensitivity (the model's: the nominal sim's Jacobians) blended toward the robot's from "
+                     "its own jumps, no model parameters estimated. goal / shared: a Broyden (secant) correction from "
+                     "consecutive jumps at a goal -- the change in landing vs the change the network actually made "
+                     "(its new minus old output on the earlier jump's states) -- per goal, or shared over goals (one "
+                     "correction per bank plan, blended by the goal's weights as the references are: every pair "
+                     "informs every goal); vres: a value residual -- ridge regression of the measured landing minus "
+                     "the model's prediction from each sample's state (the sim's landing + the closed-loop co-states "
+                     "x the state's offset from the sim's), linear in the state offset x (phase, goal) features; its "
+                     "state gradient corrects the co-states. Ridge / the Broyden weight: zero data = the model's")
+ap.add_argument("--train-cond", default="",
+                help="every hardware-stage (training) jump under this one perturbation of the robot's evaluation set "
+                     "(final701/rob_<robot>.txt: blk15 blk2 crouch tall noseup nosedn mocapbad delay10) -- a constant, "
+                     "repeated condition the ILC can converge to. Only the robot is perturbed: the GPU sim (the "
+                     "Jacobians) stays the nominal model from the nominal stance. Evaluation unchanged")
+ap.add_argument("--abbeel", type=int, default=0,
+                help="gn: Abbeel, Quigley & Ng (ICML 2006)-style direction -- this many undamped Gauss-Newton iterations to "
+                     "convergence in the bias-corrected model (the sim at the goal, offset so it reproduces the measured "
+                     "landing: an outcome-level version of their time-indexed bias), the full step capped at "
+                     "--abbeel-cap (their real line search: our rollback / --bold backtracking at equal real jumps); "
+                     "0: our single damped step")
+ap.add_argument("--abbeel-cap", type=float, default=0.15)
+ap.add_argument("--residual-src", default="measured", choices=("measured", "model"),
+                help="gn: the landing error the step corrects -- measured on the robot (ILC), or the model's prediction for "
+                     "the current policy at the goal (the nominal sim's landing: a pure model-based update, the GPS-style "
+                     "ablation's end of the spectrum; the robot's states still set the feedback in the sensitivity)")
+ap.add_argument("--sens-w", type=float, default=0.5, help="--sens-adapt goal/shared: the Broyden weight")
+ap.add_argument("--vres-l2", type=float, default=1.0, help="--sens-adapt vres: ridge, in jumps' worth of samples")
 ap.add_argument("--skip-start-eval", action="store_true",
                 help="evaluate only the final policy (the starting one's evaluation is the same zero-shot every run)")
 ap.add_argument("--gpu", default="1")
@@ -356,6 +388,34 @@ def landing_sensitivity(z, w, gi, An, Bn):
     return S
 
 
+def costates(obs, w, gi, An, Bn):
+    """L (Nc+1, 3, 6): d (landing x, z, pitch) / d e_k (normalized state), closed loop (the feedback at the states
+    obs), L[Nc] the ballistic flight's; landing_sensitivity's S[:, k] = (B_k' L[k+1]')'."""
+    K = np.asarray(dpi_fn(jnp.asarray(np.asarray(obs, float)[:Nc], jnp.float32), w))[..., :6]
+    L = np.zeros((Nc + 1, 3, 6))
+    L[Nc] = PHI[:3] * D[None, :]
+    for k in range(Nc - 1, -1, -1):
+        L[k] = L[k + 1] @ (An[gi, k] + Bn[gi, k] @ K[k])
+    return L
+
+
+def sens_from_costates(L, gi, Bn):
+    """(3, Nc*4): the landing rows from co-states L (Nc+1, 3, 6)."""
+    return (np.einsum("kij,kja->ika", L[1:], Bn[gi]) * mask[None]).reshape(3, -1)
+
+
+def vres_feats(dlt, k, g):
+    """(n, 28): the value residual's features at state offsets dlt (n, 6), phases k (n,), goal g."""
+    c = np.stack([np.ones(len(k)), k / Nc - 0.5, np.full(len(k), (g[0] - 0.525) / 0.1), np.full(len(k), (g[1] - 0.1) / 0.1)], 1)
+    return np.concatenate([(dlt[:, :, None] * c[:, None, :]).reshape(len(k), 24), c], 1)
+
+
+def vres_grad(Wr, k, g):
+    """(len(k), 3, 6): d residual / d state offset at phases k, goal g."""
+    c = np.stack([np.ones(len(k)), k / Nc - 0.5, np.full(len(k), (g[0] - 0.525) / 0.1), np.full(len(k), (g[1] - 0.1) / 0.1)], 1)
+    return np.einsum("iju,ku->kij", Wr[:, :24].reshape(3, 6, 4), c)
+
+
 LW = np.array([1 / 0.05, 1 / 0.03, 1 / 0.1])          # the landing's tolerances (m, m, rad): its rows comparable
 _MASKJ = jnp.asarray(mask, jnp.float32)
 from jax.flatten_util import ravel_pytree  # noqa: E402
@@ -372,7 +432,7 @@ def land_param_rows(wf, O, S):
     return jax.vmap(one)(O, S)
 
 
-def select_goals(w, sim, An, Bn, seen, rng):
+def select_goals(w, sim, An, Bn, seen, rng, skip=()):
     """--select: this iteration's goals (indices into a.goals) and a log note. ig: the network linearized in its
     weights, a jump at goal g observes its landing J_g dtheta (+ noise), J_g = d landing / d weights (tolerance-
     scaled); with an isotropic prior on dtheta the landings over the grid are jointly Gaussian with kernel J J'. Given
@@ -382,6 +442,7 @@ def select_goals(w, sim, An, Bn, seen, rng):
     M = len(a.goals)
     if a.select == "random":
         return sorted(int(i) for i in rng.choice(M, a.per_iter, replace=False)), "random"
+    skip = set(skip)                                     # (frozen goals: flying them teaches nothing)
     O = [np.asarray(sim["obs"][gi], float)[:Nc] for gi in range(M)] + [o for _, o in seen]
     S = [landing_sensitivity(dict(obs=sim["obs"][gi]), w, gi, An, Bn) for gi in range(M)] \
         + [landing_sensitivity(dict(obs=o), w, gi, An, Bn) for gi, o in seen]
@@ -391,6 +452,8 @@ def select_goals(w, sim, An, Bn, seen, rng):
     Sj = np.concatenate([np.stack(S) * LW[None, :, None, None], np.zeros((pad, 3, Nc, 4))])
     wf = ravel_pytree(w)[0]
     R = np.asarray(land_param_rows(wf, jnp.asarray(Oj, jnp.float32), jnp.asarray(Sj, jnp.float32)), float)[:n]
+    if a.ig_norm:
+        R = R / np.sqrt((R ** 2).sum((1, 2)) / 3)[:, None, None].clip(1e-12)
     R = R.reshape(3 * n, -1)
     K = R @ R.T
     C = 3 * M
@@ -405,7 +468,7 @@ def select_goals(w, sim, An, Bn, seen, rng):
     for _ in range(a.per_iter):
         best_m, best_r, best_u = None, -1.0, None
         for m in range(M):
-            if m in chosen:
+            if m in chosen or m in skip:
                 continue
             Km = Sig[:, 3 * m:3 * m + 3]
             U = np.linalg.solve(Sig[3 * m:3 * m + 3, 3 * m:3 * m + 3] + noise * np.eye(3), Km.T)
@@ -452,6 +515,7 @@ def clearance_rows(zs, w, gi, An, Bn, g):
     return rows, res, cmins
 
 
+TRAIN_CF, TRAIN_OFF = None, None                # --train-cond: set per robot in run_robot
 GATE = a.gate if a.gate is not None else ([0, 1.5, 0.3] if a.backend == "manual" else None)
 
 
@@ -552,8 +616,18 @@ def request_jumps(pdir, robot, it, rdir, out, goals):
 
 
 def run_robot(robot):
+    global TRAIN_CF, TRAIN_OFF
     out = os.path.join(a.out, robot)
     os.makedirs(out, exist_ok=True)
+    TRAIN_CF, TRAIN_OFF = None, None
+    if a.train_cond:                                    # the robot's own line for the perturbation, as a cond file
+        lines = [l for l in open(os.path.join(WS, "log/dilc/final701", f"rob_{robot}.txt")).read().splitlines()
+                 if l.startswith(f"{robot}+{a.train_cond}|")]
+        if len(lines) != 1:
+            raise SystemExit(f"{robot}: no perturbation {a.train_cond} in final701/rob_{robot}.txt")
+        TRAIN_CF = os.path.join(out, f"train_cond_{a.train_cond}.txt")
+        open(TRAIN_CF, "w").write(lines[0] + "\n")
+        # (no TRAIN_OFF: the sim is never told the perturbation)
     logf = open(os.path.join(out, "deploy.log"), "w")
 
     def say(msg):
@@ -582,6 +656,11 @@ def run_robot(robot):
     Fh = {g: [] for g in a.goals}            # per iteration whether the goal's trial fell
     mom ={g: None for g in a.goals}
     seen, n_real = [], 0                     # (goal index, real states) of every jump flown (--select ig); their count
+    Cp = None                                # --sens-adapt shared: per bank plan the Broyden correction (P, 3, Nc*4)
+    sgoal = {g: None for g in a.goals}       # --sens-adapt goal: per goal
+    pz = {g: None for g in a.goals}          # the goal's previous trial: (landing e3, its states, the network then)
+    vdata, Wr = [], None                     # --sens-adapt vres: (goal index, goal, states, landing) of clean jumps; ridge
+    pred_log = []                            # held-out: the corrected sensitivity's prediction of the landing change
     selrng = np.random.default_rng(a.seed + 13)
     for it in range(a.iters + 1):
         pdir = os.path.join(out, f"it{it}", "policy")
@@ -599,7 +678,8 @@ def run_robot(robot):
         An = Bn = None
         if a.grad == "fd" or a.update == "gn":
             goals = np.array([gvec(g) for g in a.goals])
-            q_off = None
+            q_off = None                                # (--train-cond: the sim stays NOMINAL -- the perturbation
+                                                        #  exists only on the robot)
             if a.train_starts > 0:                      # the GPU sim flown from each jump's own start
                 q_off = np.zeros((len(a.goals), 12))
                 for gi_, g_ in enumerate(a.goals):
@@ -613,7 +693,7 @@ def run_robot(robot):
         if a.select == "fixed":
             sel = list(a.goals)
         else:
-            idx, note = select_goals(w, sim, An, Bn, seen, selrng)
+            idx, note = select_goals(w, sim, An, Bn, seen, selrng, [i for i, g in enumerate(a.goals) if frozen[g]])
             sel = [a.goals[i] for i in idx]
             say(f"it {it}: flies {' '.join(gname(g) for g in sel)} ({note})")
         if a.backend == "manual":
@@ -631,6 +711,9 @@ def run_robot(robot):
                                             + ",".join(f"{v:.4f}" for v in o) + "]\n")
                         fly(pdir, cpath(cf), [g], a.seed + 101 * it, os.path.join(out, f"it{it}", f"real_{gfile(g)}.json"),
                             rdir, episodes=a.reps)
+                elif a.train_cond:                      # every training jump under the one perturbation
+                    fly(pdir, cpath(TRAIN_CF), todo, a.seed + 101 * it, os.path.join(out, f"it{it}", "real.json"), rdir,
+                        episodes=a.reps)
                 else:
                     fly(pdir, robot, todo, a.seed + 101 * it, os.path.join(out, f"it{it}", "real.json"), rdir,
                         episodes=a.reps)
@@ -652,6 +735,25 @@ def run_robot(robot):
             z = np.load(os.path.join(rdir, f))
             eps.setdefault(gkey(z["goal"]), []).append(z)
         line = []
+        if a.sens_adapt == "vres" and vdata and An is not None:
+            # the value residual on every earlier clean jump, against the current model (sim + network)
+            xr_ = np.asarray(env.references(np.array([gvec(g_) for g_ in a.goals]))["x_ref"])
+            Phi_, Y_ = [], []
+            for gi_, g_, ob_, e_ in vdata:
+                L_ = costates(ob_, w, gi_, An, Bn)
+                tgt_ = xr_[gi_, env.N, :3].copy()
+                tgt_[:2] = xr_[gi_, 0, :2] + np.asarray(gvec(g_))
+                tgt_[2] = 0.0
+                es_ = np.nan_to_num(np.asarray(sim["X"])[gi_, env.N, :3] - tgt_)
+                dl_ = np.nan_to_num(ob_[:Nc + 1, :6] - np.asarray(sim["obs"])[gi_, :Nc + 1, :6])
+                em_ = es_[None] + np.einsum("kij,kj->ki", L_, dl_)
+                Phi_.append(vres_feats(dl_, np.arange(Nc + 1), gvec(g_)))
+                Y_.append(e_[None] - em_)
+            Phi_, Y_ = np.concatenate(Phi_), np.concatenate(Y_)
+            lam_ = a.vres_l2 * (Nc + 1)
+            Wr = np.linalg.solve(Phi_.T @ Phi_ + lam_ * np.eye(Phi_.shape[1]), Phi_.T @ Y_).T          # (3, 28)
+            say(f"   vres: {len(vdata)} jumps, residual rms {np.sqrt((Y_ ** 2).mean(0)) * 100} cm/rad x100 -> "
+                f"{np.sqrt(((Y_ - Phi_ @ Wr.T) ** 2).mean(0)) * 100}")
         for gi, g in enumerate(a.goals):
             if g not in sel:
                 continue
@@ -755,6 +857,45 @@ def run_robot(robot):
                 else:
                     S = np.mean([landing_sensitivity(z_, w, gi, An, Bn).reshape(3, -1) for z_ in zs], 0)
                 e3 = np.mean([np.asarray(z_["info"], float)[:3] for z_ in zs], 0)   # measured landing error (m, m, rad)
+                if a.residual_src == "model":           # the model's landing for this policy at the goal, not the robot's
+                    xr_m = np.asarray(env.references(np.array([gvec(g)]))["x_ref"])[0]
+                    tg_m = xr_m[env.N, :3].copy()
+                    tg_m[:2] = xr_m[0, :2] + np.asarray(gvec(g))
+                    tg_m[2] = 0.0
+                    e3 = np.nan_to_num(np.asarray(sim["X"])[gi, env.N, :3] - tg_m)
+                obs0 = np.asarray(zs[0]["obs"], float)
+                if a.sens_adapt == "vres" and Wr is not None:
+                    L_ = costates(obs0, w, gi, An, Bn) + np.concatenate([[np.zeros((3, 6))],
+                                                                         vres_grad(Wr, np.arange(1, Nc + 1), g)])[:Nc + 1]
+                    L_[0] = L_[0]                                           # (row 0 is never used by the rows)
+                    S = sens_from_costates(L_, gi, Bn)
+                Wg_ = env.weights(np.array([gvec(g)]))[0] if a.sens_adapt == "shared" else None
+                if a.sens_adapt == "shared" and Cp is None:
+                    Cp = np.zeros((len(Wg_), 3, S.shape[1]))
+                Cg = (np.einsum("p,pij->ij", Wg_, Cp) if a.sens_adapt == "shared" else
+                      sgoal[g] if (a.sens_adapt == "goal" and sgoal[g] is not None) else np.zeros_like(S))
+                if pz[g] is not None:
+                    # the change the network made at this goal since its previous trial (on that trial's states)
+                    e_p, ob_p, w_p = pz[g]
+                    o_p = jnp.asarray(ob_p[:Nc], jnp.float32)
+                    da_ = ((np.asarray(actor_mean(w, o_p)) - np.asarray(actor_mean(w_p, o_p))) * mask).ravel()
+                    de_ = e3 - e_p
+                    if np.linalg.norm(da_) > 1e-3 and not any(bool(z_["fell"]) for z_ in zs):
+                        pr_ = (S + Cg) @ da_
+                        cs_ = float((pr_ * LW) @ (de_ * LW) / max(np.linalg.norm(pr_ * LW) * np.linalg.norm(de_ * LW), 1e-12))
+                        pred_log.append(dict(it=it, goal=g, cos=cs_, rel=float(np.linalg.norm((de_ - pr_) * LW)
+                                                                             / max(np.linalg.norm(de_ * LW), 1e-12))))
+                        r_ = de_ - (S + Cg) @ da_
+                        if a.sens_adapt == "shared":
+                            Cp += a.sens_w * Wg_[:, None, None] * np.outer(r_, da_)[None] / ((da_ @ da_) * (Wg_ @ Wg_))
+                            Cg = np.einsum("p,pij->ij", Wg_, Cp)
+                        elif a.sens_adapt == "goal":
+                            sgoal[g] = Cg + a.sens_w * np.outer(r_, da_) / (da_ @ da_)
+                            Cg = sgoal[g]
+                S = S + Cg
+                pz[g] = (e3.copy(), obs0, dict(w))
+                if a.sens_adapt == "vres" and not any(bool(z_["fell"]) for z_ in zs):
+                    vdata.extend((gi, g, np.asarray(z_["obs"], float), np.asarray(z_["info"], float)[:3]) for z_ in zs)
                 if a.secant > 0:
                     if sec[g] is None:
                         sec[g] = np.zeros_like(S)
@@ -774,8 +915,38 @@ def run_robot(robot):
                         S, e3 = np.vstack([S, np.array(crow)]), np.concatenate([e3, np.array(cres)])
                     clr_txt = f", clr {100 * min(cmins):.1f}cm rows {len(crow)}" if cmins else ""
                 stp = gn_step(S, e3)
+                ab_txt = ""
+                if a.abbeel > 0:
+                    # the direction from a solve to convergence in the model corrected to the measured landing
+                    ref_g = env.references(np.array([gvec(g)]))
+                    xr_g = np.asarray(ref_g["x_ref"])[0]
+                    tg_g = xr_g[env.N, :3].copy()
+                    tg_g[:2] = xr_g[0, :2] + np.asarray(gvec(g))
+                    tg_g[2] = 0.0
+                    bias_g = e3[:3] - np.nan_to_num(np.asarray(sim["X"])[gi, env.N, :3] - tg_g)
+                    Dl = np.zeros((Nc, 4))
+                    best_ab = (np.inf, Dl)               # the solve keeps its best iterate in the corrected model
+                    for k_ in range(a.abbeel + 1):
+                        oi = env.rollout(w, ref_g, jax.random.PRNGKey(it), stochastic=False, fd=True, a_offset=Dl[None])
+                        e_k = np.nan_to_num(np.asarray(oi["X"])[0, env.N, :3] - tg_g) + bias_g
+                        n_k = np.linalg.norm(e_k * LW) + (1e3 if bool(np.asarray(oi["fell"])[0]) else 0.0)
+                        if k_ == 0:
+                            e_first = n_k
+                        if n_k < best_ab[0]:
+                            best_ab = (n_k, Dl.copy())
+                        if k_ == a.abbeel:
+                            break
+                        Ai = (np.asarray(oi["A"]) * D[None, None, None, :] / D[None, None, :, None])
+                        Bi = np.asarray(oi["B"]) / D[None, None, :, None]
+                        Si = landing_sensitivity(dict(obs=np.asarray(oi["obs"])[0]), w, 0, Ai, Bi).reshape(3, -1)
+                        if Si.shape[0] < S.shape[0]:             # (the clearance rows stay the measured trial's)
+                            Si = np.vstack([Si, S[3:]])
+                            e_k = np.concatenate([e_k, e3[3:]])
+                        Dl = Dl - gn_step(Si, e_k, beta=1.0).reshape(Nc, 4) * mask
+                    stp = -best_ab[1].ravel()
+                    ab_txt = f", abbeel |e| {e_first:.2f} -> {best_ab[0]:.2f} (corrected model, best iterate)"
                 sat_txt = ""
-                if a.sat_project or a.stall_sat > 0:
+                if (a.sat_project or a.stall_sat > 0) and not a.abbeel:
                     Hm = np.min([headroom(z_) for z_ in zs], 0)
                     Uf = np.mean([np.asarray(z_["U"], float)[:Nc] for z_ in zs], 0)
                     free, _, n_off = sat_step(S, e3, stp, Hm, Uf)
@@ -790,7 +961,7 @@ def run_robot(robot):
                     sat_txt = f", sat {100 * satf:.0f}% bind {bind:.2f} held {n_off}"
                 step = stp.reshape(Nc, 4) * scale[g]
                 rms = np.sqrt((step ** 2).sum() / mask.sum())
-                step *= min(1.0, a.step_rms / max(rms, 1e-12))
+                step *= min(1.0, (a.abbeel_cap if a.abbeel else a.step_rms) / max(rms, 1e-12))
                 if a.control == "random":
                     r_ = rng.standard_normal(step.shape) * mask
                     step = r_ * np.sqrt((step ** 2).sum() / max((r_ ** 2).sum(), 1e-12))
@@ -800,7 +971,7 @@ def run_robot(robot):
                 e3 = e3_land
                 prev[g] = (e3.copy(), -step.copy(), J)                     # the change commanded: -step
                 line.append(f"g{gname(g)} J {J:.2f} e {e3[0] * 100:+.1f}/{e3[1] * 100:+.1f}cm {np.degrees(e3[2]):+.1f}deg "
-                            f"(gn rms {min(rms, a.step_rms):.3f}, scale {scale[g]:.2f}{sat_txt}{clr_txt}){sat_note}")
+                            f"(gn rms {min(rms, a.abbeel_cap if a.abbeel else a.step_rms):.3f}, scale {scale[g]:.2f}{sat_txt}{clr_txt}{ab_txt}){sat_note}")
                 continue
             G = gradient(z, w, gi, An, Bn, g)
             d = G / max(np.linalg.norm(G), 1e-12)
@@ -817,6 +988,10 @@ def run_robot(robot):
             trials.append(dict(goal=g, it=it, obs=obs[:Nc], tgt=np.clip((act - step) * mask, -0.999, 0.999)))
             line.append(f"g{gname(g)} J {J:.2f} (step {size:.3f})")
         say(f"it {it}: " + " | ".join(line) + f"  [{time.time() - t0:.0f} s]")
+        pl_ = [p_ for p_ in pred_log if p_["it"] == it]
+        if pl_:
+            say(f"   sensitivity ({a.sens_adapt}) predicting the landing change: cos {np.mean([p_['cos'] for p_ in pl_]):.2f}, "
+                f"rel err {np.median([p_['rel'] for p_ in pl_]):.2f} ({len(pl_)} pairs)")
         n_real += len(sel) * a.reps
         if not trials:
             continue
@@ -858,7 +1033,7 @@ def run_robot(robot):
                 w = w_prev
                 for g in a.goals:
                     scale[g] *= 0.5
-    res = dict(robot=robot, hist=hist, args=vars(a))
+    res = dict(robot=robot, hist=hist, args=vars(a), pred=pred_log)
     if a.eval != "none":
         goals, seed = EVAL[a.eval]
         for tag, pd_ in (("start", os.path.join(out, "it0", "policy")), ("final", os.path.join(out, f"it{a.iters}", "policy"))):

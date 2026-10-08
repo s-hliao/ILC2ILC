@@ -62,6 +62,11 @@ ap.add_argument("--vg-steps", type=int, default=500)
 ap.add_argument("--vg-lr", type=float, default=3e-4)
 ap.add_argument("--vg-hidden", type=int, default=256)
 ap.add_argument("--vg-pool", type=int, default=5, help="--vg 2: iterations of states that get critic targets")
+ap.add_argument("--vg-res", action="store_true",
+                help="--vg: the critic learns only a residual on a linear-model prior -- the closed-loop co-states (and the "
+                     "landing they predict) of the bank's plans flown by the current network in the nominal sim, "
+                     "linearized along them and blended over goals as the references are (the LQR-style structure; "
+                     "the net the nonlinearities)")
 ap.add_argument("--replay", type=int, default=6)
 ap.add_argument("--steps", type=int, default=300)
 ap.add_argument("--mb", type=int, default=2048)
@@ -71,6 +76,19 @@ ap.add_argument("--anchor-pool", type=int, default=0, help="iterations of observ
 ap.add_argument("--anchor-w", type=float, default=1.0, help="the trust region's weight: on the pool's observations the "
                                                          "network held at its outputs before this iteration's fit")
 ap.add_argument("--hidden", type=int, default=256)
+ap.add_argument("--k-match", type=float, default=0.0,
+                help="> 0: the network's feedback d a / d (error) is also fitted, at this weight, to the iLQR gains of the "
+                     "landing cost along each flown jump (the Riccati recursion on the jump's own FD Jacobians: the local "
+                     "linear structure; the ILC targets keep shaping the rest -- one network, no residual)")
+ap.add_argument("--k-r", type=float, default=1.0, help="--k-match: the iLQR's control weight (normalized actions; "
+                                                          "landing in tolerances 5 cm / 3 cm / 0.1 rad)")
+ap.add_argument("--k-mb", type=int, default=512, help="--k-match: Jacobian samples per minibatch")
+ap.add_argument("--gps-inner", type=int, default=0,
+                help="GPS-style ablation: each batch is first optimized on the model -- this many extra Gauss-Newton "
+                     "rounds, each a new rollout of the same jumps (goals, stances, exploration) with the accumulated "
+                     "offsets -- and the network then regresses onto the optimized trajectories (their states, the "
+                     "network's output there + the offsets - the last step); with --k-match also the iLQR gains along "
+                     "them (GPS's local linear controllers). 0: our ILC, one damped step per trial")
 ap.add_argument("--eval-every", type=int, default=10)
 ap.add_argument("--eval-grid", type=float, default=0.025)
 ap.add_argument("--seed", type=int, default=0)
@@ -171,6 +189,25 @@ def adam_step(p, s, w_, o, t, m, lr):
     return p, dict(n=n, m=mo, v=v), l
 
 
+def jac_loss(p, w_, o, kt, km):
+    """The feedback's mismatch to the iLQR gains: d a / d (obs error, 6) at o vs kt (n, 4, 6), rows masked km (n, 4)."""
+    ww = dict(w_, **p)
+    J = jax.vmap(lambda o_: jax.jacfwd(lambda x6: JumpEnv.actor(ww, jnp.concatenate([x6, o_[6:]])))(o_[:6]))(o)
+    return (((J - kt) ** 2) * km[..., None]).sum() / jnp.maximum(6.0 * km.sum(), 1.0)
+
+
+@jax.jit
+def adam_step_k(p, s, w_, o, t, m, ko, kt, km, lr):
+    l, g = jax.value_and_grad(lambda p_: loss_fn(p_, w_, o, t, m) + a.k_match * jac_loss(p_, w_, ko, kt, km))(p)
+    n = s["n"] + 1
+    mo = jax.tree_util.tree_map(lambda m_, g_: 0.9 * m_ + 0.1 * g_, s["m"], g)
+    v = jax.tree_util.tree_map(lambda v_, g_: 0.999 * v_ + 0.001 * g_ * g_, s["v"], g)
+    p = jax.tree_util.tree_map(lambda p_, m_, v_: p_ - lr * (m_ / (1 - 0.9 ** n)) / (jnp.sqrt(v_ / (1 - 0.999 ** n)) + 1e-8),
+                               p, mo, v)
+    return p, dict(n=n, m=mo, v=v), l
+
+
+KD = None          # --k-match: (obs, iLQR gains in obs units, row mask) of the last --replay iterations' jumps
 params = {k: w[k] for k in TRAIN}
 opt = dict(n=0, m=jax.tree_util.tree_map(jnp.zeros_like, params), v=jax.tree_util.tree_map(jnp.zeros_like, params))
 
@@ -190,7 +227,12 @@ def fit(O, T, M, steps, lr=None, anchor=None):
         if anchor is not None:
             j = jnp.asarray(rng.integers(0, len(AO), min(a.mb, len(AO))))
             o_, t_, m_ = jnp.concatenate([o_, AO[j]]), jnp.concatenate([t_, AT[j]]), jnp.concatenate([m_, AM[j]])
-        p_new, o_new, l = adam_step(params, opt, w, o_, t_, m_, a.lr if lr is None else lr)
+        if KD is not None:
+            kk = jnp.asarray(rng.integers(0, len(KD[0]), min(a.k_mb, len(KD[0]))))
+            p_new, o_new, l = adam_step_k(params, opt, w, o_, t_, m_, KD[0][kk], KD[1][kk], KD[2][kk],
+                                          a.lr if lr is None else lr)
+        else:
+            p_new, o_new, l = adam_step(params, opt, w, o_, t_, m_, a.lr if lr is None else lr)
         if not np.isfinite(float(l)) or not all(bool(jnp.isfinite(v).all()) for v in p_new.values()):
             continue                                  # a non-finite step is skipped, the network kept
         params, opt = p_new, o_new
@@ -278,6 +320,35 @@ def crit_pred(O):
     return C[..., :3], C[..., 3:].reshape(O.shape[:2] + (3, 6)) / sx[None, None, None, :]
 
 
+PL = None        # --vg-res: the plans' closed-loop co-states L (P, Nc+1, 3, 6), landing errors e (P, 3), obs errors oe
+
+
+def plan_prior(it):
+    """--vg-res: the bank's plans flown by the current network (nominal sim, FD), their closed-loop co-states."""
+    Gp = env.goals
+    refp = env.references(Gp)
+    op = env.rollout(w, refp, jax.random.PRNGKey(5000 + it), stochastic=False, fd=True)
+    P_ = len(Gp)
+    Kp = np.asarray(jac_fn(jnp.asarray(op["obs"][:, :Nc].reshape(-1, od), jnp.float32), w)).reshape(P_, Nc, 4, od)[..., :6]
+    Kp = Kp / sx[None, None, None, :] * amask[None, :, :, None]
+    Aclp = np.nan_to_num(op["A"]) + np.nan_to_num(op["B"]) @ Kp
+    Lp = np.zeros((P_, Nc + 1, 3, 6))
+    Lp[:, Nc] = Pn
+    for k in range(Nc - 1, -1, -1):
+        Lp[:, k] = Lp[:, k + 1] @ Aclp[:, k]
+    ep = np.clip(np.nan_to_num((np.asarray(op["X"])[:, N, :3] - targets_of(Gp, refp)) / sx[:3]), -10.0, 10.0)
+    return dict(L=Lp, e=ep, oe=np.nan_to_num(np.asarray(op["obs"])[:, :, :6]))
+
+
+def prior_of(Wg, O):
+    """--vg-res: the linear-model prior at states O (n, Nc+1, od) of jumps with goal weights Wg (n, P): co-states
+    L0 = the blend of the plans', value e0 = the blended plans' landing + L0 (x - the blended plans' x)."""
+    L0 = np.einsum("np,pkij->nkij", Wg, PL["L"])
+    dx = sx * (np.nan_to_num(O[..., :6]) - np.einsum("np,pki->nki", Wg, PL["oe"]))
+    e0 = (Wg @ PL["e"])[:, None, :] + np.einsum("nkij,nkj->nki", L0, dx)
+    return np.clip(e0, -10.0, 10.0), L0
+
+
 def land_rows(Lm, Bm):
     """Co-states (n, Nc+1, 3, 6) and control Jacobians (n, Nc, 6, 4) -> landing rows d e_n / d a (n, 3, Nc*4):
     d e_n / d a_k = Lam_k+1 B_k."""
@@ -353,12 +424,14 @@ if a.init_ilc:
 hist_json = os.path.join(a.out, "evals.json")
 evals = json.load(open(hist_json)) if os.path.exists(hist_json) else []
 replay = []
-crep, vgpool = [], []                         # --vg: the critic's co-state targets; --vg 2: the states it steps
+crep, vgpool, krep = [], [], []                         # --vg: the critic's co-state targets; --vg 2: the states it steps
 pool = []
 members = []
 t0 = time.time()
-for it in range(a.iters + 1):
-    if it % a.eval_every == 0:
+n_sim = 0
+sched = [(it_, k_) for it_ in range(a.iters + 1) for k_ in range(a.gps_inner + 1 if it_ < a.iters else 1)]
+for it, inner in sched:
+    if it % a.eval_every == 0 and inner == 0:
         r = evaluate()
         name = export(f"it{it}")
         members.append(dict(name=name, it=it, eval=r))
@@ -374,13 +447,16 @@ for it in range(a.iters + 1):
     if it == a.iters:
         break
     B = a.batch
-    G = sample_goals(B)
-    ref = env.references(G)
-    tg = targets_of(G, ref)
-    nx = int(round(a.explore_frac * B))
-    q_off, a_off = env.explore_noise(B, rng, a.q_off, a.a_off)
-    q_off[nx:], a_off[nx:] = 0.0, 0.0
-    o = env.rollout(w, ref, jax.random.PRNGKey(it), stochastic=False, fd=True, a_offset=a_off, q_offset=q_off)
+    if inner == 0:                                  # (--gps-inner: the inner rounds re-fly the same jumps)
+        G = sample_goals(B)
+        ref = env.references(G)
+        tg = targets_of(G, ref)
+        nx = int(round(a.explore_frac * B))
+        q_off, a_off = env.explore_noise(B, rng, a.q_off, a.a_off)
+        q_off[nx:], a_off[nx:] = 0.0, 0.0
+        gps_off = np.zeros((B, Nc, 4))
+    o = env.rollout(w, ref, jax.random.PRNGKey(it), stochastic=False, fd=True, a_offset=a_off + gps_off, q_offset=q_off)
+    n_sim += B
     e = o["X"][:, N, :3] - tg
     fell = np.asarray(o["fell"], bool)
     en = np.nan_to_num(e) / sx[:3]
@@ -389,6 +465,29 @@ for it in range(a.iters + 1):
     K = K / sx[None, None, None, :] * amask[None, :, :, None]         # d a / d x (SRB units)
     A_, B_ = np.nan_to_num(o["A"]), np.nan_to_num(o["B"])
     Acl = A_ + B_ @ K                                                  # (B, Nc, 6, 6)
+    k_msg = ""
+    if a.k_match > 0 and inner == a.gps_inner:
+        # iLQR along each flown jump: terminal cost |landing / tol|^2 through the ballistic flight, control k_r |a|^2
+        Bm = B_ * amask[None, :, None, :]
+        Pt = Phi[:3] / np.array([0.05, 0.03, 0.1])[:, None]
+        Pr = np.repeat((Pt.T @ Pt)[None], B, 0)
+        Ks = np.zeros((B, Nc, 4, 6))
+        for k in range(Nc - 1, -1, -1):
+            Bk, Ak = Bm[:, k], A_[:, k]
+            Hh = a.k_r * np.eye(4)[None] + Bk.transpose(0, 2, 1) @ Pr @ Bk
+            Ks[:, k] = -np.linalg.solve(Hh, Bk.transpose(0, 2, 1) @ Pr @ Ak)
+            Ac = Ak + Bk @ Ks[:, k]
+            Pr = Ac.transpose(0, 2, 1) @ Pr @ Ac + a.k_r * Ks[:, k].transpose(0, 2, 1) @ Ks[:, k]
+        kg = (~fell) & np.isfinite(o["A"]).all((1, 2, 3)) & np.isfinite(o["B"]).all((1, 2, 3)) & np.isfinite(Ks).all((1, 2, 3)) \
+            & np.isfinite(obs).all((1, 2))
+        Kt = Ks * sx[None, None, None, :]                                  # d a / d (obs error): the network's units
+        num, den = (K * Ks).sum((2, 3)), np.linalg.norm(K, axis=(2, 3)) * np.linalg.norm(Ks, axis=(2, 3))
+        kcos = float(np.mean((num / np.maximum(den, 1e-12))[kg])) if kg.any() else float("nan")
+        kn = float(np.linalg.norm(K[kg] * sx, axis=(2, 3)).mean() / max(np.linalg.norm(Kt[kg], axis=(2, 3)).mean(), 1e-12)) if kg.any() else float("nan")
+        krep.append((obs[kg].reshape(-1, od), Kt[kg].reshape(-1, 4, 6), np.broadcast_to(amask, (int(kg.sum()), Nc, 4)).reshape(-1, 4)))
+        krep = krep[-a.replay:]
+        KD = tuple(jnp.asarray(np.concatenate([r_[j] for r_ in krep]), jnp.float32) for j in range(3))
+        k_msg = f" | K vs iLQR: cos {kcos:.2f}, |K|/|K*| {kn:.2f}"
     # forward closed-loop sensitivities D_k = d x_k / d a (B, 6, Nc*4), every contact sample and takeoff
     D = np.zeros((B, Nc + 1, 6, Nc * 4))
     for k in range(Nc):
@@ -419,6 +518,11 @@ for it in range(a.iters + 1):
             Lam[:, k] = Lam[:, k + 1] @ Acl[:, k]
         obs_full = np.asarray(o["obs"])                                    # (B, Nc+1, od)
         _, Lh = crit_pred(obs_full)                                        # the critic's, before it sees this batch
+        if a.vg_res:
+            PL = plan_prior(it)
+            Wg = env.weights(G)
+            e0, L0 = prior_of(Wg, obs_full)
+            Lh = Lh + L0                                                   # the prior + the learned residual
         R_crit = land_rows(Lh, B_)
         if use_vg:
             R_land = R_crit
@@ -481,6 +585,12 @@ for it in range(a.iters + 1):
             keep.append(act[:, None])
             n_clr += int(act.sum())
     stp, kp = gn_step(rows, res, keep)
+    if inner < a.gps_inner:                         # GPS-style: optimize on the model first, no fit yet
+        gps_off = np.where(np.isfinite(stp), gps_off - stp, gps_off) * amask
+        ok_ = (~fell) & (np.abs(np.nan_to_num(e[:, 0], nan=9)) <= 0.05) & (np.abs(np.nan_to_num(e[:, 1], nan=9)) <= 0.03)
+        log(f"   it {it} inner {inner}: model-optimization round, batch ok {ok_.mean():.0%}, |ex| "
+            f"{np.abs(np.nan_to_num(e[~fell, 0])).mean() * 100:.1f} cm, offsets rms {np.sqrt((gps_off ** 2).sum((1, 2)) / amask.sum()).mean():.3f}")
+        continue
     vg_msg = ""
     if a.vg:
         lv = (land_ok | far) & np.isfinite(o["A"]).all((1, 2, 3)) & np.isfinite(o["B"]).all((1, 2, 3))
@@ -491,12 +601,24 @@ for it in range(a.iters + 1):
             log(f"co-state check: backward Lam rows vs forward D rows, max |diff| "
                 f"{np.abs(land_rows(Lam, B_) - Rx)[lv].max():.2e} (|rows| max {np.abs(Rx[lv]).max():.2e})")
         r_rows = float(np.corrcoef(R_crit[lv].ravel(), Rx[lv].ravel())[0, 1]) if lv.sum() > 1 else float("nan")
+        prior_msg = ""
+        if a.vg_res and lv.any():                  # the prior alone: how much the residual adds
+            R0 = land_rows(L0, B_)
+            r0 = float(np.corrcoef(R0[lv].ravel(), Rx[lv].ravel())[0, 1]) if lv.sum() > 1 else float("nan")
+            s0, _ = gn_step([cst[2] * R0] + rows[1:], res, keep)
+            se, _ = gn_step([cst[2] * Rx] + rows[1:], res, keep)
+            sc_ = (s0 * se).sum((1, 2)) / np.maximum(np.linalg.norm(s0, axis=(1, 2)) * np.linalg.norm(se, axis=(1, 2)), 1e-12)
+            ev0 = np.abs(e0[:, 0] - np.clip(e_use, -10, 10))[lv].mean()
+            prior_msg = f"; prior alone r {r0:.2f} step cos {float(np.mean(sc_[lv])):.2f}, |value err| {ev0:.2f}"
         stp_ex, _ = gn_step([cst[2] * Rx] + rows[1:], res, keep) if use_vg else (stp, None)
         num, den = (stp * stp_ex).sum((1, 2)), np.linalg.norm(stp, axis=(1, 2)) * np.linalg.norm(stp_ex, axis=(1, 2))
         cos = float(np.mean((num / np.maximum(den, 1e-12))[lv])) if lv.any() else float("nan")
         # the critic's targets from this batch: value (the landing error) and gradient (Lam_k sx), every sample
         tv = np.repeat(np.clip(e_use, -10.0, 10.0)[:, None], Nc + 1, 1)
         tl = (Lam * sx[None, None, None, :]).reshape(B, Nc + 1, 18)
+        if a.vg_res:                               # the critic's targets: what the prior misses
+            tv = tv - e0
+            tl = tl - (L0 * sx[None, None, None, :]).reshape(B, Nc + 1, 18)
         mv = np.stack([land_ok | far, land_ok | far, land_ok], 1)[:, None].repeat(Nc + 1, 1).astype(float)
         mg = np.repeat(lv[:, None, None], Nc + 1, 1) * np.ones((1, 1, 18))
         fin = np.isfinite(obs_full).all((1, 2)) & np.isfinite(tl).all((1, 2))
@@ -505,12 +627,12 @@ for it in range(a.iters + 1):
         crep = crep[-a.vg_replay:]
         cl_, cout = crit_fit(*(np.concatenate([c[j] for c in crep]) for j in range(3)))
         if a.vg == 2:
-            vgpool.append((obs_full[fin & lv], B_[fin & lv]))
+            vgpool.append((obs_full[fin & lv], B_[fin & lv], env.weights(G)[fin & lv]))
             vgpool = vgpool[-a.vg_pool:]
-        vg_msg = f" | vg {'on' if use_vg else 'warm'}: crit loss {cl_:.3f} (dropped {cout:.1%}), rows r {r_rows:.2f}, step cos {cos:.2f}"
+        vg_msg = f" | vg {'on' if use_vg else 'warm'}: crit loss {cl_:.3f} (dropped {cout:.1%}), rows r {r_rows:.2f}, step cos {cos:.2f}{prior_msg}"
     # targets from a jump with any row: its landing (clean jumps) or its clearance (also a jump that hit the box)
     good = (kp.sum(1) > 0) & np.isfinite(o["A"]).all((1, 2, 3)) & np.isfinite(o["B"]).all((1, 2, 3))
-    tgt = np.clip(o["mu"] - stp, -0.999, 0.999) * amask
+    tgt = np.clip(o["mu"] + gps_off - stp, -0.999, 0.999) * amask
     good &= np.isfinite(tgt).all((1, 2)) & np.isfinite(obs).all((1, 2))     # a non-finite jump never reaches the fit
     gi = np.where(good)[0]
     replay.append((obs[gi].reshape(-1, od), tgt[gi].reshape(-1, 4), np.broadcast_to(amask, (len(gi), Nc, 4)).reshape(-1, 4)))
@@ -531,8 +653,11 @@ for it in range(a.iters + 1):
     if a.vg == 2 and use_vg:
         # value-gradient targets at the last --vg-pool iterations' states: the critic's co-states for the rows, its
         # predicted landing error at the jump's start as the residual, the CURRENT network's mean as the base
-        for Op, Bp in vgpool:
+        for Op, Bp, Wp in vgpool:
             ev, Lp = crit_pred(Op)
+            if a.vg_res:
+                e0p, L0p = prior_of(Wp, Op)
+                ev, Lp = ev + e0p, Lp + L0p
             stp_p, _ = gn_step([cst[2] * land_rows(Lp, Bp)], [cst[2] * np.clip(ev[:, 0], -10.0, 10.0)],
                                [np.ones((len(Op), 3), bool) & (cst[2] > 0)])
             mu_p = np.asarray(mean_fn(w, jnp.asarray(Op[:, :Nc].reshape(-1, od), jnp.float32))).reshape(len(Op), Nc, 4)
@@ -554,5 +679,5 @@ for it in range(a.iters + 1):
     cl = slice(nx, None)
     log(f"it {it:3d}: stage {'I' * (stage + 1)} batch ok {ok.mean():.0%} (clean {ok[cl].mean():.0%}) fell {fell.mean():.0%} hit {hit.mean():.0%} targets {good.mean():.0%} clr rows {n_clr} trk rows {n_trk} far {int(far.sum())} "
         f"|ex| {np.abs(np.nan_to_num(e[~fell, 0])).mean() * 100:.1f} cm  step rms {np.sqrt((stp[gi] ** 2).sum((1, 2)) / amask.sum()).mean():.3f} "
-        f"loss {l:.2e} step taken {real:.0%}{vg_msg}  {time.time() - t0:.0f} s")
+        f"loss {l:.2e} step taken {real:.0%}{vg_msg}{k_msg}{f' | sim jumps {n_sim}' if a.gps_inner else ''}  {time.time() - t0:.0f} s")
 log("done")

@@ -10,6 +10,11 @@ oracle are trained (our method never randomizes; dr_train.py is the same compari
   student  RMA phase 2: the teacher's base policy frozen, an adaptation module phi(o) -> l (o the deployable
            observation, which already carries 3 past errors and the last action) regressed onto E z on the
            student's own DR rollouts; exported as the composite actor (phi in the P_* slot), deployable as is
+  student_ctx  RMA with cross-trial context (ilc_mjx/rma_ctx.py): the adaptation module psi reads the robot's
+           PREVIOUS jump (its whole contact phase, obs and actions, and its landing) -> l, regressed onto E z; per DR
+           robot two jumps, the first with the nominal robot's latent, the second with psi's (DAgger: psi also sees
+           contexts flown under its own latents), --ctx-replay iterations kept. Exports the teacher folded at the
+           nominal latent (the first jump's policy) and OUT/it<k>/ctx_params.npz; rma_ctx_eval.py deploys it
 
 Policy: a = tanh(mu_theta(o)) + sigma * eps (sigma a learned per-channel std; the noise enters as the rollout's action
 offset, so the likelihood is exact), swing-leg channels masked. Reward: at every contact sample -beta x the mean
@@ -27,7 +32,7 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 ap = argparse.ArgumentParser()
 ap.add_argument("--init", required=True)
-ap.add_argument("--mode", required=True, choices=("plain", "teacher", "student"))
+ap.add_argument("--mode", required=True, choices=("plain", "teacher", "student", "student_ctx"))
 ap.add_argument("--teacher", default="", help="student: the teacher's raw params (OUT/teacher_params.npz)")
 ap.add_argument("--out", required=True)
 ap.add_argument("--iters", type=int, default=400)
@@ -42,6 +47,7 @@ ap.add_argument("--lam", type=float, default=0.95)
 ap.add_argument("--beta", type=float, default=0.01, help="dense shaping weight")
 ap.add_argument("--sigma0", type=float, default=0.1)
 ap.add_argument("--latent", type=int, default=8)
+ap.add_argument("--ctx-replay", type=int, default=5, help="student_ctx: iterations of contexts psi is fitted on")
 ap.add_argument("--value-warmup", type=int, default=10)
 ap.add_argument("--explore-q", type=float, default=0.08, help="stance offsets (as every arm)")
 ap.add_argument("--goals", type=float, nargs=2, default=[0.40, 0.60])
@@ -59,6 +65,7 @@ import jax.numpy as jnp  # noqa: E402
 import numpy as np  # noqa: E402
 
 from ilc_mjx.jump import Config, JumpEnv  # noqa: E402
+from ilc_mjx import rma_ctx  # noqa: E402
 
 os.makedirs(a.out, exist_ok=True)
 pdir0 = os.path.dirname(os.path.abspath(a.init))
@@ -87,7 +94,15 @@ he = lambda k, o, i, s=1.0: jax.random.normal(k, (o, i)) * jnp.sqrt(2.0 / i) * s
 w0 = {k: jnp.asarray(v, jnp.float32) for k, v in np.load(a.init).items() if k != "n_hidden"}
 
 # -- parameters --------------------------------------------------------------------------------------------------
-if a.mode == "student":
+if a.mode == "student_ctx":
+    T = {k: jnp.asarray(v, jnp.float32) for k, v in np.load(a.teacher).items()}
+    sx = np.asarray(bank["sx"], float)
+    psi = rma_ctx.init(key, rma_ctx.dim(Nc), L)
+    WL = rma_ctx.latent_actor(T)
+    # the first jump's latent: the mean over the DR family (the best guess before any context)
+    Z_NOM = np.asarray(env.dyn_arrays(env.sample_dyn(4096, np.random.default_rng(99)))["z"]).mean(0)
+    L0 = rma_ctx.prior_latent(T, Z_NOM)
+elif a.mode == "student":
     T = {k: jnp.asarray(v, jnp.float32) for k, v in np.load(a.teacher).items()}
     ks = jax.random.split(key, 3)
     phi = dict(P_W0=he(ks[0], 256, OD), P_b0=jnp.zeros(256), P_W1=he(ks[1], 256, 256), P_b1=jnp.zeros(256),
@@ -204,6 +219,8 @@ def export(w_, d, extra=None):
 
 
 def deploy_weights():
+    if a.mode == "student_ctx":
+        return rma_ctx.fold(T, L0)
     if a.mode == "student":
         return dict({k: v for k, v in T.items() if k not in ("E", "bE", "log_sigma")}, **phi)
     return folded(pi)
@@ -220,7 +237,32 @@ n_tg = targets_of(n_goals, n_ref)
 n_dyn = env.dyn_arrays(np.tile([1.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 0.0], (len(n_goals), 1)))
 
 
+def ctx_feats(o, tg):
+    """The context vectors of a batch of flown jumps."""
+    e = np.asarray(o["X"])[:, N, :3] - tg[:, :3]
+    fell = np.asarray(o["fell"], bool) | ~np.isfinite(e).all(1)
+    return np.stack([rma_ctx.features(o["obs"][b], o["act"][b], e[b], fell[b], sx, Nc) for b in range(len(e))])
+
+
+def ctx_rollouts(ref, tg, dyn, q1, ref2, q2, k):
+    """Per DR robot: a jump with the nominal latent, then psi's latent from it on a second goal -> (o1, F1, l2, o2)."""
+    env.priv_dim = L
+    B = len(tg)
+    o1 = env.rollout(WL, ref, k, stochastic=False, q_offset=q1, dyn=dict(dyn, z=jnp.asarray(np.tile(L0, (B, 1)), jnp.float32)))
+    F1 = ctx_feats(o1, tg)
+    l2 = np.asarray(rma_ctx.psi_b(psi, jnp.asarray(F1)))
+    o2 = env.rollout(WL, ref2, k, stochastic=False, q_offset=q2, dyn=dict(dyn, z=jnp.asarray(l2, jnp.float32)))
+    return o1, F1, l2, o2
+
+
 def evaluate():
+    if a.mode == "student_ctx":                       # DR: a context jump, then the same goals with psi's latent
+        o1, _, _, o2 = ctx_rollouts(e_ref, e_tg, e_dyn, None, e_ref, None, jax.random.PRNGKey(0))
+        env.priv_dim = 0
+        on = env.rollout(deploy_weights(), n_ref, jax.random.PRNGKey(0), stochastic=False, dyn=n_dyn)
+        global last_prior
+        last_prior = float(score(o1["X"], o1["fell"], e_tg).mean())
+        return float(score(o2["X"], o2["fell"], e_tg).mean()), float(o2["fell"].mean()), float(score(on["X"], on["fell"], n_tg).mean())
     w_ = deploy_weights()
     env.priv_dim = NZ if a.mode == "teacher" else 0
     o = env.rollout(w_, e_ref, jax.random.PRNGKey(0), stochastic=False, dyn=e_dyn)
@@ -229,7 +271,22 @@ def evaluate():
     return float(sd), float(fr), float(score(o["X"], o["fell"], n_tg).mean())
 
 
-if a.mode != "student":
+if a.mode == "student_ctx":
+    spsi, cbuf = adam_init(psi), []
+
+    @jax.jit
+    def psi_fit(psi, st, F, Lt, k):
+        n = F.shape[0]
+
+        def one(c, kk):
+            psi, st = c
+            idx = jax.random.randint(kk, (a.minibatch,), 0, n)
+            l, g = jax.value_and_grad(lambda q: ((jax.vmap(lambda f: rma_ctx.psi(q, f))(F[idx]) - Lt[idx]) ** 2).mean())(psi)
+            psi, st = adam_step(psi, g, st, 3e-4)
+            return (psi, st), l
+        (psi, st), ls = jax.lax.scan(one, (psi, st), jax.random.split(k, 200))
+        return psi, st, ls.mean()
+elif a.mode != "student":
     sp, sv = adam_init(pi), adam_init(vf)
 else:
     sphi = adam_init(phi)
@@ -255,8 +312,13 @@ for it in range(a.iters + 1):
         export(deploy_weights(), os.path.join(a.out, f"it{it}", "policy"), extra)
         if a.mode == "teacher":
             np.savez(os.path.join(a.out, f"it{it}", "teacher_params.npz"), **{k: np.asarray(v) for k, v in pi.items()})
-        say(f"it {it}: eval DR {sd:.2f} (falls {fr:.1%}), nominal {sn:.2f}  [{jumps} jumps, wall "
-            f"{time.time() - t_start:.0f} s, train {t_train:.0f} s]")
+        if a.mode == "student_ctx":
+            np.savez(os.path.join(a.out, f"it{it}", "ctx_params.npz"), **{k: np.asarray(v) for k, v in psi.items()})
+            json.dump(dict(teacher=os.path.abspath(a.teacher), latent0=L0.tolist()),
+                      open(os.path.join(a.out, f"it{it}", "ctx.json"), "w"))
+        say(f"it {it}: eval DR {sd:.2f} (falls {fr:.1%}), nominal {sn:.2f}"
+            + (f" (DR with the nominal latent, no context: {last_prior:.2f})" if a.mode == "student_ctx" else "")
+            + f"  [{jumps} jumps, wall {time.time() - t_start:.0f} s, train {t_train:.0f} s]")
     if it == a.iters:
         break
     t0 = time.time()
@@ -265,6 +327,27 @@ for it in range(a.iters + 1):
     ref = env.references(goals)
     dyn = env.dyn_arrays(env.sample_dyn(B, rng))
     q_off, _ = env.explore_noise(B, rng, a.explore_q, 0.0)
+    if a.mode == "student_ctx":                      # two jumps per DR robot; psi regresses the latent on both contexts
+        goals2 = env.sample_plane_goals(B, rng) if a.plane else np.stack([rng.uniform(*a.goals, B), np.zeros(B)], 1)
+        ref2 = env.references(goals2)
+        q2, _ = env.explore_noise(B, rng, a.explore_q, 0.0)
+        tg1, tg2 = targets_of(goals, ref), targets_of(goals2, ref2)
+        o1, F1, l2, o2 = ctx_rollouts(ref, tg1, dyn, q_off, ref2, q2, jax.random.PRNGKey(it))
+        F2 = ctx_feats(o2, tg2)
+        lt = np.asarray(dyn["z"]) @ np.asarray(T["E"]).T + np.asarray(T["bE"])
+        m_pred = float(((l2 - lt) ** 2).mean())                 # psi before this batch: held-out robots
+        m_prior = float(((L0[None] - lt) ** 2).mean())
+        cbuf.append((np.concatenate([F1, F2]), np.concatenate([lt, lt])))
+        cbuf = cbuf[-a.ctx_replay:]
+        F_ = jnp.asarray(np.concatenate([c[0] for c in cbuf]))
+        Lt_ = jnp.asarray(np.concatenate([c[1] for c in cbuf]), jnp.float32)
+        psi, spsi, lf = psi_fit(psi, spsi, F_, Lt_, jax.random.PRNGKey(10_000 + it))
+        s2 = score(np.nan_to_num(o2["X"], nan=9.0), o2["fell"], tg2)
+        jumps += 2 * B
+        t_train += time.time() - t0
+        say(f"  it {it}: latent mse held-out {m_pred:.4f} (nominal latent {m_prior:.4f}, var {float(lt.var()):.3f}), fit "
+            f"{float(lf):.4f}; 2nd jump score {s2.mean():.2f} (falls {int(o2['fell'].sum())})  [{time.time() - t0:.1f} s]")
+        continue
     if a.mode == "student":                          # RMA phase 2: the student flies, phi regresses the latent
         env.priv_dim = 0
         out = env.rollout(deploy_weights(), ref, jax.random.PRNGKey(it), stochastic=False, q_offset=q_off, dyn=dyn)
