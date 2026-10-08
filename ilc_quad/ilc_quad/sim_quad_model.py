@@ -87,6 +87,7 @@ _BASE_BODY_NAMES = ("base", "trunk")
 _FLOOR_GEOM = "floor"
 _BOX_GEOM = "box"
 _STEP_GEOM = "step"
+BOX_DEPTH = 0.3   # the box and step reach this far under the floor (see _compile_with_extras)
 _PAYLOAD_BODY = "payload"
 
 _MENAGERIE_ENV = "MUJOCO_MENAGERIE_PATH"
@@ -177,7 +178,12 @@ class QuadModel:
         """The scene with a static box geom in the world body and/or a payload on the base.
 
         The box takes the geom defaults the floor does (same friction, contype and
-        conaffinity), so the feet meet it exactly as they meet the ground. The
+        conaffinity), so the feet meet it exactly as they meet the ground. The box
+        and the step reach `depth` (default BOX_DEPTH) under the floor: the Go1's soft
+        foot contact lets a hard landing sink past a thin box's mid-plane, and the
+        sphere-box contact then pushes the foot out through the bottom face and pins
+        it inside the box (the GPU JumpEnv does the same). The part under the floor
+        is unreachable otherwise -- world-body geoms do not collide with the floor. The
         payload is a body with explicit inertia (a solid box) and no joint, so it
         is welded to the base; its geom is visual only.
         """
@@ -186,13 +192,14 @@ class QuadModel:
             height = float(box["height"])
             length = float(box.get("length", 1.0))
             width = float(box.get("width", 1.0))
+            depth = float(box.get("depth", BOX_DEPTH))
             if height <= 0 or length <= 0 or width <= 0:
                 raise ValueError(f"box needs positive height/length/width, got {box}")
             spec.worldbody.add_geom(
                 name=_BOX_GEOM,
                 type=mujoco.mjtGeom.mjGEOM_BOX,
-                size=[length / 2, width / 2, height / 2],
-                pos=[float(box["x_front"]) + length / 2, 0.0, height / 2],
+                size=[length / 2, width / 2, (height + depth) / 2],
+                pos=[float(box["x_front"]) + length / 2, 0.0, (height - depth) / 2],
                 rgba=[0.6, 0.45, 0.3, 1.0],
             )
         if step is not None:
@@ -201,7 +208,7 @@ class QuadModel:
                 raise ValueError(f"step needs x1 > x0 and a positive height, got {step}")
             spec.worldbody.add_geom(
                 name=_STEP_GEOM, type=mujoco.mjtGeom.mjGEOM_BOX,
-                size=[(x1 - x0) / 2, 0.5, h / 2], pos=[(x0 + x1) / 2, 0.0, h / 2],
+                size=[(x1 - x0) / 2, 0.5, (h + BOX_DEPTH) / 2], pos=[(x0 + x1) / 2, 0.0, (h - BOX_DEPTH) / 2],
                 rgba=[0.3, 0.45, 0.6, 1.0])
         if payload is not None:
             mass = float(payload["mass"])

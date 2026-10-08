@@ -8,7 +8,8 @@ animate_hw_stage.py: side-view animations (matplotlib, GIF) of recorded Go1 jump
   compare  A.npz B.npz ... --robot R     sim-to-sim transfer side by side: one panel per file (method), one segment
                                          per test goal
 Options: --out FILE (default figures/ilc2real/anim/<mode>_<traj>_<robot>.gif), --fps 17, --stride 30 (2 ms ticks per frame:
-real time at 17 fps), --dpi 50 (small enough to commit), --format gif|mp4 (mp4 needs ffmpeg). All of them at once:
+real time at 17 fps), --dpi 100, --colors 48 (the GIF palette: few colours keep it small enough to commit),
+--format gif|mp4 (mp4 needs ffmpeg). All of them at once:
 make_animations.py. Poses come from the recorded ground truth through the menagerie
 Go1's kinematics (no rendering backend needed).
 """
@@ -30,7 +31,8 @@ ap.add_argument("--labels", nargs="*", default=None, help="compare: a label per 
 ap.add_argument("--out")
 ap.add_argument("--fps", type=int, default=17)
 ap.add_argument("--stride", type=int, default=30, help="ticks (2 ms) per frame: 30 at 17 fps ~ real time")
-ap.add_argument("--dpi", type=int, default=50)
+ap.add_argument("--dpi", type=int, default=100)
+ap.add_argument("--colors", type=int, default=48, help="GIF palette size")
 ap.add_argument("--format", default="gif", choices=("gif", "mp4"), help="mp4 needs ffmpeg")
 a = ap.parse_args()
 
@@ -83,9 +85,9 @@ else:
 npan = max(len(p) for _, p in segments)
 ncol = min(npan, 3)
 nrow = int(np.ceil(npan / ncol))
-fig, axs = plt.subplots(nrow, ncol, figsize=(4.4 * ncol, 2.9 * nrow + 0.5), squeeze=False, facecolor=SURF)
+fig, axs = plt.subplots(nrow, ncol, figsize=(4.9 * ncol, 3.0 * nrow + 0.7), squeeze=False, facecolor=SURF)
 axs = axs.ravel()
-sup = fig.suptitle("", x=0.01, ha="left", fontsize=10, color=INK)
+sup = fig.suptitle("", x=0.01, ha="left", fontsize=13, color=INK)
 frames = []                                       # (segment, tick)
 for s, (_, panels) in enumerate(segments):
     n = max(p[1]["meta"][p[2]]["n_ticks"] for p in panels)
@@ -127,11 +129,11 @@ def draw(f):
         done = k >= mt["n_ticks"] - 1 or k >= len(T["t"]) - a.stride
         res = (f"landing x {100 * mt['ex']:+.1f} cm, z {100 * mt['ez']:+.1f} cm" + (" -- FELL" if mt["fell"] else "")) if done else \
               f"t = {T['t'][min(k, len(T['t']) - 1)]:.2f} s"
-        ax.set_title(f"{ptitle}\n{res}", fontsize=8, loc="left", color=INK)
-        ax.set_xlim(x0 - 0.35, x0 + 1.05)
+        ax.set_title(f"{ptitle}\n{res}", fontsize=11, loc="left", color=INK)
+        ax.set_xlim(x0 - 0.42, x0 + 1.35)
         ax.set_ylim(-0.02, 0.75)
         ax.set_aspect("equal")
-        ax.tick_params(labelsize=6, colors=INK2)
+        ax.tick_params(labelsize=9, colors=INK2)
         for sp in ("top", "right"):
             ax.spines[sp].set_visible(False)
     return []
@@ -142,13 +144,27 @@ out = a.out or os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "f
 os.makedirs(os.path.dirname(out), exist_ok=True)
 fig.text(0.01, 0.005, ("orange: this jump's trunk path; blue: the same goal's earlier batches (light = earliest); dotted: the goal; "
                       "black bar: trunk (hips); blue: legs (far side darker)") if a.mode == "hwstage" else
-         "orange: the trunk path; dotted: the goal; black bar: trunk (hips); blue: legs (far side darker)", fontsize=7, color=INK2)
-fig.tight_layout(rect=(0, 0.03, 1, 0.93))
-anim = FuncAnimation(fig, draw, frames=len(frames), blit=False)
+         "orange: the trunk path; dotted: the goal; black bar: trunk (hips); blue: legs (far side darker)", fontsize=10, color=INK2)
+fig.tight_layout(rect=(0, 0.035, 1, 0.93))
 if a.format == "mp4":
     from matplotlib.animation import FFMpegWriter
     out = os.path.splitext(out)[0] + ".mp4"
-    anim.save(out, writer=FFMpegWriter(fps=a.fps, bitrate=1200), dpi=max(a.dpi, 90))
+    FuncAnimation(fig, draw, frames=len(frames), blit=False).save(out, writer=FFMpegWriter(fps=a.fps, bitrate=2400), dpi=a.dpi)
 else:
-    anim.save(out, writer=PillowWriter(fps=a.fps), dpi=a.dpi)
+    # one palette for the whole GIF (from a sample of frames), no dithering: flat colours compress well and the
+    # unchanged pixels between frames are written once (Pillow stores only each frame's changed box)
+    from PIL import Image
+    fig.set_dpi(a.dpi)
+    rgb = []
+    for f in range(len(frames)):
+        draw(f)
+        fig.canvas.draw()
+        rgb.append(Image.fromarray(np.asarray(fig.canvas.buffer_rgba())[..., :3].copy()))
+    sample = rgb[::max(1, len(rgb) // 12)]
+    strip = Image.new("RGB", (sample[0].width, sample[0].height * len(sample)))
+    for j, im in enumerate(sample):
+        strip.paste(im, (0, j * im.height))
+    pal = strip.quantize(colors=a.colors, method=Image.Quantize.MEDIANCUT)
+    ims = [im.quantize(palette=pal, dither=Image.Dither.NONE) for im in rgb]
+    ims[0].save(out, save_all=True, append_images=ims[1:], duration=int(round(1000 / a.fps)), loop=0, optimize=False)
 print(f"{len(frames)} frames -> {out} ({os.path.getsize(out) / 1e6:.1f} MB)")

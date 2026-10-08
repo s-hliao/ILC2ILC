@@ -15,6 +15,15 @@ Ground-truth trajectories as the CPU robots (ilc_quad's async lockstep MuJoCo si
 These are single episodes for *replay*; the reported success rates come from the full evaluations (4 episodes per
 goal, plus the 8 perturbations) in `log/dilc/plane/`.
 
+**Box fix (2026-10-08).** Until then the CPU robots' box was only as thick as it was tall (sitting on the floor). The
+Go1's soft foot contact (menagerie `solimp 0.015 1 0.023`) let a hard landing (a foot at ~5 m/s with the leg pushing)
+sink past a low box's mid-plane. The sphere-box contact then pushes the foot out through the box's *bottom* face and
+pins it on the floor inside the box. In replays the feet look like they go through the top. It hit roughly a quarter of
+the box jumps, mostly on the 3.5-10 cm boxes. The box (and the start step) now reach 0.3 m under the floor, as in
+the GPU sim (`sim_quad_model.BOX_DEPTH`). `gate_loose` and every `eval_*` file are re-recorded on the fixed robots
+(`log/dilc/plane/fixbox/run.sh`). `hwstage_tp_*`, `hwstage_fada_lora` and `hwstage_rma_crosstrial_calibration` were
+flown before the fix and can show the artifact.
+
 ## Contents of each npz
 
 - `t` (T,): seconds, 2 ms ticks (T = 1200, 2.4 s)
@@ -46,5 +55,5 @@ python scripts/animate_hw_stage.py compare trajectories/eval_ours_24jumps.npz tr
 python scripts/export_trajectories.py log/dilc/plane/gate_loose
 ```
 
-Rendered animations: `figures/ilc2real/anim/` (`hwstage_*`: the hardware stage batch by batch, one panel per goal;
+Rendered animations (1470 px wide, dpi 100, a 48-colour palette: 1-7 MB each): `figures/ilc2real/anim/` (`hwstage_*`: the hardware stage batch by batch, one panel per goal;
 `compare_transfer_*`: all methods side by side on each test goal).
