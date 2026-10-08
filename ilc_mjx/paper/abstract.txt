@@ -9,8 +9,11 @@ Placeholders (bracketed text above) -- fill or remove before submission:
 - "improves it further by x": the DR x hardware-stage factorial (log/dilc/plane/master_table.py, section 1). If the
   hardware stage does not add on top of the DR policy, drop this sentence and keep only the orthogonality claim.
 - [CAR DRIFTING]: the F1TENTH drifting task (not run yet).
-- Hardware deployments on the Go1 and the F1TENTH (not run yet); "at equal trial budgets" = vs FADA (48 trials),
-  cross-trial RMA (6), per-goal ILC (JumpILC).
+- Hardware deployments on the Go1 and the F1TENTH (not run yet). The per-goal ILC part is NOT supported as written:
+  at equal budgets in sim-to-sim (log/dilc/plane/jilc_budget.py) per-goal ILC trained on the 8 test goals reaches
+  36% at 24 trials per robot (ours 33%, trained on 6 other goals) and 45% at 96 (ours 39%). Suggested wording:
+  "... where, at equal trial budgets, it matches per-goal ILC trained on the evaluation goals themselves, while
+  never flying them." (Per-goal ILC over the whole 76-goal plane at 3 trials per goal = 228 trials vs our 24.)
 - "Code is available at:" the repository URL.
 Numbers as of 2026-10-08: 1,920 sim jumps vs 76,800 (PPO, RMA) and 102,400 (FADA); ~32 min vs ~5 h (PPO, RMA) and
 ~16 h (FADA) of GPU time (approximate: runs shared GPUs); 33% success after 24 real trials vs 20% (PPO + DR) and

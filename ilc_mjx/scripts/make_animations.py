@@ -34,7 +34,7 @@ if a.only != "compare":
         name = os.path.splitext(os.path.basename(f))[0]
         for rb in a.robots:
             jobs.append([py, anim, "hwstage", f, "--robot", rb, "--format", a.format, "--dpi", str(a.dpi),
-                         "--out", os.path.join(OUT, f"hwstage_{name}_{rb}.gif")])
+                         "--out", os.path.join(OUT, f"hwstage_{name.replace('hwstage_', '', 1)}_{rb}.gif")])
 if a.only != "hwstage":
     have = [(os.path.join(TR, f"eval_{m}.npz"), lab) for m, lab in METHODS if os.path.exists(os.path.join(TR, f"eval_{m}.npz"))]
     for rb in a.robots:
