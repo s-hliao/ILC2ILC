@@ -1,0 +1,17 @@
+ILC2Real: Sample-Efficient Policy Learning and Adaptation with Iterative Learning Control
+
+Abstract
+
+Transferring robot policies from simulation to hardware has proven to be a challenging task. Learning techniques typically address this problem with domain randomization: training in simulation against as wide a range of dynamics as possible, in the hope that the real system falls within it. This assumes the randomized family covers deployment, and it is sample-inefficient. We present an orthogonal approach, ILC2Real, which instead assumes only that the simulator's sensitivities point roughly in the right direction, and corrects the policy with real dynamics. ILC2Real learns in a nominal simulator and fine-tunes to deployment dynamics with a small number of guided improvements, both stages using Iterative Learning Control (ILC). Classical ILC uses approximate Jacobians to converge to locally optimal feedforward inputs for a single trajectory, and does not generalize beyond it. ILC2Real instead makes the ILC update the learning rule of a goal-conditioned neural policy. In simulation, every trial takes an ILC step and the network regresses onto a replay buffer of corrected actions. On hardware, the same update uses measured errors to correct the network across all goals from trials at a few, with no adaptation module, and no randomization required, though the method is compatible with both. On a quadruped jumping task, we show that ILC2Real trains with 40 to 53 times fewer samples and 10 to 30 times less time in simulation than domain-randomization baselines (PPO, RMA, FADA), and after 24 real trials reaches 1.6 to 1.9 times their success rate in sim-to-sim transfer. [Initialized from a domain-randomized policy, the same hardware stage improves it further by x, showing the two are complementary.] [CAR DRIFTING] [We also provide hardware deployments of the method on a Go1 and an F1TENTH, where it outperforms domain randomization and per-goal ILC at equal trial budgets.] Code is available at:
+
+
+Placeholders (bracketed text above) -- fill or remove before submission:
+- "improves it further by x": the DR x hardware-stage factorial (log/dilc/plane/master_table.py, section 1). If the
+  hardware stage does not add on top of the DR policy, drop this sentence and keep only the orthogonality claim.
+- [CAR DRIFTING]: the F1TENTH drifting task (not run yet).
+- Hardware deployments on the Go1 and the F1TENTH (not run yet); "at equal trial budgets" = vs FADA (48 trials),
+  cross-trial RMA (6), per-goal ILC (JumpILC).
+- "Code is available at:" the repository URL.
+Numbers as of 2026-10-08: 1,920 sim jumps vs 76,800 (PPO, RMA) and 102,400 (FADA); ~32 min vs ~5 h (PPO, RMA) and
+~16 h (FADA) of GPU time (approximate: runs shared GPUs); 33% success after 24 real trials vs 20% (PPO + DR) and
+17% (RMA), reserved test goals, 4 CPU robots; FADA's rerun pending.

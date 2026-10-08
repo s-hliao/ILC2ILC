@@ -67,6 +67,9 @@ ap.add_argument("--train-starts", type=float, default=0.0, metavar="S",
                 help="container: every hardware jump starts from its own posture, the front and rear leg pairs bent by "
                      "s_f, s_r ~ U(-S, S) x (hip +0.1, knee -0.2) rad (+-1: the test's crouch / tall / nose-up / "
                      "nose-down); its ILC step linearizes the GPU sim flown from the same start. 0: the nominal stance")
+ap.add_argument("--sim-start", default="nominal", choices=("nominal", "measured"),
+                help="with --train-starts: the GPU sim (the Jacobians) from the nominal stance (default: the sim never "
+                     "told the robot's perturbation) or from each jump's own start (the older behaviour)")
 ap.add_argument("--reg-jac", type=float, default=0.0,
                 help="feedback anchor: weight on the change of the policy's feedback d pi / d (error states) at the anchor "
                      "and trial states (not decayed): the update moves the actions' offset, not the sim's feedback")
@@ -680,7 +683,7 @@ def run_robot(robot):
             goals = np.array([gvec(g) for g in a.goals])
             q_off = None                                # (--train-cond: the sim stays NOMINAL -- the perturbation
                                                         #  exists only on the robot)
-            if a.train_starts > 0:                      # the GPU sim flown from each jump's own start
+            if a.train_starts > 0 and a.sim_start == "measured":   # the GPU sim flown from each jump's own start
                 q_off = np.zeros((len(a.goals), 12))
                 for gi_, g_ in enumerate(a.goals):
                     for i_, idx in enumerate(PLANAR_TO_CANONICAL):

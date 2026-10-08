@@ -83,6 +83,11 @@ ap.add_argument("--k-match", type=float, default=0.0,
 ap.add_argument("--k-r", type=float, default=1.0, help="--k-match: the iLQR's control weight (normalized actions; "
                                                           "landing in tolerances 5 cm / 3 cm / 0.1 rad)")
 ap.add_argument("--k-mb", type=int, default=512, help="--k-match: Jacobian samples per minibatch")
+ap.add_argument("--dr", action="store_true",
+                help="domain randomization in the sim stage (an orthogonal option): every training jump draws its own "
+                     "dynamics from JumpEnv.sample_dyn (mass, CoM, motors, torque curve, friction, payload -- the robots' "
+                     "family; delays / mocap stay out, the GPU sim cannot model them), and its ILC step uses its own "
+                     "robot's FD Jacobians. The evaluations stay nominal (plus the logged DR eval)")
 ap.add_argument("--gps-inner", type=int, default=0,
                 help="GPS-style ablation: each batch is first optimized on the model -- this many extra Gauss-Newton "
                      "rounds, each a new rollout of the same jumps (goals, stances, exploration) with the accumulated "
@@ -390,10 +395,16 @@ TG_E = targets_of(GE, REF_E)
 QOFF_E = env.explore_noise(len(GE), np.random.default_rng(5), 0.08, 0.0)[0]
 
 
+E_DYN = None          # --dr: a fixed DR draw over the eval goals (the DR eval)
+
+
 def evaluate():
+    global E_DYN
     res = {}
-    for name, q in (("clean", None), ("perturbed", QOFF_E)):
-        o = env.rollout(w, REF_E, jax.random.PRNGKey(0), stochastic=False, q_offset=q)
+    if a.dr and E_DYN is None:
+        E_DYN = env.dyn_arrays(env.sample_dyn(len(GE), np.random.default_rng(12345)))
+    for name, q, dy in (("clean", None, None), ("perturbed", QOFF_E, None)) + ((("dr", None, E_DYN),) if a.dr else ()):
+        o = env.rollout(w, REF_E, jax.random.PRNGKey(0), stochastic=False, q_offset=q, dyn=dy)
         e = o["X"][:, N, :3] - TG_E
         f = np.asarray(o["fell"], bool) | ~np.isfinite(e).all(1)
         e = np.nan_to_num(e, nan=1.0)
@@ -443,7 +454,8 @@ for it, inner in sched:
         c, p = r["clean"], r["perturbed"]
         log(f"eval it {it}: clean ok {c['ok']:.0%} (flat {c['flat_ok']:.0%} box {c['box_ok']:.0%}) fell {c['fell']:.0%} hit {c['hit']:.0%} "
             f"|ex| {c['ex'] * 100:.1f} |ez| {c['ez'] * 100:.1f} cm; perturbed ok {p['ok']:.0%} fell {p['fell']:.0%} "
-            f"|ex| {p['ex'] * 100:.1f} cm  ({len(GE)} goals, {time.time() - t0:.0f} s)")
+            f"|ex| {p['ex'] * 100:.1f} cm" + (f"; DR ok {r['dr']['ok']:.0%} fell {r['dr']['fell']:.0%}" if a.dr else "")
+            + f"  ({len(GE)} goals, {time.time() - t0:.0f} s)")
     if it == a.iters:
         break
     B = a.batch
@@ -455,7 +467,9 @@ for it, inner in sched:
         q_off, a_off = env.explore_noise(B, rng, a.q_off, a.a_off)
         q_off[nx:], a_off[nx:] = 0.0, 0.0
         gps_off = np.zeros((B, Nc, 4))
-    o = env.rollout(w, ref, jax.random.PRNGKey(it), stochastic=False, fd=True, a_offset=a_off + gps_off, q_offset=q_off)
+        dyn_b = env.dyn_arrays(env.sample_dyn(B, rng)) if a.dr else None
+    o = env.rollout(w, ref, jax.random.PRNGKey(it), stochastic=False, fd=True, a_offset=a_off + gps_off, q_offset=q_off,
+                    dyn=dyn_b)
     n_sim += B
     e = o["X"][:, N, :3] - tg
     fell = np.asarray(o["fell"], bool)
