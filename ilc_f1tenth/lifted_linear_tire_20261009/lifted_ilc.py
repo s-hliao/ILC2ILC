@@ -118,6 +118,35 @@ def command_chain(U, x0, car, dt):
     return np.asarray(out)                                 # (N, 3), after each step
 
 
+def box_qp(H, g, lb, ub, iters=50, tol=1e-10):
+    """min 0.5 d'Hd + g'd, lb <= d <= ub, by projected Newton (iLQR.py's box_qp)."""
+    n = g.shape[0]
+    d = np.clip(np.zeros(n), lb, ub)
+    free = np.ones(n, bool)
+    q = lambda z: 0.5 * z @ H @ z + g @ z
+    for _ in range(iters):
+        grad = g + H @ d
+        clamped = ((d <= lb + 1e-12) & (grad > 0)) | ((d >= ub - 1e-12) & (grad < 0))
+        free = ~clamped
+        if not free.any():
+            break
+        step = np.zeros(n)
+        step[free] = -np.linalg.solve(H[np.ix_(free, free)], grad[free])
+        if np.linalg.norm(step) < tol:
+            break
+        a, f0 = 1.0, q(d)
+        while a > 1e-6:
+            dn = np.clip(d + a * step, lb, ub)
+            if q(dn) <= f0 + 0.1 * grad @ (dn - d):
+                break
+            a *= 0.5
+        if np.linalg.norm(dn - d) < tol:
+            d = dn
+            break
+        d = dn
+    return d, free
+
+
 def trajectory_cost(X, U, reference, Q, Q_f, R):
     """The snapshot's task cost (ilc_f1tenth_ilqr_defect_aware.trajectory_cost)."""
     e = tracking_error(reference, X)
@@ -146,7 +175,7 @@ class LiftedILC:
 
     def __init__(self, reference, dt, U0, Q, Q_f, R, Qu_diag=(1e-4, 1.0), gain=1.0,
                  model="linear", safeguard=True, accept_tol=0.02, safeguard_growth=4.0,
-                 qu_scale_max=256.0, car=None, u_max=(300.0, None), solver="osqp"):
+                 qu_scale_max=256.0, car=None, u_max=(300.0, None), solver="box"):
         self.car = car or F110()
         self.reference = np.asarray(reference, float)
         self.dt = float(dt)
@@ -203,32 +232,79 @@ class LiftedILC:
         H = G.T @ (w[:, None] * G) + np.diag(s + r)
         g = -G.T @ (w * e) + r * Uf
 
-        # command-chain rows, exact (integrators the controller owns): steering command
-        # after step t = steer_t + dt sum_{j<=t} du_d,j; speed command = double integral
-        # of du_I, scaled by c
+        # command-chain limits, exact (integrators the controller owns): the change in the
+        # steering command dd, current dI and speed command dv after each step, as auxiliary
+        # variables tied by banded equalities (their cumulative-sum rows written out in du
+        # would make the constraint matrix dense, ~N^2, and OSQP's KKT intractable at N ~ 700)
+        #   dd_t = dd_{t-1} + dt du_d,t,  dI_t = dI_{t-1} + dt du_I,t,  dv_t = dv_{t-1} + c dt dI_t
         c = car['gear_ratio'] * 1.5 * car['pole_pairs'] * car['lambda'] / (car['mass'] * car['rw'])
-        L = np.tril(np.ones((N, N)))
-        Sd = np.zeros((N, 2 * N)); Sd[:, 1::2] = dt * L
-        SI = np.zeros((N, 2 * N)); SI[:, 0::2] = dt * L    # current after step t
-        Sv = c * dt * L @ SI                               # speed command after step t
         chain = command_chain(U, X[0], car, dt)
-        A_c = np.vstack([Sd, Sv])
-        lba = np.r_[-car['max_steer'] - chain[:, 1], -chain[:, 2]]
-        uba = np.r_[car['max_steer'] - chain[:, 1], np.full(N, np.inf)]
+        nz = 2 * N + 3 * N                                  # [du, dd, dI, dv]
+        D = np.eye(N) - np.eye(N, k=-1)                     # first difference
+        A_eq = np.zeros((3 * N, nz))
+        iu = np.arange(N)
+        A_eq[:N, 2 * N:3 * N] = D; A_eq[iu, 2 * iu + 1] = -dt
+        A_eq[N:2 * N, 3 * N:4 * N] = D; A_eq[N + iu, 2 * iu] = -dt
+        A_eq[2 * N:, 4 * N:] = D; A_eq[2 * N:, 3 * N:4 * N] = -c * dt * np.eye(N)
+        H_full = np.zeros((nz, nz)); H_full[:2 * N, :2 * N] = H
+        g_full = np.r_[g, np.zeros(3 * N)]
         umax = np.tile(self.u_max, N)
+        lbx = np.r_[-umax - Uf, -car['max_steer'] - chain[:, 1], np.full(N, -np.inf), -chain[:, 2]]
+        ubx = np.r_[umax - Uf, car['max_steer'] - chain[:, 1], np.full(N, np.inf), np.full(N, np.inf)]
 
-        qp = dict(h=ca.DM(H).sparsity(), a=ca.DM(A_c).sparsity())
-        opts = dict(print_time=False, error_on_fail=False)
-        if self.solver == "osqp":
-            opts["osqp"] = dict(verbose=False, eps_abs=1e-8, eps_rel=1e-8, max_iter=40000,
-                                polish=True)
-        S = ca.conic('ilc', self.solver, qp, opts)
-        sol = S(h=H, g=g, a=A_c, lba=lba, uba=uba, lbx=-umax - Uf, ubx=umax - Uf)
-        stats = S.stats()
-        du = np.asarray(sol['x']).reshape(N, NU)
+        lb_u, ub_u = -umax - Uf, umax - Uf
+        info = {}
+        if self.solver == "box":
+            # rate limits by projected Newton (dense Cholesky of the lifted H). The command-
+            # chain rows (steering command, speed command >= 0) are rarely active; any the
+            # box solution violates get an exterior quadratic penalty rho (a'du - b)^2 that
+            # pulls them to their bound, re-solved until none is violated by more than tol
+            # (rows once penalized stay penalized). Dense chain rows, built only if needed.
+            L = np.tril(np.ones((N, N)))
+            def chain_rows():
+                Sd = np.zeros((N, 2 * N)); Sd[:, 1::2] = dt * L
+                SI = np.zeros((N, 2 * N)); SI[:, 0::2] = dt * L
+                return np.vstack([Sd, -Sd, -(c * dt * L @ SI)]), np.r_[
+                    car['max_steer'] - chain[:, 1], car['max_steer'] + chain[:, 1], chain[:, 2]]
+            Ac = bc = None                                  # rows a'du <= b
+            Hp, gp = H, g
+            active = np.zeros(0, int)
+            rho = 1e4 * np.abs(np.diag(H)).max()
+            for it in range(12):
+                du_f, _ = box_qp(Hp, gp, lb_u, ub_u)
+                dd = dt * np.cumsum(du_f[1::2]); dv = c * dt * np.cumsum(dt * np.cumsum(du_f[0::2]))
+                viol = np.r_[np.abs(chain[:, 1] + dd) - car['max_steer'], -(chain[:, 2] + dv)]
+                if viol.max() <= 1e-6:
+                    break
+                if Ac is None:
+                    Ac, bc = chain_rows()
+                new = np.where(np.r_[chain[:, 1] + dd - car['max_steer'],
+                                     -car['max_steer'] - chain[:, 1] - dd,
+                                     -(chain[:, 2] + dv)] > 1e-6)[0]
+                active = np.union1d(active, new)
+                A_a, b_a = Ac[active], bc[active]
+                Hp = H + rho * A_a.T @ A_a
+                gp = g - rho * A_a.T @ b_a
+            du = du_f.reshape(N, NU)
+            info = dict(success=bool(viol.max() <= 1e-4), status='box' if it == 0 else f'box+{len(active)}pen',
+                        chain_violation=float(max(viol.max(), 0.0)))
+            if not info['success']:
+                info = {}                                   # fall back to the sparse QP
+        if self.solver != "box" or not info:
+            A_sp = ca.DM(ca.sparsify(ca.DM(A_eq)))
+            qp = dict(h=ca.DM(ca.sparsify(ca.DM(H_full))).sparsity(), a=A_sp.sparsity())
+            opts = dict(print_time=False, error_on_fail=False,
+                        osqp=dict(verbose=False, eps_abs=1e-7, eps_rel=1e-7, max_iter=20000,
+                                  polish=True))
+            S = ca.conic('ilc', 'osqp', qp, opts)
+            sol = S(h=H_full, g=g_full, a=A_sp, lba=np.zeros(3 * N), uba=np.zeros(3 * N),
+                    lbx=lbx, ubx=ubx)
+            stats = S.stats()
+            du = np.asarray(sol['x'])[:2 * N].reshape(N, NU)
+            info = dict(success=bool(stats.get('success', True)),
+                        status='osqp ' + str(stats.get('return_status', '')))
         e_pred = e - G @ du.reshape(-1)
-        info = dict(success=bool(stats.get('success', True)), status=str(stats.get('return_status', '')),
-                    e_now=float(0.5 * w @ e**2), e_pred=float(0.5 * w @ e_pred**2),
+        info.update(e_now=float(0.5 * w @ e**2), e_pred=float(0.5 * w @ e_pred**2),
                     du_max=np.abs(du).max(0).tolist())
         return du, info, G
 

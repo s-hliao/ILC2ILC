@@ -1,6 +1,7 @@
 """
 ILC trials on the F1TENTH gym bridge (public odometry, 35 Hz fixed deadlines), from the
-stored epoch-0 controls the snapshot's validation runs started from.
+controls of a nonlinear trajectory optimization (initial_to.py: the snapshot's blend NMPC,
+solved once over the whole reference at --rate), or from a stored history (--history).
 
   --method lifted   : LiftedILC (lifted_ilc.py), G from --model
   --method ilqr     : the snapshot's defect-aware iLQR (prepare_update), --alpha
@@ -43,7 +44,16 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--method', choices=['lifted', 'ilqr', 'repeat'], default='lifted')
     ap.add_argument('--model', choices=['linear', 'blend_linear', 'blend'], default='linear')
-    ap.add_argument('--history', default=str(SNAPSHOT / 'references/s_curve_epoch0.npz'))
+    ap.add_argument('--reference', choices=['s_curve', 'figure_eight'], default='s_curve')
+    ap.add_argument('--rate', type=float, default=40.0, help='control / execution rate, Hz')
+    ap.add_argument('--to-max-iter', type=int, default=1000,
+                    help="SQP iteration cap for the initial TO (the snapshot's NMPC: 20, which "
+                         "stops short of acados' 1e-6 stationarity tolerance)")
+    ap.add_argument('--allow-unconverged-to', action='store_true')
+    ap.add_argument('--to-model', choices=['fiala', 'blend'], default='fiala',
+                    help='NMPC model of the initial TO (the lifted ILC learns with the linear tire)')
+    ap.add_argument('--history', default=None,
+                    help='reuse (reference, controls[0], dt) from a stored history instead')
     ap.add_argument('--trials', type=int, default=15, help='trials flown, the first with U0')
     ap.add_argument('--qu', type=float, nargs=2, default=[1e-4, 1.0])
     ap.add_argument('--gain', type=float, default=1.0)
@@ -56,8 +66,21 @@ def main():
         ap.error('output exists; use a new directory')
     a.output.mkdir(parents=True)
 
-    h = np.load(a.history, allow_pickle=True)
-    ref, U, dt = h['reference'], h['controls'][0].copy(), float(h['dt'])
+    if a.history:
+        h = np.load(a.history, allow_pickle=True)
+        ref, U, dt = h['reference'], h['controls'][0].copy(), float(h['dt'])
+        to_info = json.loads(str(h['to_info'])) if 'to_info' in h.files else None
+    else:                                        # nonlinear TO for trial 1
+        from initial_to import make_reference, solve_initial_to
+        ref, dt = make_reference(a.reference, a.rate)
+        X_to, U, to_info = solve_initial_to(ref, dt, f'{a.reference}_{a.rate:g}hz', a.to_max_iter,
+                                         a.to_model)
+        np.savez(a.output / 'initial_to.npz', reference=ref, controls=U[None], to_states=X_to, dt=dt,
+                 to_info=json.dumps(to_info))
+        print('INITIAL_TO', json.dumps(to_info), flush=True)
+        if not to_info['converged'] and not a.allow_unconverged_to:
+            raise RuntimeError(f"initial TO did not converge (acados status {to_info['status']})")
+    (a.output / 'initial_to.json').write_text(json.dumps(to_info, indent=2))
     w = json.loads((SNAPSHOT / 'weights.json').read_text())
     Q, Qf, R = (np.array(w[k]) for k in ('Q', 'Q_f', 'R'))
     car = exp.F110()
@@ -66,7 +89,7 @@ def main():
     if a.method == 'lifted':
         ilc = LiftedILC(ref, dt, U, Q, Qf, R, Qu_diag=a.qu, gain=a.gain, model=a.model,
                         safeguard=not a.no_safeguard, accept_tol=a.accept_tol, car=car)
-    (a.output / 'config.json').write_text(json.dumps(dict(vars(a), output=str(a.output)), indent=2))
+    (a.output / 'config.json').write_text(json.dumps(dict(vars(a), output=str(a.output), dt=dt), indent=2))
 
     states, controls, metrics = [], [], []
     exp.rclpy.init()
@@ -91,6 +114,9 @@ def main():
             m = dict(trial=trial, cost=trajectory_cost(X, U, ref, Q, Qf, R),
                      position_rmse=position_rmse(ref, X),
                      lateness_max=float(np.max(node.schedule_diagnostics['lateness'])))
+            period = np.diff(node.schedule_diagnostics['actual'])
+            m.update(rate_hz=float(1.0 / np.mean(period)), period_ms_min=float(1e3 * period.min()),
+                     period_ms_max=float(1e3 * period.max()))
             t0 = time.monotonic()
             if a.method == 'lifted':
                 r = ilc.update(X)

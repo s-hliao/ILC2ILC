@@ -1,0 +1,1721 @@
+Generating solver in: /workspaces/ilc_ws/src/ilc_f1tenth/successful_defect_aware_20261008/solvers/lifted_s_curve_40hz_it200
+field AcadosOcpDims.N has been migrated to AcadosOcpOptions.N_horizon. setting AcadosOcpOptions.N_horizon = N. For future comppatibility, please use AcadosOcpOptions.N_horizon directly.
+External functions generated in 50.265 ms.
+Templated solver code generated in 1005.169 ms.
+rm -f libacados_ocp_solver_f1tenthblend.so
+rm -f f1tenthblend_cost/f1tenthblend_cost_y_0_fun.o f1tenthblend_cost/f1tenthblend_cost_y_0_fun_jac_ut_xt.o f1tenthblend_cost/f1tenthblend_cost_y_0_hess.o f1tenthblend_cost/f1tenthblend_cost_y_fun.o f1tenthblend_cost/f1tenthblend_cost_y_fun_jac_ut_xt.o f1tenthblend_cost/f1tenthblend_cost_y_hess.o f1tenthblend_cost/f1tenthblend_cost_y_e_fun.o f1tenthblend_cost/f1tenthblend_cost_y_e_fun_jac_ut_xt.o f1tenthblend_cost/f1tenthblend_cost_y_e_hess.o acados_solver_f1tenthblend.o
+cc -fPIC -std=c99   -O2 -I/acados/include -I/acados/include/acados -I/acados/include/blasfeo/include -I/acados/include/hpipm/include  -c -o f1tenthblend_cost/f1tenthblend_cost_y_0_fun.o f1tenthblend_cost/f1tenthblend_cost_y_0_fun.c
+cc -fPIC -std=c99   -O2 -I/acados/include -I/acados/include/acados -I/acados/include/blasfeo/include -I/acados/include/hpipm/include  -c -o f1tenthblend_cost/f1tenthblend_cost_y_0_fun_jac_ut_xt.o f1tenthblend_cost/f1tenthblend_cost_y_0_fun_jac_ut_xt.c
+cc -fPIC -std=c99   -O2 -I/acados/include -I/acados/include/acados -I/acados/include/blasfeo/include -I/acados/include/hpipm/include  -c -o f1tenthblend_cost/f1tenthblend_cost_y_0_hess.o f1tenthblend_cost/f1tenthblend_cost_y_0_hess.c
+cc -fPIC -std=c99   -O2 -I/acados/include -I/acados/include/acados -I/acados/include/blasfeo/include -I/acados/include/hpipm/include  -c -o f1tenthblend_cost/f1tenthblend_cost_y_fun.o f1tenthblend_cost/f1tenthblend_cost_y_fun.c
+cc -fPIC -std=c99   -O2 -I/acados/include -I/acados/include/acados -I/acados/include/blasfeo/include -I/acados/include/hpipm/include  -c -o f1tenthblend_cost/f1tenthblend_cost_y_fun_jac_ut_xt.o f1tenthblend_cost/f1tenthblend_cost_y_fun_jac_ut_xt.c
+cc -fPIC -std=c99   -O2 -I/acados/include -I/acados/include/acados -I/acados/include/blasfeo/include -I/acados/include/hpipm/include  -c -o f1tenthblend_cost/f1tenthblend_cost_y_hess.o f1tenthblend_cost/f1tenthblend_cost_y_hess.c
+cc -fPIC -std=c99   -O2 -I/acados/include -I/acados/include/acados -I/acados/include/blasfeo/include -I/acados/include/hpipm/include  -c -o f1tenthblend_cost/f1tenthblend_cost_y_e_fun.o f1tenthblend_cost/f1tenthblend_cost_y_e_fun.c
+cc -fPIC -std=c99   -O2 -I/acados/include -I/acados/include/acados -I/acados/include/blasfeo/include -I/acados/include/hpipm/include  -c -o f1tenthblend_cost/f1tenthblend_cost_y_e_fun_jac_ut_xt.o f1tenthblend_cost/f1tenthblend_cost_y_e_fun_jac_ut_xt.c
+cc -fPIC -std=c99   -O2 -I/acados/include -I/acados/include/acados -I/acados/include/blasfeo/include -I/acados/include/hpipm/include  -c -o f1tenthblend_cost/f1tenthblend_cost_y_e_hess.o f1tenthblend_cost/f1tenthblend_cost_y_e_hess.c
+cc -fPIC -std=c99   -O2 -I/acados/include -I/acados/include/acados -I/acados/include/blasfeo/include -I/acados/include/hpipm/include  -c -o acados_solver_f1tenthblend.o acados_solver_f1tenthblend.c
+cc -fPIC -std=c99   -O2 -I/acados/include -I/acados/include/acados -I/acados/include/blasfeo/include -I/acados/include/hpipm/include  -c -o f1tenthblend_model/f1tenthblend_expl_ode_fun.o f1tenthblend_model/f1tenthblend_expl_ode_fun.c
+cc -fPIC -std=c99   -O2 -I/acados/include -I/acados/include/acados -I/acados/include/blasfeo/include -I/acados/include/hpipm/include  -c -o f1tenthblend_model/f1tenthblend_expl_vde_forw.o f1tenthblend_model/f1tenthblend_expl_vde_forw.c
+cc -fPIC -std=c99   -O2 -I/acados/include -I/acados/include/acados -I/acados/include/blasfeo/include -I/acados/include/hpipm/include  -c -o f1tenthblend_model/f1tenthblend_expl_vde_adj.o f1tenthblend_model/f1tenthblend_expl_vde_adj.c
+cc -shared f1tenthblend_cost/f1tenthblend_cost_y_0_fun.o f1tenthblend_cost/f1tenthblend_cost_y_0_fun_jac_ut_xt.o f1tenthblend_cost/f1tenthblend_cost_y_0_hess.o f1tenthblend_cost/f1tenthblend_cost_y_fun.o f1tenthblend_cost/f1tenthblend_cost_y_fun_jac_ut_xt.o f1tenthblend_cost/f1tenthblend_cost_y_hess.o f1tenthblend_cost/f1tenthblend_cost_y_e_fun.o f1tenthblend_cost/f1tenthblend_cost_y_e_fun_jac_ut_xt.o f1tenthblend_cost/f1tenthblend_cost_y_e_hess.o acados_solver_f1tenthblend.o f1tenthblend_model/f1tenthblend_expl_ode_fun.o f1tenthblend_model/f1tenthblend_expl_vde_forw.o f1tenthblend_model/f1tenthblend_expl_vde_adj.o -o libacados_ocp_solver_f1tenthblend.so -L/acados/lib -lacados -lhpipm -lblasfeo -lm  \
+-L -l
+Build completed in 1810.281 ms.
+acados was compiled without OpenMP.
+Solver generated successfully: /workspaces/ilc_ws/src/ilc_f1tenth/successful_defect_aware_20261008/solvers/lifted_s_curve_40hz_it200/f1tenth_acados_ocp.json
+INITIAL_TO {"status": 0, "converged": true, "cost": 4.115030325397556, "sqp_iter": 79, "residuals": [9.78160026876588e-07, 2.39733566331779e-10, 4.988096002034023e-13, 1.7877508753178668e-08], "N": 127, "dt": 0.025, "rate_hz": 40.0, "model": "blend (nonlinear tire), acados SQP, NONLINEAR_LS"}
+Reset succeeded: [0.00015974 0.         0.         0.03194871 0.         0.        ]
+TRIAL {"trial": 0, "cost": 217.58072685465925, "position_rmse": 0.3486765856730817, "lateness_max": 0.0023567159987578634, "rate_hz": 40.00285358770492, "period_ms_min": 23.0820480028342, "period_ms_max": 26.985218999470817, "rejected": false, "qu_scale": 1.0, "predicted_cost": 23.867819890058094, "qp": "box", "du_norm": 357.8026733069801, "update_seconds": 0.06224879000001238}
+Reset succeeded: [0. 0. 0. 0. 0. 0.]
+TRIAL {"trial": 1, "cost": 61.14689977355389, "position_rmse": 0.14454980601383235, "lateness_max": 0.0016624739982944448, "rate_hz": 39.998667396797714, "period_ms_min": 24.104535001242766, "period_ms_max": 26.165990999288624, "rejected": false, "qu_scale": 1.0, "predicted_cost": 30.167578136228403, "qp": "box", "du_norm": 89.81307774596134, "update_seconds": 0.06988773799821502}
+Reset succeeded: [0. 0. 0. 0. 0. 0.]
+TRIAL {"trial": 2, "cost": 59.554287249392935, "position_rmse": 0.13483535843383032, "lateness_max": 0.0028689199971267954, "rate_hz": 39.99744623289486, "period_ms_min": 22.615681002207566, "period_ms_max": 27.369324998289812, "rejected": false, "qu_scale": 1.0, "predicted_cost": 30.98980339727261, "qp": "box", "du_norm": 32.32454184200028, "update_seconds": 0.03903088600054616}
+Reset succeeded: [0. 0. 0. 0. 0. 0.]
+TRIAL {"trial": 3, "cost": 59.33370216819402, "position_rmse": 0.13434179977854485, "lateness_max": 0.0020592359978763852, "rate_hz": 39.98847089218558, "period_ms_min": 23.306274000788108, "period_ms_max": 26.636789996700827, "rejected": false, "qu_scale": 1.0, "predicted_cost": 30.941631740288592, "qp": "box", "du_norm": 13.890070791528114, "update_seconds": 0.061896384999272414}
+Reset succeeded: [0. 0. 0. 0. 0. 0.]
+TRIAL {"trial": 4, "cost": 59.075120928804175, "position_rmse": 0.13419425656952522, "lateness_max": 0.0019463289972918574, "rate_hz": 39.999731189108644, "period_ms_min": 23.57155899881036, "period_ms_max": 26.667360001738416, "rejected": false, "qu_scale": 1.0, "predicted_cost": 30.75965271950919, "qp": "box", "du_norm": 6.3365452560618705, "update_seconds": 0.054278277999401325}
+Reset succeeded: [0. 0. 0. 0. 0. 0.]
+TRIAL {"trial": 5, "cost": 57.600799326870025, "position_rmse": 0.1275446082713339, "lateness_max": 0.002003001998673426, "rate_hz": 39.99820003018053, "period_ms_min": 23.59588800027268, "period_ms_max": 26.194531998044113, "rejected": false, "qu_scale": 1.0, "predicted_cost": 29.426608561333808, "qp": "box", "du_norm": 4.785711442231762, "update_seconds": 0.07276940500014462}
+Reset succeeded: [0. 0. 0. 0. 0. 0.]
+TRIAL {"trial": 6, "cost": 59.10642588118155, "position_rmse": 0.13986725482616003, "lateness_max": 0.002178206999815302, "rate_hz": 40.00046705308088, "period_ms_min": 23.376838998956373, "period_ms_max": 26.838582998607308, "rejected": true, "qu_scale": 4.0, "predicted_cost": 29.405328420218122, "qp": "box", "du_norm": 3.3562743670790156, "update_seconds": 0.05889827200007858}
+Reset succeeded: [0. 0. 0. 0. 0. 0.]
+TRIAL {"trial": 7, "cost": 59.02136659657328, "position_rmse": 0.1392403993106395, "lateness_max": 0.0015783880007802509, "rate_hz": 39.98794008160891, "period_ms_min": 23.744214999169344, "period_ms_max": 26.139549001527485, "rejected": true, "qu_scale": 16.0, "predicted_cost": 29.362784510049977, "qp": "box", "du_norm": 2.2887248394596322, "update_seconds": 0.06566243400084204}
+Reset succeeded: [0. 0. 0. 0. 0. 0.]
+TRIAL {"trial": 8, "cost": 59.20913911325788, "position_rmse": 0.1395723555562923, "lateness_max": 0.001797024000552483, "rate_hz": 39.9975339678997, "period_ms_min": 23.730362998321652, "period_ms_max": 26.443642000231193, "rejected": true, "qu_scale": 64.0, "predicted_cost": 29.311124657411497, "qp": "box", "du_norm": 1.392945108758791, "update_seconds": 0.06572842400055379}
+Reset succeeded: [0. 0. 0. 0. 0. 0.]
+TRIAL {"trial": 9, "cost": 59.129738202149305, "position_rmse": 0.13830084389649464, "lateness_max": 0.0026728899974841624, "rate_hz": 39.994466238688084, "period_ms_min": 22.96418699916103, "period_ms_max": 27.20689999841852, "rejected": true, "qu_scale": 256.0, "predicted_cost": 29.275127692659467, "qp": "box", "du_norm": 0.7705266587870782, "update_seconds": 0.05034391200024402}
+Reset succeeded: [0. 0. 0. 0. 0. 0.]
+TRIAL {"trial": 10, "cost": 59.15404276882197, "position_rmse": 0.13750261758652293, "lateness_max": 0.0014455509990511928, "rate_hz": 39.99114328210183, "period_ms_min": 24.14523100014776, "period_ms_max": 26.03143400119734, "rejected": true, "qu_scale": 256.0, "predicted_cost": 29.275127692659467, "qp": "box", "du_norm": 0.7705266587870782, "update_seconds": 0.06451070299954154}
+Reset succeeded: [0. 0. 0. 0. 0. 0.]
+TRIAL {"trial": 11, "cost": 58.722314029523424, "position_rmse": 0.13542664339100025, "lateness_max": 0.002543684000556823, "rate_hz": 39.98854065525599, "period_ms_min": 22.763877001125365, "period_ms_max": 27.041392000683118, "rejected": false, "qu_scale": 128.0, "predicted_cost": 30.41971109410246, "qp": "box", "du_norm": 0.3901776769765841, "update_seconds": 0.049756115997297456}
+Reset succeeded: [0. 0. 0. 0. 0. 0.]
+    max|Quu|=1.001e+01, cond(Quu)=1.001e+05
+    max|Quu|=1.318e+01, cond(Quu)=1.204e+05
+    max|Quu|=1.557e+01, cond(Quu)=1.319e+05
+    max|Quu|=1.673e+01, cond(Quu)=1.340e+05
+    max|Quu|=1.717e+01, cond(Quu)=1.327e+05
+    max|Quu|=1.733e+01, cond(Quu)=1.309e+05
+    max|Quu|=1.738e+01, cond(Quu)=1.296e+05
+    max|Quu|=1.740e+01, cond(Quu)=1.288e+05
+    max|Quu|=1.741e+01, cond(Quu)=1.282e+05
+    max|Quu|=1.741e+01, cond(Quu)=1.279e+05
+    max|Quu|=1.742e+01, cond(Quu)=1.276e+05
+    max|Quu|=1.742e+01, cond(Quu)=1.274e+05
+    max|Quu|=1.743e+01, cond(Quu)=1.273e+05
+    max|Quu|=1.743e+01, cond(Quu)=1.272e+05
+    max|Quu|=1.744e+01, cond(Quu)=1.270e+05
+    max|Quu|=1.744e+01, cond(Quu)=1.269e+05
+    max|Quu|=1.745e+01, cond(Quu)=1.268e+05
+    max|Quu|=1.745e+01, cond(Quu)=1.266e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.265e+05
+    max|Quu|=1.747e+01, cond(Quu)=1.264e+05
+    max|Quu|=1.748e+01, cond(Quu)=1.263e+05
+    max|Quu|=1.748e+01, cond(Quu)=1.261e+05
+    max|Quu|=1.749e+01, cond(Quu)=1.260e+05
+    max|Quu|=1.750e+01, cond(Quu)=1.259e+05
+    max|Quu|=1.752e+01, cond(Quu)=1.258e+05
+    max|Quu|=1.753e+01, cond(Quu)=1.257e+05
+    max|Quu|=1.754e+01, cond(Quu)=1.256e+05
+    max|Quu|=1.755e+01, cond(Quu)=1.255e+05
+    max|Quu|=1.757e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.758e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.759e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.761e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.762e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.764e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.765e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.766e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.768e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.769e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.771e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.773e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.775e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.776e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.778e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.780e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.782e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.783e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.785e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.786e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.788e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.790e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.791e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.793e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.794e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.795e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.796e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.797e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.798e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.799e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.800e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.801e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.802e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.802e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.803e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.803e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.803e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.803e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.803e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.803e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.803e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.803e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.803e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.802e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.802e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.801e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.801e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.800e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.799e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.799e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.798e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.797e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.796e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.795e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.794e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.793e+01, cond(Quu)=1.242e+05
+    max|Quu|=1.791e+01, cond(Quu)=1.241e+05
+    max|Quu|=1.790e+01, cond(Quu)=1.240e+05
+    max|Quu|=1.789e+01, cond(Quu)=1.239e+05
+    max|Quu|=1.787e+01, cond(Quu)=1.238e+05
+    max|Quu|=1.786e+01, cond(Quu)=1.237e+05
+    max|Quu|=1.784e+01, cond(Quu)=1.236e+05
+    max|Quu|=1.783e+01, cond(Quu)=1.235e+05
+    max|Quu|=1.781e+01, cond(Quu)=1.234e+05
+    max|Quu|=1.779e+01, cond(Quu)=1.233e+05
+    max|Quu|=1.777e+01, cond(Quu)=1.231e+05
+    max|Quu|=1.775e+01, cond(Quu)=1.230e+05
+    max|Quu|=1.773e+01, cond(Quu)=1.229e+05
+    max|Quu|=1.772e+01, cond(Quu)=1.227e+05
+    max|Quu|=1.770e+01, cond(Quu)=1.226e+05
+    max|Quu|=1.768e+01, cond(Quu)=1.225e+05
+    max|Quu|=1.766e+01, cond(Quu)=1.223e+05
+    max|Quu|=1.764e+01, cond(Quu)=1.222e+05
+    max|Quu|=1.762e+01, cond(Quu)=1.221e+05
+    max|Quu|=1.760e+01, cond(Quu)=1.219e+05
+    max|Quu|=1.758e+01, cond(Quu)=1.218e+05
+    max|Quu|=1.756e+01, cond(Quu)=1.216e+05
+    max|Quu|=1.754e+01, cond(Quu)=1.215e+05
+    max|Quu|=1.752e+01, cond(Quu)=1.213e+05
+    max|Quu|=1.750e+01, cond(Quu)=1.212e+05
+    max|Quu|=1.748e+01, cond(Quu)=1.211e+05
+    max|Quu|=1.747e+01, cond(Quu)=1.210e+05
+    max|Quu|=1.747e+01, cond(Quu)=1.210e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.209e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.209e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.209e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.209e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.209e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.208e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.208e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.208e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.207e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.207e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.207e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.206e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.206e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.206e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.205e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.205e+05
+Measured previous rollout {"cost": 221.2562376469665, "position_rmse": 0.3553549794011524}
+Defect construction {"mean_absolute": 0.04295980420395985, "max_absolute": 1.358022197513503, "max_timestep": 5, "max_state_dimension": 6, "max_state_name": "wheel_speed", "per_state_max_absolute": [0.016594865645480184, 0.00695168928803358, 0.004880665681924162, 0.06912730494595512, 0.018054462179899183, 0.13879171260180717, 1.358022197513503, 1.4210854715202004e-14, 2.7755575615628914e-17]}
+Defect reconstruction {"mean_absolute": 2.9307588123101666e-17, "max_absolute": 8.881784197001252e-16, "max_timestep": 100, "max_state_dimension": 0, "max_state_name": "x", "per_state_max_absolute": [8.881784197001252e-16, 2.220446049250313e-16, 1.249000902703301e-16, 8.673617379884035e-19, 1.734723475976807e-18, 6.938893903907228e-18, 8.326672684688674e-17, 0.0, 0.0]}
+alpha=0 max |U_forward - U_old|: 1.2789769243681803e-13
+Unchanged control baseline {"unchanged_defect": {"cost": 221.25623764696655, "position_rmse": 0.35535497940115246}, "unchanged_nominal": {"cost": 116.06765326567842, "position_rmse": 0.05423441494319267}}
+Alpha candidate {"alpha": 0.5, "defect": {"cost": 96.66439914022934, "position_rmse": 0.2313728757939946}, "nominal": {"cost": 60.05215668084622, "position_rmse": 0.09812939332245013}, "defect_improvement": 124.59183850673722, "nominal_improvement": 56.0154965848322}
+Final selection {"status": "ACCEPT", "alpha": 0.5, "cost": 96.66439914022934, "reason": "Strictly lower defect-aware cost than unchanged-control prediction"}
+STOP: candidate prepared; no actual rollout executed.
+TRIAL {"trial": 0, "cost": 221.2562376469665, "position_rmse": 0.3553549794011524, "lateness_max": 0.0015848759976506699, "rate_hz": 40.000157638682445, "period_ms_min": 23.95202200204949, "period_ms_max": 26.21881199956988, "selection": "ACCEPT", "update_seconds": 0.5362384489999386}
+Reset succeeded: [0. 0. 0. 0. 0. 0.]
+    max|Quu|=1.001e+01, cond(Quu)=1.001e+05
+    max|Quu|=1.317e+01, cond(Quu)=1.204e+05
+    max|Quu|=1.556e+01, cond(Quu)=1.318e+05
+    max|Quu|=1.672e+01, cond(Quu)=1.340e+05
+    max|Quu|=1.717e+01, cond(Quu)=1.327e+05
+    max|Quu|=1.733e+01, cond(Quu)=1.309e+05
+    max|Quu|=1.738e+01, cond(Quu)=1.296e+05
+    max|Quu|=1.740e+01, cond(Quu)=1.287e+05
+    max|Quu|=1.741e+01, cond(Quu)=1.282e+05
+    max|Quu|=1.741e+01, cond(Quu)=1.278e+05
+    max|Quu|=1.741e+01, cond(Quu)=1.276e+05
+    max|Quu|=1.742e+01, cond(Quu)=1.274e+05
+    max|Quu|=1.742e+01, cond(Quu)=1.273e+05
+    max|Quu|=1.742e+01, cond(Quu)=1.271e+05
+    max|Quu|=1.743e+01, cond(Quu)=1.270e+05
+    max|Quu|=1.743e+01, cond(Quu)=1.268e+05
+    max|Quu|=1.744e+01, cond(Quu)=1.267e+05
+    max|Quu|=1.744e+01, cond(Quu)=1.266e+05
+    max|Quu|=1.745e+01, cond(Quu)=1.264e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.263e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.262e+05
+    max|Quu|=1.747e+01, cond(Quu)=1.260e+05
+    max|Quu|=1.748e+01, cond(Quu)=1.259e+05
+    max|Quu|=1.749e+01, cond(Quu)=1.258e+05
+    max|Quu|=1.750e+01, cond(Quu)=1.257e+05
+    max|Quu|=1.751e+01, cond(Quu)=1.255e+05
+    max|Quu|=1.752e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.753e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.754e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.756e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.757e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.758e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.759e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.760e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.762e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.763e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.764e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.766e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.768e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.769e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.771e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.773e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.775e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.776e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.778e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.779e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.781e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.783e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.784e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.786e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.788e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.789e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.791e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.793e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.794e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.795e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.797e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.798e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.799e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.800e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.801e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.802e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.803e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.804e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.804e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.805e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.805e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.805e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.806e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.806e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.806e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.806e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.805e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.805e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.805e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.805e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.804e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.804e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.803e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.803e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.802e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.801e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.800e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.800e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.799e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.797e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.796e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.795e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.794e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.792e+01, cond(Quu)=1.242e+05
+    max|Quu|=1.790e+01, cond(Quu)=1.241e+05
+    max|Quu|=1.789e+01, cond(Quu)=1.239e+05
+    max|Quu|=1.787e+01, cond(Quu)=1.238e+05
+    max|Quu|=1.785e+01, cond(Quu)=1.237e+05
+    max|Quu|=1.782e+01, cond(Quu)=1.235e+05
+    max|Quu|=1.780e+01, cond(Quu)=1.234e+05
+    max|Quu|=1.778e+01, cond(Quu)=1.232e+05
+    max|Quu|=1.775e+01, cond(Quu)=1.230e+05
+    max|Quu|=1.773e+01, cond(Quu)=1.229e+05
+    max|Quu|=1.770e+01, cond(Quu)=1.227e+05
+    max|Quu|=1.768e+01, cond(Quu)=1.225e+05
+    max|Quu|=1.765e+01, cond(Quu)=1.224e+05
+    max|Quu|=1.763e+01, cond(Quu)=1.222e+05
+    max|Quu|=1.760e+01, cond(Quu)=1.220e+05
+    max|Quu|=1.758e+01, cond(Quu)=1.218e+05
+    max|Quu|=1.755e+01, cond(Quu)=1.217e+05
+    max|Quu|=1.753e+01, cond(Quu)=1.215e+05
+    max|Quu|=1.751e+01, cond(Quu)=1.213e+05
+    max|Quu|=1.749e+01, cond(Quu)=1.212e+05
+    max|Quu|=1.748e+01, cond(Quu)=1.211e+05
+    max|Quu|=1.747e+01, cond(Quu)=1.211e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.211e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.211e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.210e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.210e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.210e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.209e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.209e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.208e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.208e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.207e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.207e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.206e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.206e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.206e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.205e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.205e+05
+Measured previous rollout {"cost": 129.27154091935083, "position_rmse": 0.30367013195702447}
+Defect construction {"mean_absolute": 0.04817822791832983, "max_absolute": 1.5565064550866161, "max_timestep": 18, "max_state_dimension": 6, "max_state_name": "wheel_speed", "per_state_max_absolute": [0.015837352865588628, 0.006853193954548864, 0.004718988438710686, 0.057495834641974525, 0.018467819908004533, 0.13340164759673234, 1.5565064550866161, 1.4210854715202004e-14, 2.7755575615628914e-17]}
+Defect reconstruction {"mean_absolute": 2.0308338158518984e-17, "max_absolute": 4.440892098500626e-16, "max_timestep": 93, "max_state_dimension": 1, "max_state_name": "y", "per_state_max_absolute": [3.3881317890172014e-21, 4.440892098500626e-16, 1.1102230246251565e-16, 2.168404344971009e-19, 0.0, 3.469446951953614e-18, 5.551115123125783e-17, 0.0, 0.0]}
+alpha=0 max |U_forward - U_old|: 1.2434497875801753e-14
+Unchanged control baseline {"unchanged_defect": {"cost": 129.27154091935077, "position_rmse": 0.3036701319570243}, "unchanged_nominal": {"cost": 60.05215668084622, "position_rmse": 0.09812939332245013}}
+Alpha candidate {"alpha": 0.5, "defect": {"cost": 79.33179903383922, "position_rmse": 0.21271708325511865}, "nominal": {"cost": 72.9803277603028, "position_rmse": 0.18918885753845968}, "defect_improvement": 49.93974188551155, "nominal_improvement": -12.928171079456583}
+Final selection {"status": "ACCEPT", "alpha": 0.5, "cost": 79.33179903383922, "reason": "Strictly lower defect-aware cost than unchanged-control prediction"}
+STOP: candidate prepared; no actual rollout executed.
+TRIAL {"trial": 1, "cost": 129.27154091935083, "position_rmse": 0.30367013195702447, "lateness_max": 0.0018884019991673995, "rate_hz": 39.99202984239923, "period_ms_min": 23.615645000973018, "period_ms_max": 26.367916998424334, "selection": "ACCEPT", "update_seconds": 0.5364258619993052}
+Reset succeeded: [0. 0. 0. 0. 0. 0.]
+    max|Quu|=1.001e+01, cond(Quu)=1.001e+05
+    max|Quu|=1.317e+01, cond(Quu)=1.204e+05
+    max|Quu|=1.556e+01, cond(Quu)=1.318e+05
+    max|Quu|=1.672e+01, cond(Quu)=1.340e+05
+    max|Quu|=1.717e+01, cond(Quu)=1.326e+05
+    max|Quu|=1.732e+01, cond(Quu)=1.309e+05
+    max|Quu|=1.738e+01, cond(Quu)=1.296e+05
+    max|Quu|=1.740e+01, cond(Quu)=1.287e+05
+    max|Quu|=1.740e+01, cond(Quu)=1.282e+05
+    max|Quu|=1.741e+01, cond(Quu)=1.278e+05
+    max|Quu|=1.741e+01, cond(Quu)=1.276e+05
+    max|Quu|=1.742e+01, cond(Quu)=1.274e+05
+    max|Quu|=1.742e+01, cond(Quu)=1.272e+05
+    max|Quu|=1.742e+01, cond(Quu)=1.271e+05
+    max|Quu|=1.743e+01, cond(Quu)=1.270e+05
+    max|Quu|=1.743e+01, cond(Quu)=1.268e+05
+    max|Quu|=1.744e+01, cond(Quu)=1.267e+05
+    max|Quu|=1.744e+01, cond(Quu)=1.265e+05
+    max|Quu|=1.745e+01, cond(Quu)=1.264e+05
+    max|Quu|=1.745e+01, cond(Quu)=1.263e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.261e+05
+    max|Quu|=1.747e+01, cond(Quu)=1.260e+05
+    max|Quu|=1.747e+01, cond(Quu)=1.258e+05
+    max|Quu|=1.748e+01, cond(Quu)=1.257e+05
+    max|Quu|=1.749e+01, cond(Quu)=1.256e+05
+    max|Quu|=1.750e+01, cond(Quu)=1.255e+05
+    max|Quu|=1.751e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.752e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.753e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.754e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.755e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.756e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.758e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.759e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.760e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.761e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.763e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.764e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.766e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.768e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.769e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.771e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.773e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.774e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.776e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.777e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.779e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.781e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.782e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.784e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.786e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.787e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.789e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.791e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.792e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.794e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.795e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.796e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.798e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.799e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.800e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.802e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.803e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.804e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.805e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.805e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.806e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.806e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.807e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.807e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.807e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.807e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.807e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.809e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.809e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.809e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.807e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.806e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.805e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.804e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.803e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.801e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.800e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.798e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.797e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.795e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.793e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.792e+01, cond(Quu)=1.242e+05
+    max|Quu|=1.790e+01, cond(Quu)=1.241e+05
+    max|Quu|=1.787e+01, cond(Quu)=1.239e+05
+    max|Quu|=1.785e+01, cond(Quu)=1.238e+05
+    max|Quu|=1.783e+01, cond(Quu)=1.236e+05
+    max|Quu|=1.780e+01, cond(Quu)=1.234e+05
+    max|Quu|=1.778e+01, cond(Quu)=1.233e+05
+    max|Quu|=1.775e+01, cond(Quu)=1.231e+05
+    max|Quu|=1.772e+01, cond(Quu)=1.229e+05
+    max|Quu|=1.770e+01, cond(Quu)=1.227e+05
+    max|Quu|=1.767e+01, cond(Quu)=1.225e+05
+    max|Quu|=1.764e+01, cond(Quu)=1.223e+05
+    max|Quu|=1.761e+01, cond(Quu)=1.221e+05
+    max|Quu|=1.759e+01, cond(Quu)=1.220e+05
+    max|Quu|=1.756e+01, cond(Quu)=1.218e+05
+    max|Quu|=1.753e+01, cond(Quu)=1.216e+05
+    max|Quu|=1.751e+01, cond(Quu)=1.214e+05
+    max|Quu|=1.749e+01, cond(Quu)=1.213e+05
+    max|Quu|=1.748e+01, cond(Quu)=1.212e+05
+    max|Quu|=1.747e+01, cond(Quu)=1.212e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.211e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.211e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.211e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.211e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.210e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.210e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.209e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.209e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.208e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.207e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.207e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.206e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.206e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.206e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.205e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.205e+05
+Measured previous rollout {"cost": 66.69601057154648, "position_rmse": 0.16361473958649372}
+Defect construction {"mean_absolute": 0.054453831753979116, "max_absolute": 1.8120487263014518, "max_timestep": 19, "max_state_dimension": 6, "max_state_name": "wheel_speed", "per_state_max_absolute": [0.01574571515080514, 0.008097615671514014, 0.0046920710960666745, 0.057707055560795695, 0.01910650715421095, 0.13564838192683576, 1.8120487263014518, 1.4210854715202004e-14, 2.7755575615628914e-17]}
+Defect reconstruction {"mean_absolute": 2.7910892369345764e-18, "max_absolute": 1.1102230246251565e-16, "max_timestep": 111, "max_state_dimension": 2, "max_state_name": "heading", "per_state_max_absolute": [0.0, 6.938893903907228e-18, 1.1102230246251565e-16, 8.673617379884035e-19, 0.0, 6.938893903907228e-18, 2.7755575615628914e-17, 0.0, 0.0]}
+alpha=0 max |U_forward - U_old|: 1.4210854715202004e-14
+Unchanged control baseline {"unchanged_defect": {"cost": 66.69601057154648, "position_rmse": 0.16361473958649372}, "unchanged_nominal": {"cost": 72.9803277603028, "position_rmse": 0.18918885753845968}}
+Alpha candidate {"alpha": 0.5, "defect": {"cost": 60.09360581666541, "position_rmse": 0.14857226598166698}, "nominal": {"cost": 68.50495990120413, "position_rmse": 0.180769960421881}, "defect_improvement": 6.602404754881071, "nominal_improvement": 4.475367859098668}
+Final selection {"status": "ACCEPT", "alpha": 0.5, "cost": 60.09360581666541, "reason": "Strictly lower defect-aware cost than unchanged-control prediction"}
+STOP: candidate prepared; no actual rollout executed.
+TRIAL {"trial": 2, "cost": 66.69601057154648, "position_rmse": 0.16361473958649372, "lateness_max": 0.0020044330012751743, "rate_hz": 39.99722928398906, "period_ms_min": 23.78176699858159, "period_ms_max": 26.670420997106703, "selection": "ACCEPT", "update_seconds": 0.5459030259989959}
+Reset succeeded: [0. 0. 0. 0. 0. 0.]
+    max|Quu|=1.001e+01, cond(Quu)=1.001e+05
+    max|Quu|=1.317e+01, cond(Quu)=1.204e+05
+    max|Quu|=1.556e+01, cond(Quu)=1.318e+05
+    max|Quu|=1.672e+01, cond(Quu)=1.340e+05
+    max|Quu|=1.717e+01, cond(Quu)=1.326e+05
+    max|Quu|=1.732e+01, cond(Quu)=1.309e+05
+    max|Quu|=1.738e+01, cond(Quu)=1.296e+05
+    max|Quu|=1.740e+01, cond(Quu)=1.287e+05
+    max|Quu|=1.740e+01, cond(Quu)=1.282e+05
+    max|Quu|=1.741e+01, cond(Quu)=1.278e+05
+    max|Quu|=1.741e+01, cond(Quu)=1.276e+05
+    max|Quu|=1.741e+01, cond(Quu)=1.274e+05
+    max|Quu|=1.742e+01, cond(Quu)=1.272e+05
+    max|Quu|=1.742e+01, cond(Quu)=1.271e+05
+    max|Quu|=1.742e+01, cond(Quu)=1.269e+05
+    max|Quu|=1.743e+01, cond(Quu)=1.268e+05
+    max|Quu|=1.743e+01, cond(Quu)=1.267e+05
+    max|Quu|=1.744e+01, cond(Quu)=1.265e+05
+    max|Quu|=1.744e+01, cond(Quu)=1.264e+05
+    max|Quu|=1.745e+01, cond(Quu)=1.262e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.261e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.260e+05
+    max|Quu|=1.747e+01, cond(Quu)=1.258e+05
+    max|Quu|=1.748e+01, cond(Quu)=1.257e+05
+    max|Quu|=1.749e+01, cond(Quu)=1.256e+05
+    max|Quu|=1.750e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.751e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.752e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.753e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.754e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.755e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.756e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.757e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.758e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.759e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.761e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.762e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.764e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.765e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.767e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.768e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.770e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.772e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.773e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.775e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.776e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.778e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.780e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.781e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.783e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.785e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.786e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.788e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.789e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.791e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.792e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.794e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.795e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.797e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.798e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.799e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.801e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.802e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.803e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.804e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.805e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.806e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.806e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.807e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.807e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.807e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.809e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.810e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.810e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.810e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.809e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.809e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.807e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.806e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.805e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.803e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.801e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.800e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.798e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.797e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.795e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.793e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.791e+01, cond(Quu)=1.242e+05
+    max|Quu|=1.789e+01, cond(Quu)=1.240e+05
+    max|Quu|=1.787e+01, cond(Quu)=1.239e+05
+    max|Quu|=1.784e+01, cond(Quu)=1.237e+05
+    max|Quu|=1.782e+01, cond(Quu)=1.236e+05
+    max|Quu|=1.779e+01, cond(Quu)=1.234e+05
+    max|Quu|=1.776e+01, cond(Quu)=1.232e+05
+    max|Quu|=1.773e+01, cond(Quu)=1.230e+05
+    max|Quu|=1.770e+01, cond(Quu)=1.228e+05
+    max|Quu|=1.768e+01, cond(Quu)=1.226e+05
+    max|Quu|=1.765e+01, cond(Quu)=1.224e+05
+    max|Quu|=1.762e+01, cond(Quu)=1.222e+05
+    max|Quu|=1.759e+01, cond(Quu)=1.220e+05
+    max|Quu|=1.756e+01, cond(Quu)=1.218e+05
+    max|Quu|=1.754e+01, cond(Quu)=1.216e+05
+    max|Quu|=1.751e+01, cond(Quu)=1.214e+05
+    max|Quu|=1.749e+01, cond(Quu)=1.213e+05
+    max|Quu|=1.748e+01, cond(Quu)=1.212e+05
+    max|Quu|=1.747e+01, cond(Quu)=1.212e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.212e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.211e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.211e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.211e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.210e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.210e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.209e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.209e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.208e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.207e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.207e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.206e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.206e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.205e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.205e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.205e+05
+Measured previous rollout {"cost": 62.134488890614044, "position_rmse": 0.15467153820084822}
+Defect construction {"mean_absolute": 0.05806034101936565, "max_absolute": 1.9047199910722945, "max_timestep": 18, "max_state_dimension": 6, "max_state_name": "wheel_speed", "per_state_max_absolute": [0.01589582920314614, 0.008020086166491414, 0.004793340456776485, 0.059750232642802104, 0.018741189962749264, 0.15001814266486463, 1.9047199910722945, 1.4210854715202004e-14, 2.7755575615628914e-17]}
+Defect reconstruction {"mean_absolute": 8.722381367412025e-17, "max_absolute": 1.7763568394002505e-15, "max_timestep": 127, "max_state_dimension": 1, "max_state_name": "y", "per_state_max_absolute": [8.881784197001252e-16, 1.7763568394002505e-15, 3.885780586188048e-16, 1.734723475976807e-18, 0.0, 4.336808689942018e-19, 2.7755575615628914e-17, 0.0, 0.0]}
+alpha=0 max |U_forward - U_old|: 1.2656542480726785e-13
+Unchanged control baseline {"unchanged_defect": {"cost": 62.13448889061401, "position_rmse": 0.1546715382008482}, "unchanged_nominal": {"cost": 68.50495990120413, "position_rmse": 0.180769960421881}}
+Alpha candidate {"alpha": 0.5, "defect": {"cost": 59.75890201671392, "position_rmse": 0.1458762827319681}, "nominal": {"cost": 66.51248345375994, "position_rmse": 0.17389936410863585}, "defect_improvement": 2.3755868739000903, "nominal_improvement": 1.99247644744419}
+Final selection {"status": "ACCEPT", "alpha": 0.5, "cost": 59.75890201671392, "reason": "Strictly lower defect-aware cost than unchanged-control prediction"}
+STOP: candidate prepared; no actual rollout executed.
+TRIAL {"trial": 3, "cost": 62.134488890614044, "position_rmse": 0.15467153820084822, "lateness_max": 0.0022041430020180997, "rate_hz": 39.98895164933173, "period_ms_min": 23.303417998249643, "period_ms_max": 26.762236000649864, "selection": "ACCEPT", "update_seconds": 0.5541382629999134}
+Reset succeeded: [0. 0. 0. 0. 0. 0.]
+    max|Quu|=1.001e+01, cond(Quu)=1.001e+05
+    max|Quu|=1.317e+01, cond(Quu)=1.204e+05
+    max|Quu|=1.556e+01, cond(Quu)=1.318e+05
+    max|Quu|=1.672e+01, cond(Quu)=1.340e+05
+    max|Quu|=1.717e+01, cond(Quu)=1.326e+05
+    max|Quu|=1.732e+01, cond(Quu)=1.309e+05
+    max|Quu|=1.738e+01, cond(Quu)=1.296e+05
+    max|Quu|=1.740e+01, cond(Quu)=1.287e+05
+    max|Quu|=1.740e+01, cond(Quu)=1.282e+05
+    max|Quu|=1.741e+01, cond(Quu)=1.278e+05
+    max|Quu|=1.741e+01, cond(Quu)=1.276e+05
+    max|Quu|=1.741e+01, cond(Quu)=1.274e+05
+    max|Quu|=1.742e+01, cond(Quu)=1.272e+05
+    max|Quu|=1.742e+01, cond(Quu)=1.271e+05
+    max|Quu|=1.742e+01, cond(Quu)=1.269e+05
+    max|Quu|=1.743e+01, cond(Quu)=1.268e+05
+    max|Quu|=1.743e+01, cond(Quu)=1.267e+05
+    max|Quu|=1.744e+01, cond(Quu)=1.265e+05
+    max|Quu|=1.744e+01, cond(Quu)=1.264e+05
+    max|Quu|=1.745e+01, cond(Quu)=1.262e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.261e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.260e+05
+    max|Quu|=1.747e+01, cond(Quu)=1.258e+05
+    max|Quu|=1.748e+01, cond(Quu)=1.257e+05
+    max|Quu|=1.749e+01, cond(Quu)=1.256e+05
+    max|Quu|=1.750e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.751e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.752e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.753e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.754e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.755e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.756e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.757e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.758e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.759e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.761e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.762e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.763e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.765e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.767e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.768e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.770e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.771e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.773e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.774e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.776e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.778e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.779e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.781e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.783e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.784e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.786e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.787e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.789e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.790e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.792e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.793e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.795e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.796e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.797e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.799e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.800e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.801e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.803e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.804e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.805e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.806e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.806e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.807e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.807e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.809e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.809e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.810e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.810e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.810e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.810e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.810e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.809e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.809e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.807e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.806e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.804e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.802e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.801e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.799e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.798e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.796e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.794e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.792e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.790e+01, cond(Quu)=1.241e+05
+    max|Quu|=1.788e+01, cond(Quu)=1.240e+05
+    max|Quu|=1.785e+01, cond(Quu)=1.238e+05
+    max|Quu|=1.783e+01, cond(Quu)=1.236e+05
+    max|Quu|=1.780e+01, cond(Quu)=1.234e+05
+    max|Quu|=1.777e+01, cond(Quu)=1.232e+05
+    max|Quu|=1.774e+01, cond(Quu)=1.230e+05
+    max|Quu|=1.771e+01, cond(Quu)=1.228e+05
+    max|Quu|=1.768e+01, cond(Quu)=1.226e+05
+    max|Quu|=1.765e+01, cond(Quu)=1.224e+05
+    max|Quu|=1.762e+01, cond(Quu)=1.222e+05
+    max|Quu|=1.759e+01, cond(Quu)=1.220e+05
+    max|Quu|=1.757e+01, cond(Quu)=1.218e+05
+    max|Quu|=1.754e+01, cond(Quu)=1.216e+05
+    max|Quu|=1.751e+01, cond(Quu)=1.215e+05
+    max|Quu|=1.749e+01, cond(Quu)=1.213e+05
+    max|Quu|=1.748e+01, cond(Quu)=1.212e+05
+    max|Quu|=1.747e+01, cond(Quu)=1.212e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.212e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.211e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.211e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.211e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.210e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.210e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.209e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.209e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.208e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.207e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.207e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.206e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.206e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.206e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.205e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.205e+05
+Measured previous rollout {"cost": 59.89580828827132, "position_rmse": 0.1453751302962253}
+Defect construction {"mean_absolute": 0.05964685027761515, "max_absolute": 1.9666449433272213, "max_timestep": 22, "max_state_dimension": 6, "max_state_name": "wheel_speed", "per_state_max_absolute": [0.015998161134291422, 0.00787298336330211, 0.004749139017814319, 0.06134253881605645, 0.018363030220636106, 0.15140832249831798, 1.9666449433272213, 1.4210854715202004e-14, 2.7755575615628914e-17]}
+Defect reconstruction {"mean_absolute": 1.9247136234777166e-17, "max_absolute": 4.440892098500626e-16, "max_timestep": 5, "max_state_dimension": 6, "max_state_name": "wheel_speed", "per_state_max_absolute": [8.673617379884035e-19, 4.440892098500626e-16, 1.1102230246251565e-16, 1.3877787807814457e-17, 2.168404344971009e-19, 4.336808689942018e-19, 4.440892098500626e-16, 0.0, 0.0]}
+alpha=0 max |U_forward - U_old|: 9.281464485866309e-14
+Unchanged control baseline {"unchanged_defect": {"cost": 59.89580828827132, "position_rmse": 0.1453751302962253}, "unchanged_nominal": {"cost": 66.51248345375994, "position_rmse": 0.17389936410863585}}
+Alpha candidate {"alpha": 0.5, "defect": {"cost": 59.18974193863323, "position_rmse": 0.14174181469833247}, "nominal": {"cost": 65.68728616199549, "position_rmse": 0.16998790724912075}, "defect_improvement": 0.7060663496380855, "nominal_improvement": 0.8251972917644537}
+Final selection {"status": "ACCEPT", "alpha": 0.5, "cost": 59.18974193863323, "reason": "Strictly lower defect-aware cost than unchanged-control prediction"}
+STOP: candidate prepared; no actual rollout executed.
+TRIAL {"trial": 4, "cost": 59.89580828827132, "position_rmse": 0.1453751302962253, "lateness_max": 0.0017967800013138913, "rate_hz": 39.98847629863892, "period_ms_min": 23.742253997625085, "period_ms_max": 26.383777996670688, "selection": "ACCEPT", "update_seconds": 0.5109829710017948}
+Reset succeeded: [0. 0. 0. 0. 0. 0.]
+    max|Quu|=1.001e+01, cond(Quu)=1.001e+05
+    max|Quu|=1.317e+01, cond(Quu)=1.204e+05
+    max|Quu|=1.556e+01, cond(Quu)=1.318e+05
+    max|Quu|=1.672e+01, cond(Quu)=1.340e+05
+    max|Quu|=1.717e+01, cond(Quu)=1.326e+05
+    max|Quu|=1.732e+01, cond(Quu)=1.309e+05
+    max|Quu|=1.738e+01, cond(Quu)=1.296e+05
+    max|Quu|=1.740e+01, cond(Quu)=1.287e+05
+    max|Quu|=1.740e+01, cond(Quu)=1.282e+05
+    max|Quu|=1.741e+01, cond(Quu)=1.278e+05
+    max|Quu|=1.741e+01, cond(Quu)=1.276e+05
+    max|Quu|=1.741e+01, cond(Quu)=1.274e+05
+    max|Quu|=1.742e+01, cond(Quu)=1.272e+05
+    max|Quu|=1.742e+01, cond(Quu)=1.271e+05
+    max|Quu|=1.742e+01, cond(Quu)=1.269e+05
+    max|Quu|=1.743e+01, cond(Quu)=1.268e+05
+    max|Quu|=1.743e+01, cond(Quu)=1.267e+05
+    max|Quu|=1.744e+01, cond(Quu)=1.265e+05
+    max|Quu|=1.744e+01, cond(Quu)=1.264e+05
+    max|Quu|=1.745e+01, cond(Quu)=1.262e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.261e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.260e+05
+    max|Quu|=1.747e+01, cond(Quu)=1.258e+05
+    max|Quu|=1.748e+01, cond(Quu)=1.257e+05
+    max|Quu|=1.749e+01, cond(Quu)=1.256e+05
+    max|Quu|=1.750e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.751e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.752e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.753e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.754e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.755e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.756e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.757e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.758e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.759e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.760e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.762e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.763e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.765e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.766e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.768e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.770e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.771e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.773e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.774e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.776e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.777e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.779e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.781e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.782e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.784e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.785e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.787e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.789e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.790e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.792e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.793e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.794e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.796e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.797e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.798e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.800e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.801e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.802e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.804e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.805e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.805e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.806e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.807e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.807e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.809e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.809e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.810e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.810e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.810e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.810e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.810e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.810e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.809e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.807e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.806e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.805e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.803e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.801e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.800e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.798e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.797e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.795e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.793e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.791e+01, cond(Quu)=1.242e+05
+    max|Quu|=1.788e+01, cond(Quu)=1.240e+05
+    max|Quu|=1.786e+01, cond(Quu)=1.238e+05
+    max|Quu|=1.783e+01, cond(Quu)=1.237e+05
+    max|Quu|=1.780e+01, cond(Quu)=1.235e+05
+    max|Quu|=1.778e+01, cond(Quu)=1.233e+05
+    max|Quu|=1.775e+01, cond(Quu)=1.231e+05
+    max|Quu|=1.771e+01, cond(Quu)=1.229e+05
+    max|Quu|=1.768e+01, cond(Quu)=1.227e+05
+    max|Quu|=1.765e+01, cond(Quu)=1.224e+05
+    max|Quu|=1.763e+01, cond(Quu)=1.223e+05
+    max|Quu|=1.760e+01, cond(Quu)=1.220e+05
+    max|Quu|=1.757e+01, cond(Quu)=1.218e+05
+    max|Quu|=1.754e+01, cond(Quu)=1.216e+05
+    max|Quu|=1.752e+01, cond(Quu)=1.215e+05
+    max|Quu|=1.749e+01, cond(Quu)=1.213e+05
+    max|Quu|=1.748e+01, cond(Quu)=1.212e+05
+    max|Quu|=1.747e+01, cond(Quu)=1.212e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.212e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.211e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.211e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.211e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.210e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.210e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.209e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.209e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.208e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.208e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.207e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.206e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.206e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.206e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.205e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.205e+05
+Measured previous rollout {"cost": 59.38829249978741, "position_rmse": 0.14245115824845367}
+Defect construction {"mean_absolute": 0.06067043936506994, "max_absolute": 1.999633635516897, "max_timestep": 22, "max_state_dimension": 6, "max_state_name": "wheel_speed", "per_state_max_absolute": [0.01606422571726518, 0.007786324929533239, 0.004729349183200476, 0.06211636018062405, 0.01813722132874948, 0.15154904228418686, 1.999633635516897, 1.4210854715202004e-14, 2.7755575615628914e-17]}
+Defect reconstruction {"mean_absolute": 1.438065714275362e-17, "max_absolute": 4.440892098500626e-16, "max_timestep": 114, "max_state_dimension": 1, "max_state_name": "y", "per_state_max_absolute": [1.734723475976807e-18, 4.440892098500626e-16, 1.6653345369377348e-16, 3.469446951953614e-18, 0.0, 4.336808689942018e-19, 3.469446951953614e-18, 0.0, 0.0]}
+alpha=0 max |U_forward - U_old|: 1.9539925233402755e-14
+Unchanged control baseline {"unchanged_defect": {"cost": 59.38829249978741, "position_rmse": 0.14245115824845367}, "unchanged_nominal": {"cost": 65.68728616199549, "position_rmse": 0.16998790724912075}}
+Alpha candidate {"alpha": 0.5, "defect": {"cost": 59.275169553673514, "position_rmse": 0.14103164980865096}, "nominal": {"cost": 65.93857921063994, "position_rmse": 0.16977676595880112}, "defect_improvement": 0.11312294611389717, "nominal_improvement": -0.251293048644456}
+Final selection {"status": "ACCEPT", "alpha": 0.5, "cost": 59.275169553673514, "reason": "Strictly lower defect-aware cost than unchanged-control prediction"}
+STOP: candidate prepared; no actual rollout executed.
+TRIAL {"trial": 5, "cost": 59.38829249978741, "position_rmse": 0.14245115824845364, "lateness_max": 0.0017358330005663447, "rate_hz": 39.994910895199475, "period_ms_min": 23.70037999935448, "period_ms_max": 26.31196700167493, "selection": "ACCEPT", "update_seconds": 0.5563792630018725}
+Reset succeeded: [0. 0. 0. 0. 0. 0.]
+    max|Quu|=1.001e+01, cond(Quu)=1.001e+05
+    max|Quu|=1.317e+01, cond(Quu)=1.204e+05
+    max|Quu|=1.556e+01, cond(Quu)=1.318e+05
+    max|Quu|=1.672e+01, cond(Quu)=1.340e+05
+    max|Quu|=1.717e+01, cond(Quu)=1.326e+05
+    max|Quu|=1.732e+01, cond(Quu)=1.309e+05
+    max|Quu|=1.738e+01, cond(Quu)=1.296e+05
+    max|Quu|=1.740e+01, cond(Quu)=1.287e+05
+    max|Quu|=1.740e+01, cond(Quu)=1.282e+05
+    max|Quu|=1.741e+01, cond(Quu)=1.278e+05
+    max|Quu|=1.741e+01, cond(Quu)=1.276e+05
+    max|Quu|=1.741e+01, cond(Quu)=1.274e+05
+    max|Quu|=1.742e+01, cond(Quu)=1.272e+05
+    max|Quu|=1.742e+01, cond(Quu)=1.271e+05
+    max|Quu|=1.742e+01, cond(Quu)=1.269e+05
+    max|Quu|=1.743e+01, cond(Quu)=1.268e+05
+    max|Quu|=1.743e+01, cond(Quu)=1.267e+05
+    max|Quu|=1.744e+01, cond(Quu)=1.265e+05
+    max|Quu|=1.744e+01, cond(Quu)=1.264e+05
+    max|Quu|=1.745e+01, cond(Quu)=1.262e+05
+    max|Quu|=1.745e+01, cond(Quu)=1.261e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.260e+05
+    max|Quu|=1.747e+01, cond(Quu)=1.258e+05
+    max|Quu|=1.748e+01, cond(Quu)=1.257e+05
+    max|Quu|=1.749e+01, cond(Quu)=1.256e+05
+    max|Quu|=1.750e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.751e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.751e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.752e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.754e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.754e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.755e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.757e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.758e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.759e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.760e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.762e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.763e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.765e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.766e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.768e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.769e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.771e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.773e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.774e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.776e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.777e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.779e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.780e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.782e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.784e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.785e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.787e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.788e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.790e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.791e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.793e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.794e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.796e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.797e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.798e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.799e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.801e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.802e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.803e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.804e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.805e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.806e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.807e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.807e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.809e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.809e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.810e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.811e+01, cond(Quu)=1.255e+05
+    max|Quu|=1.811e+01, cond(Quu)=1.255e+05
+    max|Quu|=1.811e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.810e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.810e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.809e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.806e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.805e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.803e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.801e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.800e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.799e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.797e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.795e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.793e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.791e+01, cond(Quu)=1.242e+05
+    max|Quu|=1.789e+01, cond(Quu)=1.240e+05
+    max|Quu|=1.786e+01, cond(Quu)=1.239e+05
+    max|Quu|=1.784e+01, cond(Quu)=1.237e+05
+    max|Quu|=1.781e+01, cond(Quu)=1.235e+05
+    max|Quu|=1.778e+01, cond(Quu)=1.233e+05
+    max|Quu|=1.775e+01, cond(Quu)=1.231e+05
+    max|Quu|=1.772e+01, cond(Quu)=1.229e+05
+    max|Quu|=1.769e+01, cond(Quu)=1.227e+05
+    max|Quu|=1.766e+01, cond(Quu)=1.225e+05
+    max|Quu|=1.763e+01, cond(Quu)=1.223e+05
+    max|Quu|=1.760e+01, cond(Quu)=1.221e+05
+    max|Quu|=1.757e+01, cond(Quu)=1.219e+05
+    max|Quu|=1.754e+01, cond(Quu)=1.217e+05
+    max|Quu|=1.751e+01, cond(Quu)=1.215e+05
+    max|Quu|=1.749e+01, cond(Quu)=1.213e+05
+    max|Quu|=1.748e+01, cond(Quu)=1.212e+05
+    max|Quu|=1.747e+01, cond(Quu)=1.212e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.212e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.211e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.211e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.211e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.210e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.210e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.209e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.209e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.208e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.208e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.207e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.207e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.206e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.206e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.205e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.205e+05
+Measured previous rollout {"cost": 59.57907624315382, "position_rmse": 0.1425690020998982}
+Defect construction {"mean_absolute": 0.06109041122616455, "max_absolute": 2.016333225633936, "max_timestep": 23, "max_state_dimension": 6, "max_state_name": "wheel_speed", "per_state_max_absolute": [0.016099579845915812, 0.007749617680794962, 0.004579717596849386, 0.06265213081903553, 0.018012837750652985, 0.14831793742743504, 2.016333225633936, 1.4210854715202004e-14, 2.7755575615628914e-17]}
+Defect reconstruction {"mean_absolute": 2.169638889583071e-17, "max_absolute": 1.3322676295501878e-15, "max_timestep": 127, "max_state_dimension": 1, "max_state_name": "y", "per_state_max_absolute": [1.0842021724855044e-19, 1.3322676295501878e-15, 1.7694179454963432e-16, 1.734723475976807e-18, 0.0, 4.336808689942018e-19, 8.881784197001252e-16, 0.0, 0.0]}
+alpha=0 max |U_forward - U_old|: 1.6431300764452317e-14
+Unchanged control baseline {"unchanged_defect": {"cost": 59.57907624315382, "position_rmse": 0.1425690020998982}, "unchanged_nominal": {"cost": 65.93857921063994, "position_rmse": 0.16977676595880112}}
+Alpha candidate {"alpha": 0.5, "defect": {"cost": 59.50409981254347, "position_rmse": 0.1408957907726379}, "nominal": {"cost": 67.30911550857414, "position_rmse": 0.1729863432419573}, "defect_improvement": 0.07497643061034864, "nominal_improvement": -1.3705362979341942}
+Final selection {"status": "ACCEPT", "alpha": 0.5, "cost": 59.50409981254347, "reason": "Strictly lower defect-aware cost than unchanged-control prediction"}
+STOP: candidate prepared; no actual rollout executed.
+TRIAL {"trial": 6, "cost": 59.57907624315382, "position_rmse": 0.1425690020998982, "lateness_max": 0.002146682996681193, "rate_hz": 39.9899493958181, "period_ms_min": 23.182693003036547, "period_ms_max": 26.764039997942746, "selection": "ACCEPT", "update_seconds": 0.5065819909978018}
+Reset succeeded: [0. 0. 0. 0. 0. 0.]
+    max|Quu|=1.001e+01, cond(Quu)=1.001e+05
+    max|Quu|=1.317e+01, cond(Quu)=1.204e+05
+    max|Quu|=1.556e+01, cond(Quu)=1.318e+05
+    max|Quu|=1.672e+01, cond(Quu)=1.340e+05
+    max|Quu|=1.717e+01, cond(Quu)=1.326e+05
+    max|Quu|=1.732e+01, cond(Quu)=1.309e+05
+    max|Quu|=1.738e+01, cond(Quu)=1.296e+05
+    max|Quu|=1.740e+01, cond(Quu)=1.287e+05
+    max|Quu|=1.740e+01, cond(Quu)=1.282e+05
+    max|Quu|=1.741e+01, cond(Quu)=1.278e+05
+    max|Quu|=1.741e+01, cond(Quu)=1.276e+05
+    max|Quu|=1.741e+01, cond(Quu)=1.274e+05
+    max|Quu|=1.742e+01, cond(Quu)=1.272e+05
+    max|Quu|=1.742e+01, cond(Quu)=1.271e+05
+    max|Quu|=1.742e+01, cond(Quu)=1.269e+05
+    max|Quu|=1.743e+01, cond(Quu)=1.268e+05
+    max|Quu|=1.743e+01, cond(Quu)=1.267e+05
+    max|Quu|=1.744e+01, cond(Quu)=1.265e+05
+    max|Quu|=1.744e+01, cond(Quu)=1.264e+05
+    max|Quu|=1.745e+01, cond(Quu)=1.262e+05
+    max|Quu|=1.745e+01, cond(Quu)=1.261e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.260e+05
+    max|Quu|=1.747e+01, cond(Quu)=1.258e+05
+    max|Quu|=1.748e+01, cond(Quu)=1.257e+05
+    max|Quu|=1.749e+01, cond(Quu)=1.256e+05
+    max|Quu|=1.750e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.750e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.751e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.752e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.753e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.754e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.755e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.756e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.758e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.759e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.760e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.762e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.763e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.765e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.766e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.768e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.769e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.771e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.773e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.774e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.775e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.777e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.779e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.780e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.782e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.784e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.785e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.787e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.788e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.790e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.791e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.793e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.794e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.796e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.797e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.798e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.800e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.801e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.802e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.803e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.804e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.805e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.806e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.807e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.807e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.809e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.810e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.810e+01, cond(Quu)=1.255e+05
+    max|Quu|=1.811e+01, cond(Quu)=1.255e+05
+    max|Quu|=1.811e+01, cond(Quu)=1.255e+05
+    max|Quu|=1.811e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.810e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.810e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.809e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.806e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.805e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.803e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.801e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.800e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.799e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.797e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.795e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.793e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.791e+01, cond(Quu)=1.242e+05
+    max|Quu|=1.789e+01, cond(Quu)=1.240e+05
+    max|Quu|=1.786e+01, cond(Quu)=1.239e+05
+    max|Quu|=1.784e+01, cond(Quu)=1.237e+05
+    max|Quu|=1.781e+01, cond(Quu)=1.235e+05
+    max|Quu|=1.778e+01, cond(Quu)=1.233e+05
+    max|Quu|=1.775e+01, cond(Quu)=1.231e+05
+    max|Quu|=1.772e+01, cond(Quu)=1.229e+05
+    max|Quu|=1.769e+01, cond(Quu)=1.227e+05
+    max|Quu|=1.766e+01, cond(Quu)=1.225e+05
+    max|Quu|=1.763e+01, cond(Quu)=1.223e+05
+    max|Quu|=1.760e+01, cond(Quu)=1.221e+05
+    max|Quu|=1.757e+01, cond(Quu)=1.219e+05
+    max|Quu|=1.754e+01, cond(Quu)=1.217e+05
+    max|Quu|=1.751e+01, cond(Quu)=1.215e+05
+    max|Quu|=1.749e+01, cond(Quu)=1.213e+05
+    max|Quu|=1.748e+01, cond(Quu)=1.212e+05
+    max|Quu|=1.747e+01, cond(Quu)=1.212e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.212e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.211e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.211e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.211e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.210e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.210e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.209e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.209e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.208e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.208e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.207e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.206e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.206e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.206e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.205e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.205e+05
+Measured previous rollout {"cost": 59.66680219051695, "position_rmse": 0.1407547408496034}
+Defect construction {"mean_absolute": 0.06132989259858862, "max_absolute": 2.02225699297939, "max_timestep": 23, "max_state_dimension": 6, "max_state_name": "wheel_speed", "per_state_max_absolute": [0.01611570242979976, 0.007878708293303505, 0.004581152294707125, 0.06289683316964911, 0.018034544958464748, 0.14972511985388454, 2.02225699297939, 1.4210854715202004e-14, 2.7755575615628914e-17]}
+Defect reconstruction {"mean_absolute": 2.0274163553223365e-17, "max_absolute": 4.440892098500626e-16, "max_timestep": 113, "max_state_dimension": 1, "max_state_name": "y", "per_state_max_absolute": [1.3552527156068805e-20, 4.440892098500626e-16, 1.3877787807814457e-16, 8.673617379884035e-19, 1.734723475976807e-18, 1.3877787807814457e-17, 5.551115123125783e-17, 0.0, 0.0]}
+alpha=0 max |U_forward - U_old|: 2.842170943040401e-14
+Unchanged control baseline {"unchanged_defect": {"cost": 59.66680219051694, "position_rmse": 0.14075474084960338}, "unchanged_nominal": {"cost": 67.30911550857414, "position_rmse": 0.1729863432419573}}
+Alpha candidate {"alpha": 0.5, "defect": {"cost": 59.59512181635557, "position_rmse": 0.14043198183359304}, "nominal": {"cost": 66.68588473397328, "position_rmse": 0.17079697379435937}, "defect_improvement": 0.07168037416136741, "nominal_improvement": 0.6232307746008559}
+Final selection {"status": "ACCEPT", "alpha": 0.5, "cost": 59.59512181635557, "reason": "Strictly lower defect-aware cost than unchanged-control prediction"}
+STOP: candidate prepared; no actual rollout executed.
+TRIAL {"trial": 7, "cost": 59.66680219051695, "position_rmse": 0.1407547408496034, "lateness_max": 0.0017782700015231967, "rate_hz": 39.99622293443632, "period_ms_min": 23.583712998515693, "period_ms_max": 26.26126200266299, "selection": "ACCEPT", "update_seconds": 0.55114611099998}
+Reset succeeded: [0. 0. 0. 0. 0. 0.]
+    max|Quu|=1.001e+01, cond(Quu)=1.001e+05
+    max|Quu|=1.317e+01, cond(Quu)=1.204e+05
+    max|Quu|=1.556e+01, cond(Quu)=1.318e+05
+    max|Quu|=1.672e+01, cond(Quu)=1.340e+05
+    max|Quu|=1.717e+01, cond(Quu)=1.326e+05
+    max|Quu|=1.732e+01, cond(Quu)=1.309e+05
+    max|Quu|=1.738e+01, cond(Quu)=1.296e+05
+    max|Quu|=1.740e+01, cond(Quu)=1.287e+05
+    max|Quu|=1.740e+01, cond(Quu)=1.282e+05
+    max|Quu|=1.741e+01, cond(Quu)=1.278e+05
+    max|Quu|=1.741e+01, cond(Quu)=1.276e+05
+    max|Quu|=1.741e+01, cond(Quu)=1.274e+05
+    max|Quu|=1.742e+01, cond(Quu)=1.272e+05
+    max|Quu|=1.742e+01, cond(Quu)=1.271e+05
+    max|Quu|=1.742e+01, cond(Quu)=1.269e+05
+    max|Quu|=1.743e+01, cond(Quu)=1.268e+05
+    max|Quu|=1.743e+01, cond(Quu)=1.267e+05
+    max|Quu|=1.744e+01, cond(Quu)=1.265e+05
+    max|Quu|=1.744e+01, cond(Quu)=1.264e+05
+    max|Quu|=1.745e+01, cond(Quu)=1.262e+05
+    max|Quu|=1.745e+01, cond(Quu)=1.261e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.260e+05
+    max|Quu|=1.747e+01, cond(Quu)=1.258e+05
+    max|Quu|=1.748e+01, cond(Quu)=1.257e+05
+    max|Quu|=1.749e+01, cond(Quu)=1.256e+05
+    max|Quu|=1.750e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.750e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.751e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.752e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.753e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.754e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.755e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.756e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.758e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.759e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.760e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.762e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.763e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.765e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.766e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.768e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.769e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.771e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.772e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.774e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.775e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.777e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.779e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.780e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.782e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.784e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.785e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.787e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.788e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.790e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.791e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.793e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.794e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.796e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.797e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.798e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.800e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.801e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.802e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.803e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.804e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.805e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.806e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.807e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.807e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.809e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.809e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.810e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.811e+01, cond(Quu)=1.255e+05
+    max|Quu|=1.811e+01, cond(Quu)=1.255e+05
+    max|Quu|=1.811e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.810e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.810e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.809e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.809e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.807e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.805e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.803e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.802e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.800e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.799e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.797e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.795e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.793e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.791e+01, cond(Quu)=1.242e+05
+    max|Quu|=1.789e+01, cond(Quu)=1.240e+05
+    max|Quu|=1.786e+01, cond(Quu)=1.239e+05
+    max|Quu|=1.784e+01, cond(Quu)=1.237e+05
+    max|Quu|=1.781e+01, cond(Quu)=1.235e+05
+    max|Quu|=1.778e+01, cond(Quu)=1.233e+05
+    max|Quu|=1.775e+01, cond(Quu)=1.231e+05
+    max|Quu|=1.772e+01, cond(Quu)=1.229e+05
+    max|Quu|=1.769e+01, cond(Quu)=1.227e+05
+    max|Quu|=1.766e+01, cond(Quu)=1.225e+05
+    max|Quu|=1.763e+01, cond(Quu)=1.223e+05
+    max|Quu|=1.760e+01, cond(Quu)=1.221e+05
+    max|Quu|=1.757e+01, cond(Quu)=1.219e+05
+    max|Quu|=1.754e+01, cond(Quu)=1.217e+05
+    max|Quu|=1.752e+01, cond(Quu)=1.215e+05
+    max|Quu|=1.749e+01, cond(Quu)=1.213e+05
+    max|Quu|=1.748e+01, cond(Quu)=1.213e+05
+    max|Quu|=1.747e+01, cond(Quu)=1.212e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.212e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.212e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.211e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.211e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.210e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.210e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.209e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.209e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.208e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.208e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.207e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.207e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.206e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.206e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.205e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.205e+05
+Measured previous rollout {"cost": 59.447030289603966, "position_rmse": 0.13986601182024255}
+Defect construction {"mean_absolute": 0.06157725149909145, "max_absolute": 2.028611079884019, "max_timestep": 23, "max_state_dimension": 6, "max_state_name": "wheel_speed", "per_state_max_absolute": [0.01612044784305744, 0.007836072687398943, 0.004802566701347543, 0.06295908511973858, 0.017961001713088735, 0.1490857576047629, 2.028611079884019, 1.4210854715202004e-14, 2.7755575615628914e-17]}
+Defect reconstruction {"mean_absolute": 2.772852572087221e-17, "max_absolute": 6.661338147750939e-16, "max_timestep": 112, "max_state_dimension": 1, "max_state_name": "y", "per_state_max_absolute": [2.710505431213761e-20, 6.661338147750939e-16, 3.608224830031759e-16, 8.673617379884035e-19, 0.0, 4.336808689942018e-19, 1.3877787807814457e-17, 0.0, 0.0]}
+alpha=0 max |U_forward - U_old|: 6.350475700855895e-14
+Unchanged control baseline {"unchanged_defect": {"cost": 59.447030289603966, "position_rmse": 0.13986601182024255}, "unchanged_nominal": {"cost": 66.68588473397328, "position_rmse": 0.17079697379435937}}
+Alpha candidate {"alpha": 0.5, "defect": {"cost": 59.442589792946755, "position_rmse": 0.13982499400844525}, "nominal": {"cost": 66.57502813088836, "position_rmse": 0.1702876887449339}, "defect_improvement": 0.004440496657210247, "nominal_improvement": 0.11085660308492606}
+Final selection {"status": "ACCEPT", "alpha": 0.5, "cost": 59.442589792946755, "reason": "Strictly lower defect-aware cost than unchanged-control prediction"}
+STOP: candidate prepared; no actual rollout executed.
+TRIAL {"trial": 8, "cost": 59.447030289603966, "position_rmse": 0.13986601182024255, "lateness_max": 0.003994840000814293, "rate_hz": 39.99729589076773, "period_ms_min": 21.532271999603836, "period_ms_max": 28.345370999886654, "selection": "ACCEPT", "update_seconds": 0.5156760589998157}
+Reset succeeded: [0. 0. 0. 0. 0. 0.]
+    max|Quu|=1.001e+01, cond(Quu)=1.001e+05
+    max|Quu|=1.317e+01, cond(Quu)=1.204e+05
+    max|Quu|=1.556e+01, cond(Quu)=1.318e+05
+    max|Quu|=1.672e+01, cond(Quu)=1.340e+05
+    max|Quu|=1.717e+01, cond(Quu)=1.326e+05
+    max|Quu|=1.732e+01, cond(Quu)=1.309e+05
+    max|Quu|=1.738e+01, cond(Quu)=1.296e+05
+    max|Quu|=1.740e+01, cond(Quu)=1.287e+05
+    max|Quu|=1.740e+01, cond(Quu)=1.282e+05
+    max|Quu|=1.741e+01, cond(Quu)=1.278e+05
+    max|Quu|=1.741e+01, cond(Quu)=1.276e+05
+    max|Quu|=1.741e+01, cond(Quu)=1.274e+05
+    max|Quu|=1.742e+01, cond(Quu)=1.272e+05
+    max|Quu|=1.742e+01, cond(Quu)=1.271e+05
+    max|Quu|=1.742e+01, cond(Quu)=1.269e+05
+    max|Quu|=1.743e+01, cond(Quu)=1.268e+05
+    max|Quu|=1.743e+01, cond(Quu)=1.267e+05
+    max|Quu|=1.744e+01, cond(Quu)=1.265e+05
+    max|Quu|=1.744e+01, cond(Quu)=1.264e+05
+    max|Quu|=1.745e+01, cond(Quu)=1.262e+05
+    max|Quu|=1.745e+01, cond(Quu)=1.261e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.260e+05
+    max|Quu|=1.747e+01, cond(Quu)=1.258e+05
+    max|Quu|=1.748e+01, cond(Quu)=1.257e+05
+    max|Quu|=1.749e+01, cond(Quu)=1.256e+05
+    max|Quu|=1.750e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.750e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.751e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.752e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.753e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.754e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.755e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.756e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.758e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.759e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.760e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.762e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.763e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.765e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.766e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.768e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.769e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.771e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.772e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.774e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.775e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.777e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.779e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.780e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.782e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.784e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.785e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.787e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.788e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.790e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.791e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.793e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.794e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.796e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.797e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.798e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.799e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.801e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.802e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.803e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.804e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.805e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.806e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.807e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.807e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.809e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.809e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.810e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.811e+01, cond(Quu)=1.255e+05
+    max|Quu|=1.811e+01, cond(Quu)=1.255e+05
+    max|Quu|=1.811e+01, cond(Quu)=1.255e+05
+    max|Quu|=1.810e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.810e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.809e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.809e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.807e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.805e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.804e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.802e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.800e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.799e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.797e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.795e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.793e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.791e+01, cond(Quu)=1.242e+05
+    max|Quu|=1.789e+01, cond(Quu)=1.240e+05
+    max|Quu|=1.786e+01, cond(Quu)=1.239e+05
+    max|Quu|=1.784e+01, cond(Quu)=1.237e+05
+    max|Quu|=1.781e+01, cond(Quu)=1.235e+05
+    max|Quu|=1.778e+01, cond(Quu)=1.233e+05
+    max|Quu|=1.775e+01, cond(Quu)=1.231e+05
+    max|Quu|=1.772e+01, cond(Quu)=1.229e+05
+    max|Quu|=1.769e+01, cond(Quu)=1.227e+05
+    max|Quu|=1.766e+01, cond(Quu)=1.225e+05
+    max|Quu|=1.763e+01, cond(Quu)=1.223e+05
+    max|Quu|=1.760e+01, cond(Quu)=1.221e+05
+    max|Quu|=1.757e+01, cond(Quu)=1.219e+05
+    max|Quu|=1.755e+01, cond(Quu)=1.217e+05
+    max|Quu|=1.752e+01, cond(Quu)=1.215e+05
+    max|Quu|=1.750e+01, cond(Quu)=1.213e+05
+    max|Quu|=1.748e+01, cond(Quu)=1.213e+05
+    max|Quu|=1.747e+01, cond(Quu)=1.212e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.212e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.212e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.211e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.211e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.210e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.210e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.209e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.209e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.208e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.208e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.207e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.207e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.206e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.206e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.205e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.205e+05
+Measured previous rollout {"cost": 59.54245611602077, "position_rmse": 0.1409957814714348}
+Defect construction {"mean_absolute": 0.06166696390806171, "max_absolute": 2.078754987961897, "max_timestep": 21, "max_state_dimension": 6, "max_state_name": "wheel_speed", "per_state_max_absolute": [0.01612851421300565, 0.007733646334062816, 0.004717350897405881, 0.0631194068057015, 0.018029974836848584, 0.14061939404852625, 2.078754987961897, 1.4210854715202004e-14, 2.7755575615628914e-17]}
+Defect reconstruction {"mean_absolute": 3.832500272132102e-18, "max_absolute": 1.1102230246251565e-16, "max_timestep": 55, "max_state_dimension": 2, "max_state_name": "heading", "per_state_max_absolute": [0.0, 1.1102230246251565e-16, 1.1102230246251565e-16, 8.673617379884035e-19, 0.0, 4.336808689942018e-19, 2.7755575615628914e-17, 0.0, 0.0]}
+alpha=0 max |U_forward - U_old|: 1.5409895581797173e-13
+Unchanged control baseline {"unchanged_defect": {"cost": 59.54245611602078, "position_rmse": 0.14099578147143482}, "unchanged_nominal": {"cost": 66.57502813088836, "position_rmse": 0.1702876887449339}}
+Alpha candidate {"alpha": 0.5, "defect": {"cost": 59.5276495701998, "position_rmse": 0.1406699229361324}, "nominal": {"cost": 66.97264482102126, "position_rmse": 0.17158936961390295}, "defect_improvement": 0.014806545820981398, "nominal_improvement": -0.39761669013290657}
+Final selection {"status": "ACCEPT", "alpha": 0.5, "cost": 59.5276495701998, "reason": "Strictly lower defect-aware cost than unchanged-control prediction"}
+STOP: candidate prepared; no actual rollout executed.
+TRIAL {"trial": 9, "cost": 59.54245611602077, "position_rmse": 0.1409957814714348, "lateness_max": 0.004120705998502672, "rate_hz": 39.99973469385598, "period_ms_min": 21.289317002811003, "period_ms_max": 28.805909998482093, "selection": "ACCEPT", "update_seconds": 0.5485305439979129}
+Reset succeeded: [0. 0. 0. 0. 0. 0.]
+    max|Quu|=1.001e+01, cond(Quu)=1.001e+05
+    max|Quu|=1.317e+01, cond(Quu)=1.204e+05
+    max|Quu|=1.556e+01, cond(Quu)=1.318e+05
+    max|Quu|=1.672e+01, cond(Quu)=1.340e+05
+    max|Quu|=1.717e+01, cond(Quu)=1.326e+05
+    max|Quu|=1.732e+01, cond(Quu)=1.309e+05
+    max|Quu|=1.738e+01, cond(Quu)=1.296e+05
+    max|Quu|=1.740e+01, cond(Quu)=1.287e+05
+    max|Quu|=1.740e+01, cond(Quu)=1.282e+05
+    max|Quu|=1.741e+01, cond(Quu)=1.278e+05
+    max|Quu|=1.741e+01, cond(Quu)=1.276e+05
+    max|Quu|=1.741e+01, cond(Quu)=1.274e+05
+    max|Quu|=1.742e+01, cond(Quu)=1.272e+05
+    max|Quu|=1.742e+01, cond(Quu)=1.271e+05
+    max|Quu|=1.742e+01, cond(Quu)=1.269e+05
+    max|Quu|=1.743e+01, cond(Quu)=1.268e+05
+    max|Quu|=1.743e+01, cond(Quu)=1.267e+05
+    max|Quu|=1.744e+01, cond(Quu)=1.265e+05
+    max|Quu|=1.744e+01, cond(Quu)=1.264e+05
+    max|Quu|=1.745e+01, cond(Quu)=1.262e+05
+    max|Quu|=1.745e+01, cond(Quu)=1.261e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.260e+05
+    max|Quu|=1.747e+01, cond(Quu)=1.258e+05
+    max|Quu|=1.748e+01, cond(Quu)=1.257e+05
+    max|Quu|=1.749e+01, cond(Quu)=1.256e+05
+    max|Quu|=1.750e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.750e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.751e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.752e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.753e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.754e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.755e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.756e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.758e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.759e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.760e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.762e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.763e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.765e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.766e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.768e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.769e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.771e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.772e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.774e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.775e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.777e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.779e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.780e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.782e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.784e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.785e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.787e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.788e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.790e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.791e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.793e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.794e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.796e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.797e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.798e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.800e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.801e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.802e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.803e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.804e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.805e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.806e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.807e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.807e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.809e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.810e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.810e+01, cond(Quu)=1.255e+05
+    max|Quu|=1.811e+01, cond(Quu)=1.255e+05
+    max|Quu|=1.811e+01, cond(Quu)=1.255e+05
+    max|Quu|=1.811e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.810e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.810e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.809e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.809e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.807e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.805e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.803e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.802e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.800e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.799e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.797e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.795e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.793e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.791e+01, cond(Quu)=1.242e+05
+    max|Quu|=1.789e+01, cond(Quu)=1.240e+05
+    max|Quu|=1.786e+01, cond(Quu)=1.239e+05
+    max|Quu|=1.784e+01, cond(Quu)=1.237e+05
+    max|Quu|=1.781e+01, cond(Quu)=1.235e+05
+    max|Quu|=1.778e+01, cond(Quu)=1.233e+05
+    max|Quu|=1.775e+01, cond(Quu)=1.231e+05
+    max|Quu|=1.772e+01, cond(Quu)=1.229e+05
+    max|Quu|=1.769e+01, cond(Quu)=1.227e+05
+    max|Quu|=1.766e+01, cond(Quu)=1.225e+05
+    max|Quu|=1.763e+01, cond(Quu)=1.223e+05
+    max|Quu|=1.760e+01, cond(Quu)=1.221e+05
+    max|Quu|=1.757e+01, cond(Quu)=1.219e+05
+    max|Quu|=1.754e+01, cond(Quu)=1.217e+05
+    max|Quu|=1.752e+01, cond(Quu)=1.215e+05
+    max|Quu|=1.749e+01, cond(Quu)=1.213e+05
+    max|Quu|=1.748e+01, cond(Quu)=1.212e+05
+    max|Quu|=1.747e+01, cond(Quu)=1.212e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.211e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.211e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.211e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.211e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.210e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.210e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.209e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.208e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.208e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.207e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.207e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.206e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.206e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.205e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.205e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.205e+05
+Measured previous rollout {"cost": 59.47989702473744, "position_rmse": 0.13909321496016241}
+Defect construction {"mean_absolute": 0.06150216065211221, "max_absolute": 2.029423220682947, "max_timestep": 22, "max_state_dimension": 6, "max_state_name": "wheel_speed", "per_state_max_absolute": [0.016118434276845894, 0.007827506321234301, 0.004715116916542084, 0.06291710284594387, 0.01804565225014063, 0.1535431084825012, 2.029423220682947, 1.4210854715202004e-14, 2.7755575615628914e-17]}
+Defect reconstruction {"mean_absolute": 1.3428776466191028e-17, "max_absolute": 2.220446049250313e-16, "max_timestep": 4, "max_state_dimension": 6, "max_state_name": "wheel_speed", "per_state_max_absolute": [3.469446951953614e-18, 2.220446049250313e-16, 1.1102230246251565e-16, 1.3877787807814457e-17, 0.0, 1.0842021724855044e-19, 2.220446049250313e-16, 0.0, 0.0]}
+alpha=0 max |U_forward - U_old|: 1.2301271112846734e-13
+Unchanged control baseline {"unchanged_defect": {"cost": 59.47989702473745, "position_rmse": 0.13909321496016244}, "unchanged_nominal": {"cost": 66.97264482102126, "position_rmse": 0.17158936961390295}}
+Alpha candidate {"alpha": 0.5, "defect": {"cost": 59.35663951676021, "position_rmse": 0.139302343829033}, "nominal": {"cost": 65.71193397073442, "position_rmse": 0.16789248479461522}, "defect_improvement": 0.123257507977236, "nominal_improvement": 1.2607108502868414}
+Final selection {"status": "ACCEPT", "alpha": 0.5, "cost": 59.35663951676021, "reason": "Strictly lower defect-aware cost than unchanged-control prediction"}
+STOP: candidate prepared; no actual rollout executed.
+TRIAL {"trial": 10, "cost": 59.47989702473744, "position_rmse": 0.13909321496016241, "lateness_max": 0.002201535000494914, "rate_hz": 39.99818217784261, "period_ms_min": 23.19095799975912, "period_ms_max": 26.787258000695147, "selection": "ACCEPT", "update_seconds": 0.5459872389983502}
+Reset succeeded: [0. 0. 0. 0. 0. 0.]
+    max|Quu|=1.001e+01, cond(Quu)=1.001e+05
+    max|Quu|=1.317e+01, cond(Quu)=1.204e+05
+    max|Quu|=1.556e+01, cond(Quu)=1.318e+05
+    max|Quu|=1.672e+01, cond(Quu)=1.340e+05
+    max|Quu|=1.717e+01, cond(Quu)=1.326e+05
+    max|Quu|=1.732e+01, cond(Quu)=1.309e+05
+    max|Quu|=1.738e+01, cond(Quu)=1.296e+05
+    max|Quu|=1.740e+01, cond(Quu)=1.287e+05
+    max|Quu|=1.740e+01, cond(Quu)=1.282e+05
+    max|Quu|=1.741e+01, cond(Quu)=1.278e+05
+    max|Quu|=1.741e+01, cond(Quu)=1.276e+05
+    max|Quu|=1.741e+01, cond(Quu)=1.274e+05
+    max|Quu|=1.742e+01, cond(Quu)=1.272e+05
+    max|Quu|=1.742e+01, cond(Quu)=1.271e+05
+    max|Quu|=1.742e+01, cond(Quu)=1.269e+05
+    max|Quu|=1.743e+01, cond(Quu)=1.268e+05
+    max|Quu|=1.743e+01, cond(Quu)=1.267e+05
+    max|Quu|=1.744e+01, cond(Quu)=1.265e+05
+    max|Quu|=1.744e+01, cond(Quu)=1.264e+05
+    max|Quu|=1.745e+01, cond(Quu)=1.262e+05
+    max|Quu|=1.745e+01, cond(Quu)=1.261e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.260e+05
+    max|Quu|=1.747e+01, cond(Quu)=1.258e+05
+    max|Quu|=1.748e+01, cond(Quu)=1.257e+05
+    max|Quu|=1.749e+01, cond(Quu)=1.256e+05
+    max|Quu|=1.750e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.750e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.751e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.752e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.753e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.754e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.755e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.757e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.758e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.759e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.760e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.762e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.763e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.765e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.766e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.768e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.769e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.771e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.773e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.774e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.775e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.777e+01, cond(Quu)=1.243e+05
+    max|Quu|=1.779e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.780e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.782e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.784e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.785e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.787e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.788e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.790e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.791e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.793e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.794e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.795e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.797e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.798e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.799e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.801e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.802e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.803e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.804e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.805e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.806e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.807e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.807e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.809e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.809e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.810e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.811e+01, cond(Quu)=1.255e+05
+    max|Quu|=1.811e+01, cond(Quu)=1.255e+05
+    max|Quu|=1.811e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.810e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.810e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.809e+01, cond(Quu)=1.254e+05
+    max|Quu|=1.809e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.808e+01, cond(Quu)=1.253e+05
+    max|Quu|=1.807e+01, cond(Quu)=1.252e+05
+    max|Quu|=1.806e+01, cond(Quu)=1.251e+05
+    max|Quu|=1.804e+01, cond(Quu)=1.250e+05
+    max|Quu|=1.802e+01, cond(Quu)=1.249e+05
+    max|Quu|=1.801e+01, cond(Quu)=1.248e+05
+    max|Quu|=1.799e+01, cond(Quu)=1.247e+05
+    max|Quu|=1.798e+01, cond(Quu)=1.246e+05
+    max|Quu|=1.796e+01, cond(Quu)=1.245e+05
+    max|Quu|=1.794e+01, cond(Quu)=1.244e+05
+    max|Quu|=1.792e+01, cond(Quu)=1.242e+05
+    max|Quu|=1.789e+01, cond(Quu)=1.241e+05
+    max|Quu|=1.787e+01, cond(Quu)=1.239e+05
+    max|Quu|=1.784e+01, cond(Quu)=1.237e+05
+    max|Quu|=1.781e+01, cond(Quu)=1.235e+05
+    max|Quu|=1.778e+01, cond(Quu)=1.233e+05
+    max|Quu|=1.775e+01, cond(Quu)=1.231e+05
+    max|Quu|=1.772e+01, cond(Quu)=1.229e+05
+    max|Quu|=1.769e+01, cond(Quu)=1.227e+05
+    max|Quu|=1.766e+01, cond(Quu)=1.225e+05
+    max|Quu|=1.763e+01, cond(Quu)=1.223e+05
+    max|Quu|=1.761e+01, cond(Quu)=1.221e+05
+    max|Quu|=1.758e+01, cond(Quu)=1.219e+05
+    max|Quu|=1.755e+01, cond(Quu)=1.217e+05
+    max|Quu|=1.752e+01, cond(Quu)=1.215e+05
+    max|Quu|=1.750e+01, cond(Quu)=1.214e+05
+    max|Quu|=1.748e+01, cond(Quu)=1.213e+05
+    max|Quu|=1.747e+01, cond(Quu)=1.212e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.212e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.212e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.211e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.211e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.210e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.210e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.209e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.209e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.208e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.208e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.207e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.207e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.206e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.206e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.205e+05
+    max|Quu|=1.746e+01, cond(Quu)=1.205e+05
+Measured previous rollout {"cost": 57.72784973179972, "position_rmse": 0.13199968941567278}
+Defect construction {"mean_absolute": 0.06135999747139522, "max_absolute": 2.093093738800505, "max_timestep": 23, "max_state_dimension": 6, "max_state_name": "wheel_speed", "per_state_max_absolute": [0.01609683085567637, 0.00782112588046413, 0.0046546443701954154, 0.06272807078862508, 0.017747747575532824, 0.1441094663447977, 2.093093738800505, 1.4210854715202004e-14, 2.7755575615628914e-17]}
+Defect reconstruction {"mean_absolute": 5.269028077164785e-18, "max_absolute": 4.440892098500626e-16, "max_timestep": 126, "max_state_dimension": 1, "max_state_name": "y", "per_state_max_absolute": [2.710505431213761e-20, 4.440892098500626e-16, 1.1102230246251565e-16, 1.734723475976807e-18, 0.0, 4.336808689942018e-19, 5.551115123125783e-17, 0.0, 0.0]}
+alpha=0 max |U_forward - U_old|: 7.904787935331115e-14
+Unchanged control baseline {"unchanged_defect": {"cost": 57.727849731799715, "position_rmse": 0.13199968941567275}, "unchanged_nominal": {"cost": 65.71193397073442, "position_rmse": 0.16789248479461522}}
+Alpha candidate {"alpha": 0.5, "defect": {"cost": 57.64138612853888, "position_rmse": 0.13397418816432574}, "nominal": {"cost": 64.23029324679533, "position_rmse": 0.16338532137384298}, "defect_improvement": 0.08646360326083169, "nominal_improvement": 1.481640723939094}
+Final selection {"status": "ACCEPT", "alpha": 0.5, "cost": 57.64138612853888, "reason": "Strictly lower defect-aware cost than unchanged-control prediction"}
+STOP: candidate prepared; no actual rollout executed.
+TRIAL {"trial": 11, "cost": 57.72784973179972, "position_rmse": 0.13199968941567275, "lateness_max": 0.003294582995295059, "rate_hz": 40.00034068858062, "period_ms_min": 22.04004500163137, "period_ms_max": 27.811380998173263, "selection": "ACCEPT", "update_seconds": 0.5177214210016245}
+Generating solver in: /workspaces/ilc_ws/src/ilc_f1tenth/successful_defect_aware_20261008/solvers/lifted_figure_eight_40hz_it200
+field AcadosOcpDims.N has been migrated to AcadosOcpOptions.N_horizon. setting AcadosOcpOptions.N_horizon = N. For future comppatibility, please use AcadosOcpOptions.N_horizon directly.
+External functions generated in 49.464 ms.
+Templated solver code generated in 934.921 ms.
+rm -f libacados_ocp_solver_f1tenthblend.so
+rm -f f1tenthblend_cost/f1tenthblend_cost_y_0_fun.o f1tenthblend_cost/f1tenthblend_cost_y_0_fun_jac_ut_xt.o f1tenthblend_cost/f1tenthblend_cost_y_0_hess.o f1tenthblend_cost/f1tenthblend_cost_y_fun.o f1tenthblend_cost/f1tenthblend_cost_y_fun_jac_ut_xt.o f1tenthblend_cost/f1tenthblend_cost_y_hess.o f1tenthblend_cost/f1tenthblend_cost_y_e_fun.o f1tenthblend_cost/f1tenthblend_cost_y_e_fun_jac_ut_xt.o f1tenthblend_cost/f1tenthblend_cost_y_e_hess.o acados_solver_f1tenthblend.o
+cc -fPIC -std=c99   -O2 -I/acados/include -I/acados/include/acados -I/acados/include/blasfeo/include -I/acados/include/hpipm/include  -c -o f1tenthblend_cost/f1tenthblend_cost_y_0_fun.o f1tenthblend_cost/f1tenthblend_cost_y_0_fun.c
+cc -fPIC -std=c99   -O2 -I/acados/include -I/acados/include/acados -I/acados/include/blasfeo/include -I/acados/include/hpipm/include  -c -o f1tenthblend_cost/f1tenthblend_cost_y_0_fun_jac_ut_xt.o f1tenthblend_cost/f1tenthblend_cost_y_0_fun_jac_ut_xt.c
+cc -fPIC -std=c99   -O2 -I/acados/include -I/acados/include/acados -I/acados/include/blasfeo/include -I/acados/include/hpipm/include  -c -o f1tenthblend_cost/f1tenthblend_cost_y_0_hess.o f1tenthblend_cost/f1tenthblend_cost_y_0_hess.c
+cc -fPIC -std=c99   -O2 -I/acados/include -I/acados/include/acados -I/acados/include/blasfeo/include -I/acados/include/hpipm/include  -c -o f1tenthblend_cost/f1tenthblend_cost_y_fun.o f1tenthblend_cost/f1tenthblend_cost_y_fun.c
+cc -fPIC -std=c99   -O2 -I/acados/include -I/acados/include/acados -I/acados/include/blasfeo/include -I/acados/include/hpipm/include  -c -o f1tenthblend_cost/f1tenthblend_cost_y_fun_jac_ut_xt.o f1tenthblend_cost/f1tenthblend_cost_y_fun_jac_ut_xt.c
+cc -fPIC -std=c99   -O2 -I/acados/include -I/acados/include/acados -I/acados/include/blasfeo/include -I/acados/include/hpipm/include  -c -o f1tenthblend_cost/f1tenthblend_cost_y_hess.o f1tenthblend_cost/f1tenthblend_cost_y_hess.c
+cc -fPIC -std=c99   -O2 -I/acados/include -I/acados/include/acados -I/acados/include/blasfeo/include -I/acados/include/hpipm/include  -c -o f1tenthblend_cost/f1tenthblend_cost_y_e_fun.o f1tenthblend_cost/f1tenthblend_cost_y_e_fun.c
+cc -fPIC -std=c99   -O2 -I/acados/include -I/acados/include/acados -I/acados/include/blasfeo/include -I/acados/include/hpipm/include  -c -o f1tenthblend_cost/f1tenthblend_cost_y_e_fun_jac_ut_xt.o f1tenthblend_cost/f1tenthblend_cost_y_e_fun_jac_ut_xt.c
+cc -fPIC -std=c99   -O2 -I/acados/include -I/acados/include/acados -I/acados/include/blasfeo/include -I/acados/include/hpipm/include  -c -o f1tenthblend_cost/f1tenthblend_cost_y_e_hess.o f1tenthblend_cost/f1tenthblend_cost_y_e_hess.c
+cc -fPIC -std=c99   -O2 -I/acados/include -I/acados/include/acados -I/acados/include/blasfeo/include -I/acados/include/hpipm/include  -c -o acados_solver_f1tenthblend.o acados_solver_f1tenthblend.c
+cc -fPIC -std=c99   -O2 -I/acados/include -I/acados/include/acados -I/acados/include/blasfeo/include -I/acados/include/hpipm/include  -c -o f1tenthblend_model/f1tenthblend_expl_ode_fun.o f1tenthblend_model/f1tenthblend_expl_ode_fun.c
+cc -fPIC -std=c99   -O2 -I/acados/include -I/acados/include/acados -I/acados/include/blasfeo/include -I/acados/include/hpipm/include  -c -o f1tenthblend_model/f1tenthblend_expl_vde_forw.o f1tenthblend_model/f1tenthblend_expl_vde_forw.c
+cc -fPIC -std=c99   -O2 -I/acados/include -I/acados/include/acados -I/acados/include/blasfeo/include -I/acados/include/hpipm/include  -c -o f1tenthblend_model/f1tenthblend_expl_vde_adj.o f1tenthblend_model/f1tenthblend_expl_vde_adj.c
+cc -shared f1tenthblend_cost/f1tenthblend_cost_y_0_fun.o f1tenthblend_cost/f1tenthblend_cost_y_0_fun_jac_ut_xt.o f1tenthblend_cost/f1tenthblend_cost_y_0_hess.o f1tenthblend_cost/f1tenthblend_cost_y_fun.o f1tenthblend_cost/f1tenthblend_cost_y_fun_jac_ut_xt.o f1tenthblend_cost/f1tenthblend_cost_y_hess.o f1tenthblend_cost/f1tenthblend_cost_y_e_fun.o f1tenthblend_cost/f1tenthblend_cost_y_e_fun_jac_ut_xt.o f1tenthblend_cost/f1tenthblend_cost_y_e_hess.o acados_solver_f1tenthblend.o f1tenthblend_model/f1tenthblend_expl_ode_fun.o f1tenthblend_model/f1tenthblend_expl_vde_forw.o f1tenthblend_model/f1tenthblend_expl_vde_adj.o -o libacados_ocp_solver_f1tenthblend.so -L/acados/lib -lacados -lhpipm -lblasfeo -lm  \
+-L -l
+Build completed in 2182.127 ms.
+acados was compiled without OpenMP.
+Solver generated successfully: /workspaces/ilc_ws/src/ilc_f1tenth/successful_defect_aware_20261008/solvers/lifted_figure_eight_40hz_it200/f1tenth_acados_ocp.json
+INITIAL_TO {"status": 0, "converged": true, "cost": 2.166247163245192, "sqp_iter": 29, "residuals": [9.72435903682638e-07, 8.43600744815376e-11, 5.262723227230255e-13, 1.6118217606400706e-08], "N": 783, "dt": 0.025, "rate_hz": 40.0, "model": "blend (nonlinear tire), acados SQP, NONLINEAR_LS"}
+Reset succeeded: [0. 0. 0. 0. 0. 0.]
+TRIAL {"trial": 0, "cost": 14611.188242677552, "position_rmse": 1.850884791488203, "lateness_max": 0.008062271001108456, "rate_hz": 40.00007872342749, "period_ms_min": 17.269662999751745, "period_ms_max": 32.59416099899681, "rejected": false, "qu_scale": 1.0, "predicted_cost": 135.5976095046924, "qp": "osqp maximum iterations reached", "du_norm": 96.35403364604198, "update_seconds": 149.559565648}
+Reset succeeded: [0. 0. 0. 0. 0. 0.]
