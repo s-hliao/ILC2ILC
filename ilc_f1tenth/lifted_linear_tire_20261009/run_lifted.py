@@ -95,11 +95,26 @@ def main():
     exp.rclpy.init()
     node = Node()
 
-    def fly(u):
-        if not exp.reset_and_wait(node, ref[0]):
-            raise RuntimeError('reset failed')
-        x = rollout(node, u, ref[0], dt, car['gear_ratio'], car['pole_pairs'], car['lambda'],
-                    car['mass'], car['rw'], car['max_steer'])
+    retries = []
+
+    def fly(u, attempts=3):
+        # fixed_deadline_rollout aborts a trial whose command goes out a whole period late
+        # (a host scheduling hiccup); the same controls are then flown again, and logged
+        for attempt in range(attempts):
+            if not exp.reset_and_wait(node, ref[0]):
+                raise RuntimeError('reset failed')
+            try:
+                x = rollout(node, u, ref[0], dt, car['gear_ratio'], car['pole_pairs'],
+                            car['lambda'], car['mass'], car['rw'], car['max_steer'])
+                break
+            except RuntimeError as err:
+                if 'Missed an entire control period' not in str(err) or attempt == attempts - 1:
+                    raise
+                retries.append(dict(trial=len(states), attempt=attempt, error=str(err)))
+                print('RETRY', json.dumps(retries[-1]), flush=True)
+                for _ in range(10):
+                    node.publish_control(0., 0.)
+                    exp.rclpy.spin_once(node, timeout_sec=.01)
         for _ in range(10):
             node.publish_control(0., 0.)
             exp.rclpy.spin_once(node, timeout_sec=.01)
@@ -130,6 +145,7 @@ def main():
                 m.update(selection=rep['selection']['status'])
                 U = np.load(a.output / f'update_{trial + 1}/prepared_candidate.npz')['controls']
             m['update_seconds'] = time.monotonic() - t0
+            m['retries'] = sum(r['trial'] == trial for r in retries)
             metrics.append(m)
             np.savez(a.output / 'history.npz', reference=ref, states=np.asarray(states),
                      controls=np.asarray(controls), dt=dt)
