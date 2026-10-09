@@ -30,3 +30,11 @@ A **steady drift circle** with low-dimensional ILC:
 - The ILC learns only the steady countersteer and drive current, i.e. 2 parameters per lap, updated by a secant step.
 
 This is the drift version of Stage III (a few landing rows against the forces). It needs the mocap state, the current-mode actuation and the stabilizer, but not the full lifted machinery. Then extend to a full feedforward profile on a drift figure-eight (transitions between equilibria), where the lifted QP earns its keep.
+
+**2026-10-09:** implemented in `../ilc2real/`. Of the proposed structure:
+- **Built:** drift TO, stabilizer (periodic LQR in s), ILC on the closed loop with arc-length-indexed error, current
+  actuation, measured sideslip, the multi-body plant with a stiffer MF tire (peak ~9°), and lap-to-lap continuous
+  runs.
+- **Not built:** the Broyden sensitivity correction.
+
+Results are in `../ilc2real/NOTES.md`.

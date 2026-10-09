@@ -5,7 +5,14 @@ import sys
 import types
 from pathlib import Path
 
-FORK = Path('/workspaces/ilc_f1tenth/src/f1tenth_gym')
+import os  # noqa: E402
+
+# the fork: $F1TENTH_GYM_FORK, the original container's path, or this workspace's submodule
+# (ilc_ws/src/f1tenth_gym, branch dev-humble)
+FORK = next(p for p in [Path(os.environ.get('F1TENTH_GYM_FORK', '/nonexistent')),
+                        Path('/workspaces/ilc_f1tenth/src/f1tenth_gym'),
+                        Path(__file__).resolve().parents[3] / 'f1tenth_gym']
+            if (p / 'f1tenth_gym' / 'envs').is_dir())
 
 
 def _stub(name, path):

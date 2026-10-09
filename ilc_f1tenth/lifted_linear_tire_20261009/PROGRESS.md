@@ -97,3 +97,15 @@ Repeat noise: about ±0.003 m (`repeat_u0`, `mb_40hz_s_curve_repeat`).
 - **No `best_refresh` in the safeguard.** A lucky best trial causes repeated rejections.
 - **Old acados NMPC:** the snapshot's 20-iteration SQP cap stops before acados' tolerance. Use ≥ 200 if acados is ever used again.
 - **Unsuitable QP solvers:** IPOPT and qpOASES are impractical on the dense lifted QP (more than 25 min and 97 s respectively on the figure-eight). Keep the box QP.
+
+## 2026-10-09: superseded by `../ilc2real/`
+
+The overnight work moved to `src/ilc_f1tenth/ilc2real/` (see its `NOTES.md`). It contains:
+- IPOPT drift TOs for `mocap_square2fast` and `mocap_figfast`: Radau collocation in arc length, periodic.
+- The per-track TO + ILC pipeline (`track_ilc.py`: the plan's LQR plus a periodic feedforward, learned by the
+  closed-loop GN step).
+- The full ILC2Real pipeline: network sim stage, hardware stage on the gym fork's multi-body cars.
+- The continuous-drift results.
+
+The mocap tracks were copied into `./tracks` from LLA-MPC-online `origin/current`. `initial_to.TRACKS` and
+`mb_sim/fork_import.FORK` now fall back to local copies (this workspace's `f1tenth_gym` submodule, on dev-humble).
