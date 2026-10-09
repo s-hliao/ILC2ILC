@@ -26,8 +26,9 @@ ap.add_argument("--dpi", type=int, default=100)
 a = ap.parse_args()
 os.makedirs(OUT, exist_ok=True)
 # the methods for the transfer comparison, in the figures' order, with their labels
-METHODS = [("ours_zeroshot", "ours, zero-shot"), ("ours_24jumps", "ours, 24 real jumps"), ("learner_dr", "our learner + DR"),
-           ("ppo_dr", "PPO + DR"), ("rma", "RMA"), ("rma_crosstrial", "RMA, cross-trial"), ("fada", "FADA (adapted)")]
+METHODS = [("ours_zeroshot", "ours, zero-shot"), ("ours_24jumps", "ours, 24 real jumps"), ("learner_dr", "our learner + DR (A), zero-shot"),
+           ("dr_finetune_24jumps", "our learner + DR (A), 24 real jumps"),
+           ("dr_scratch_24jumps", "our learner + DR (B), 24 real jumps"), ("ppo_dr", "PPO + DR"), ("rma", "RMA"), ("rma_crosstrial", "RMA, cross-trial"), ("fada", "FADA (adapted)")]
 jobs = []
 py = sys.executable
 robots_in = lambda f: {m["robot"] for m in json.loads(str(np.load(f, allow_pickle=True)["meta"]))}

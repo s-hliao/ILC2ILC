@@ -3,7 +3,7 @@
 animate_drift.py --policy NPZ|lqr --car real_nom --plan mocap_figfast_b25 --laps 4 --out drift.gif: a continuous
 multi-lap run on a real car, animated: the track (plan path), the car's footprint (heading) and its velocity vector
 (the angle between them is the sideslip), a trail coloured by |beta|, and a strip of beta against the plan's beta*
-over time. Several (policy, car) panels side by side with --compare. GIF: dpi 100, global 48-color palette (as the
+over time. Several (policy, car) panels side by side with --compare. --out *.mp4: H.264 (needs imageio-ffmpeg); GIF: dpi 100, global 48-color palette (as the
 quadruped's animate_hw_stage.py).
 """
 import argparse
@@ -101,6 +101,18 @@ def main():
         fig.tight_layout(rect=(0, 0, 1, 0.96))
         fig.canvas.draw()
         frames.append(Image.frombuffer('RGBA', fig.canvas.get_width_height(), fig.canvas.buffer_rgba()).convert('RGB'))
+    if a.out.endswith('.mp4'):                   # H.264 / yuv420p: pausable and seekable in any player
+        import imageio_ffmpeg
+        w, h = frames[0].size
+        wr = imageio_ffmpeg.write_frames(a.out, (w - w % 2, h - h % 2), fps=1 / (0.025 * a.stride), codec='libx264',
+                                         quality=None, output_params=['-pix_fmt', 'yuv420p', '-crf', '23',
+                                                                      '-movflags', '+faststart'])
+        wr.send(None)
+        for f in frames:
+            wr.send(np.ascontiguousarray(np.asarray(f)[:h - h % 2, :w - w % 2]))
+        wr.close()
+        print('saved', a.out, len(frames), 'frames', os.path.getsize(a.out) // 1024, 'KB')
+        return
     pal = frames[len(frames) // 2].quantize(colors=a.colors, method=Image.Quantize.MEDIANCUT)
     q = [f.quantize(palette=pal, dither=Image.Dither.NONE) for f in frames]
     q[0].save(a.out, save_all=True, append_images=q[1:], duration=int(1000 * 0.025 * a.stride), loop=0, optimize=True)

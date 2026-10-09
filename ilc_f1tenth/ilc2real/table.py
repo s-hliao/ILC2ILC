@@ -76,6 +76,10 @@ def main():
         d = json.load(open(f))
         for b, ev in d['budgets'].items():
             rows.append(row(f'track_ilc ({b} laps per plan)', ev, int(b) * 8))
+    f = os.path.join(HERE, 'runs/trackilc_laps/summary.json')     # the lap-budget ablation (12 runs per cell already)
+    if os.path.exists(f):
+        for b, ev in json.load(open(f))['budgets'].items():
+            rows.append(row(f'track_ilc_laps ({b} laps per plan)', ev, int(b) * 8))
     w = [max(len(r[i]) for r in rows + [hdr]) for i in range(len(hdr))]
     line = lambda r: ' | '.join(x.rjust(w[i]) if i else x.ljust(w[i]) for i, x in enumerate(r))
     print(line(hdr))
