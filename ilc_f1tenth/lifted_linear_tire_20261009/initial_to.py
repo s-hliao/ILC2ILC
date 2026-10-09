@@ -17,6 +17,7 @@ references/s_curve.npz exactly), the figure-eight from generate_figure_eight_ref
 construction with dt as a parameter.
 """
 import json
+import os
 import sys
 import types
 from pathlib import Path
@@ -70,7 +71,11 @@ def figure_eight(dt, car=None):
     return ref
 
 
-TRACKS = Path('/workspaces/lla_drive_ws/src/llampc/llampc/utils/tracks')
+# llampc's mocap tracks: $LLAMPC_TRACKS, the original container's llampc checkout, or the
+# copies in ./tracks (git show origin/current:llampc/llampc/utils/tracks/*, LLA-MPC-online)
+TRACKS = next(p for p in [Path(os.environ.get('LLAMPC_TRACKS', '/nonexistent')),
+                          Path('/workspaces/lla_drive_ws/src/llampc/llampc/utils/tracks'),
+                          Path(__file__).resolve().parent / 'tracks'] if p.is_dir())
 
 
 def mocap_reference(name, dt, car=None, accel_time=1.0, laps=1):
