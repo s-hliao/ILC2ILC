@@ -178,44 +178,49 @@ def fig_robots():
     rows = [("Ours, zero-shot", lambda rb: load("hw6g16_v10s2it20", "start", robots=[rb]) or load("base6_r4m", "start", robots=[rb])),
             ("Ours, 24 real jumps", lambda rb: load("gate_loose", "final", robots=[rb]) or load("base6_r4m", "final", robots=[rb])),
             ("Ours, 96 real jumps", lambda rb: load("hw6g16_v10s2it20", "final", robots=[rb])),
-            ("Our learner + DR", lambda rb: load("base/eval_dr_plain", "start", robots=[rb]))]
+            ("Our learner + DR (A), zero-shot", lambda rb: load("base/eval_dr_plain", "start", robots=[rb]) or ld(SRC_DRA_ZS, rb, "start")),
+            ("Our learner + DR (A), 24 real jumps", lambda rb: ld(SRC_DRA_24, rb, "final")),
+            ("Our learner + DR (B), zero-shot", lambda rb: ld(SRC_DRB_ZS, rb, "start")),
+            ("Our learner + DR (B), 24 real jumps", lambda rb: ld(SRC_DRB_24, rb, "final"))]
     rbs = ["real_r1", "real_s1", "real_r4", "real_r4m", "real_r5"]
-    cidx = [0, 1, 2, 3]
-    fig, axs = plt.subplots(1, 2, figsize=(13, 4.2), gridspec_kw=dict(width_ratios=[1.6, 1]))
+    cidx = [0, 1, 2, 3, 3, 3, 3]                     # the DR family shares slot 3, told apart by hatching
+    hidx = [0, 0, 0, 0, 1, 2, 3]
+    fig, axs = plt.subplots(1, 2, figsize=(15, 4.6), gridspec_kw=dict(width_ratios=[1.9, 1]))
     ax = axs[0]
-    w = 0.2
+    w = 0.12
     for k, (lab, f) in enumerate(rows):
         for i, rb in enumerate(rbs):
             rs = f(rb)
             if not rs:
                 continue
             p, lo, hi = wilson(sum(ok(r) for r in rs), len(rs))
-            x = i + (k - 1.5) * w
-            ax.bar(x, 100 * p, w * 0.92, color=CAT[cidx[k]], hatch=HATCH[cidx[k]], edgecolor=SURF, lw=0.6,
+            x = i + (k - 3) * w
+            ax.bar(x, 100 * p, w * 0.92, color=CAT[cidx[k]], hatch=HATCH[hidx[k]], edgecolor=SURF, lw=0.6,
                    label=lab if i == 0 else None, zorder=2)
             ax.errorbar(x, 100 * p, yerr=[[100 * (p - lo)], [100 * (hi - p)]], color=INK2, lw=0.9, capsize=1.5, zorder=3)
-            ax.text(x, 100 * p + 1, f"{100 * p:.0f}", ha="center", va="bottom", fontsize=6.5, color=INK2, zorder=4)
+            ax.text(x, 100 * hi + 0.8, f"{100 * p:.0f}", ha="center", va="bottom", fontsize=5.5, color=INK2, zorder=4)
     ax.set_xticks(range(len(rbs)), [ROBOT_DESC[r] for r in rbs], fontsize=7.5)
     ax.set_ylabel("success (%)")
     ax.set_ylim(0, 85)
     style(ax)
-    ax.legend(frameon=False, ncol=2, loc="upper left", fontsize=8)
+    ax.legend(frameon=False, ncol=3, loc="upper center", fontsize=7.5, bbox_to_anchor=(0.5, -0.2))
     ax.set_title("Dynamics: each robot (nominal starts, test goals; 95% intervals)")
     # signed landing bias per robot: box goals, upright
     ax = axs[1]
-    for k, (lab, f) in enumerate(rows[:3]):
+    for k, (lab, f) in [(k, rows[k]) for k in (0, 1, 2, 4, 6)]:
         vals = []
         for rb in rbs:
             rs = [r for r in f(rb) if not r["fell"] and r["goal"][1] >= 0.005]
             vals.append(100 * np.mean([r["ex"] for r in rs]) if rs else np.nan)
-        ax.plot(range(len(rbs)), vals, color=CAT[cidx[k]], marker=MARK[cidx[k]], lw=2, ms=6, mec=SURF, label=lab)
+        ax.plot(range(len(rbs)), vals, color=CAT[cidx[k]], marker=MARK[k], lw=2 if k < 3 else 1.3, ms=6, mec=SURF,
+                ls="-" if k < 4 else ":", label=lab)
     ax.axhline(0, color=INK2, lw=0.8)
     ax.axhspan(-5, 5, color=GRID, alpha=0.6, zorder=0)
     ax.text(len(rbs) - 1, 5.6, "+-5 cm tolerance", ha="right", fontsize=7.5, color=INK2)
     ax.set_xticks(range(len(rbs)), [r.replace("real_", "") for r in rbs])
     ax.set_ylabel("mean landing x error, box goals (cm)")
     style(ax)
-    ax.legend(frameon=False, fontsize=8, loc="lower left")
+    ax.legend(frameon=False, fontsize=7, loc="lower left")
     ax.set_title("Dynamics: the short-landing bias per robot")
     fig.tight_layout()
     save(fig, "03_dynamics_per_robot.png")
@@ -454,6 +459,9 @@ AX_RB = ["real_r1", "real_s1", "real_r4m", "real_r5"]
 SRC_ZS = {"real_r1": "hw6g16_v10s2it20", "real_s1": "hw6g16_v10s2it20", "real_r5": "hw6g16_v10s2it20", "real_r4m": "base6_r4m",
           "real_r4": "hw6g16_v10s2it20"}
 SRC_24 = {"real_r1": "gate_loose", "real_s1": "gate_loose", "real_r5": "gate_loose", "real_r4m": "base6_r4m", "real_r4": "gate_loose"}
+SRC_DRA_ZS = {"real_r1": "drA_hw24", "real_s1": "drA_hw24", "real_r5": "drA_hw24", "real_r4": "drA_hw24", "real_r4m": "drA_hw24_r4m"}
+SRC_DRB_ZS = {"real_r1": "drB_hw24", "real_s1": "drB_hw24", "real_r5": "drB_hw24", "real_r4": "drB_hw24", "real_r4m": "drB_hw24_r4m"}
+SRC_DRA_24, SRC_DRB_24 = SRC_DRA_ZS, SRC_DRB_ZS                          # tag 'final' after the 24-jump stage
 SRC_96 = {"real_r1": "hw6g16_v10s2it20", "real_s1": "hw6g16_v10s2it20", "real_r5": "hw6g16_v10s2it20", "real_r4": "hw6g16_v10s2it20"}
 # physics: motor strength / mass (the thrust-to-weight deficit the short landings come from); r4m = r4's physics
 STW = {"real_r1": 0.929 / 0.969, "real_s1": 1.0 / 1.05, "real_r4m": 0.864 / 0.982, "real_r4": 0.864 / 0.982, "real_r5": 0.943 / 1.14}
@@ -491,7 +499,7 @@ def dot(ax, x, rs, c, m, lab=None, dx=0.0):
     if not rs:
         return
     p, lo, hi = wilson(sum(ok(r) for r in rs), len(rs))
-    ax.errorbar(x + dx, 100 * p, yerr=[[100 * (p - lo)], [100 * (hi - p)]], color=CAT[c], marker=MARK[c], ms=6,
+    ax.errorbar(x + dx, 100 * p, yerr=[[100 * (p - lo)], [100 * (hi - p)]], color=CAT[c], marker=MARK[m], ms=6,
                 mec=SURF, lw=0, elinewidth=1, capsize=2, label=lab, zorder=3)
 
 
@@ -519,6 +527,9 @@ def fig_axes():
         src, tag = {0: (SRC_ZS, "start"), 1: (SRC_24, "final"), 2: (SRC_96, "final")}[c]
         for i, rb in enumerate(order):
             dot(ax, i, ld(src, rb, tag), c, c, None, dx=(k - 1) * 0.15)
+    for k, src in enumerate((SRC_DRA_24, SRC_DRB_24)):
+        for i, rb in enumerate(order):
+            dot(ax, i, ld(src, rb, "final"), 3, 3 + k, None, dx=0.3 + 0.1 * k)
     ax.set_xticks(range(len(order)), [f"{rb.replace('real_', '')}\n{STW[rb]:.2f}" for rb in order], fontsize=8)
     ax.set_xlabel("robot, strength-to-weight (motor / mass; nominal 1.00)")
     ax.set_ylabel("success on the test goals (%)")
@@ -529,6 +540,10 @@ def fig_axes():
         sets = stage_sets(None if p == "none" else p)
         for lab, c in stages:
             dot(ax, i, sets.get(lab.replace("96 jumps", "x"), []), c, c, None, dx=(stages.index((lab, c)) - 1.5) * 0.12)
+    for i, p in enumerate(["none", "delay10", "mocapbad"]):
+        for k, src in enumerate((SRC_DRA_24, SRC_DRB_24)):
+            rs = [r for rb in AX_RB for r in (ld(src, rb, "final") if p == "none" else by_cond(ld(src, rb, "final", rob=True), p))]
+            dot(ax, i, rs, 3, 3 + k, None, dx=0.32 + 0.1 * k)
     ax.set_xticks(range(3), ["nominal\nsensing", "10 ms\nactuation delay", "bad mocap\n120 Hz, 15 ms"], fontsize=7.5)
     ax.set_title("Environment: sensing / actuation")
     # (c) starting condition
@@ -538,6 +553,10 @@ def fig_axes():
         sets = stage_sets(None if p == "nominal" else p)
         for k, (lab, c) in enumerate(stages):
             dot(ax, i, sets.get(lab, []), c, c, None, dx=(k - 1.5) * 0.12)
+    for i, p in enumerate(conds):
+        for k, src in enumerate((SRC_DRA_24, SRC_DRB_24)):
+            rs = [r for rb in AX_RB for r in (ld(src, rb, "final") if p == "nominal" else by_cond(ld(src, rb, "final", rob=True), p))]
+            dot(ax, i, rs, 3, 3 + k, None, dx=0.3 + 0.1 * k)
     short = dict(noseup="nose\nup", nosedn="nose\ndown", crouch="crouched", tall="tall", blk15="block\n1.5 cm", blk2="block\n2 cm")
     ax.set_xticks(range(len(conds)), ["nominal"] + [f"{short[p]}\n{STANCE[p]:.2f} rad" if p in STANCE else short[p] for p in conds[1:]], fontsize=7.5)
     ax.axvline(4.5, color=GRID, lw=1)
@@ -556,9 +575,11 @@ def fig_axes():
     ax.set_title("Goal (76-goal grid, 2 episodes per goal)")
     for ax in axs:
         style(ax)
-        ax.set_ylim(0, 70)
+        ax.set_ylim(0, 80)
     handles = [plt.Line2D([], [], color=CAT[c], marker=MARK[c], lw=0, ms=6, mec=SURF) for _, c in stages]
-    fig.legend(handles, [s[0] for s in stages], loc="lower center", ncol=4, frameon=False, bbox_to_anchor=(0.5, -0.04))
+    handles += [plt.Line2D([], [], color=CAT[3], marker=MARK[3 + k], lw=0, ms=6, mec=SURF) for k in (0, 1)]
+    fig.legend(handles, [s[0] for s in stages] + ["our learner + DR (A), 24 jumps", "our learner + DR (B), 24 jumps"],
+               loc="lower center", ncol=6, frameon=False, bbox_to_anchor=(0.5, -0.04))
     fig.suptitle("Success along each perturbation axis separately (robots r1, s1, r4m, r5; 95% intervals; the GPU sim always nominal)",
                  x=0.01, ha="left", fontsize=11)
     fig.tight_layout(rect=(0, 0.05, 1, 1))

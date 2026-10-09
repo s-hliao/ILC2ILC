@@ -190,6 +190,11 @@ def fig3():
     o = [(b, *rate(rs)) for b, rs in ours if rs]
     ax.errorbar([q[0] for q in o], [q[1] for q in o], yerr=[q[2] for q in o], color=C['blue'], marker='o', ms=6, lw=2,
                 capsize=3, label='ILC2Real: one network, 6 training goals (never the test goals)')
+    for lab, run, col, mk in (('our learner + DR (A: DR fine-tune) + our hardware stage', 'drA_hw24', C['sky'], 'v'),
+                              ('our learner + DR (B: DR from scratch) + our hardware stage', 'drB_hw24', C['green'], '^')):
+        d = [(0, *rate(jumps(run, 'start', R3))), (24, *rate(jumps(run, 'final', R3)))]
+        ax.errorbar([q[0] + (1 if mk == 'v' else -1) for q in d], [q[1] for q in d], yerr=[q[2] for q in d], color=col,
+                    marker=mk, ms=6, lw=1.3, capsize=3, label=lab)
     ks = list(range(0, 13))
     jt = [(8 * k, *rate_f(jilc_at(k, R3))) for k in ks]
     ax.plot([q[0] for q in jt], [q[1] for q in jt], color=C['orange'], lw=1.5, ls='--',
@@ -218,7 +223,7 @@ def fig4():
                                       ('info-gain v2 12', 'ig2_b12', 'final'), ('info-gain v2 24', 'ig2_b24', 'final'),
                                       ('sequential info-gain 12', 'ig1_b12', 'final'), ('random 12', 'igrnd_b12', 'final'),
                                       ('random 24', 'igrnd_b24', 'final'), ('8 goals (6 boxes) x 3', 'box8', 'final')]),
-        ('sensitivity / direction', C['green'], [('secant per goal', 'sens_goal', 'final'), ('secant shared', 'sens_shared', 'final'),
+        ('sensitivity / direction', C['red'], [('secant per goal', 'sens_goal', 'final'), ('secant shared', 'sens_shared', 'final'),
                                                  ('value residual, ridge 1', 'sens_vres1', 'final'),
                                                  ('value residual, ridge 10', 'sens_vres10', 'final'),
                                                  ('Abbeel-style direction', 'hw_abbeel', 'final'),
@@ -229,6 +234,12 @@ def fig4():
                                          ('varied starts 24', 'vs24', 'final'), ('varied starts 48', 'vs48', 'final'),
                                          ('varied starts, sim from measured start', 'vs24_meas', 'final')]),
         ('trained under a constant perturbation', C['pink'], [(p, f'tp_{p}', 'final') for p in START + SENSE]),
+        ('our learner + DR + our hardware stage', C['green'], [('DR (A) zero-shot', 'drA_hw24', 'start'),
+                                                              ('DR (A) + 24', 'drA_hw24', 'final'),
+                                                              ('DR (A) + 24, varied starts', 'drA_vs24', 'final'),
+                                                              ('DR (B) zero-shot', 'drB_hw24', 'start'),
+                                                              ('DR (B) + 24', 'drB_hw24', 'final'),
+                                                              ('DR (B) + 24, varied starts', 'drB_vs24', 'final')]),
     ]
     rows = [(g, col, lab, rate(jumps(src, tag, R3))) for g, col, items in groups for lab, src, tag in items]
     rows = [r for r in rows if r[3][2] > 0]
@@ -242,7 +253,7 @@ def fig4():
     ax.set_yticks(y)
     ax.set_yticklabels([r[2] for r in rows], fontsize=8)
     ax.set_xlabel('success on the reserved test goals, nominal evaluation (%)')
-    ax.set_xlim(0, 52)
+    ax.set_xlim(0, 58)
     ax.grid(axis='y', alpha=0)
     handles = [plt.Rectangle((0, 0), 1, 1, color=col) for _, col, _ in groups]
     ax.legend(handles + [plt.Line2D([], [], color=C['grey'], ls=':')], [g for g, _, _ in groups] + ['zero-shot'],
