@@ -103,6 +103,20 @@ Per-track ILC at b laps per plan is plotted at 2b; it spends the same again on t
     acceleration, about μ·g.
 - **RWD / Pacejka overnight run (`archive_rwd_mf/`):** a different car (made-up driveline, μ 1.05); not comparable.
 
+### From a fresh clone
+Versioned:
+- the μ 0.2 plans (`plans_mu02/*.npz`; missing LQR gains are recomputed and cached on first load);
+- every sim stage's final network (`runs/<net>/policy_final.npz`);
+- the per-car networks of the end-product videos (`runs/hw/{v3nom_s0_hw24,ppo_dr_lap2}/real_*_policy.npz`);
+- the two tracks (`../lifted_linear_tire_20261009/tracks/`).
+
+Example, from `src/ilc_f1tenth/ilc2real` with the f1t env:
+
+```bash
+F1T_MU=0.2 F1T_PLANS=$PWD/plans_mu02 JAX_PLATFORMS=cpu python animate_drift.py --plan mocap_figfast_b25 --laps 4 \
+    --compare ours@nom=runs/hw/v3nom_s0_hw24/real_nom_policy.npz@real_nom lqr@nom=lqr@real_nom --out fig.mp4
+```
+
 ### Open
 - **real_mu:** the nominal-sim ILC networks never handle a 20 % lower μ on the drift plans, while DR over μ does.
   Our learner + DR used the same DR family and still got 0 %, so its DR range or weighting needs checking.

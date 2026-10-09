@@ -6,11 +6,13 @@ posed kinematically (qpos per 2 ms tick), with the jump's box in the scene.
 
   --index I            one jump; otherwise every jump matching --robot / --iteration / --goal, one after another
   --all                with no filter: every jump in the file
-  --speed S            playback speed (1 = real time)
+  --speed S            playback speed (1 = real time, 0.25 = quarter-speed slow motion)
+Viewer keys: space pause / resume, ',' / '.' step 10 ms back / forward, R restart, N next jump (each jump loops until
+N or the window is closed), Q quit.
   --check              no viewer: pose every selected jump and report the feet's heights at the start and at the
                        landing (a sanity check of the export and the box placement; runs headless)
   --record OUT         no viewer: render the selected jumps offscreen (side camera) into OUT -- .gif (Pillow) or .mp4
-                       (needs imageio-ffmpeg); --size W H, --fps (default 30). Needs OpenGL (a desktop; on a headless
+                       (needs imageio-ffmpeg); --size W H (even numbers), --fps (default 30). Needs OpenGL (a desktop; on a headless
                        machine MUJOCO_GL=egl or osmesa if installed)
 Examples:
   replay_mujoco.py trajectories/gate_loose.npz --robot real_r1 --goal 0.5 0.15        # its 4 hardware-stage tries
@@ -76,10 +78,17 @@ if a.record:
             cam.lookat[:] = [float(T["pos"][i, 0, 0]) + 0.35, 0.0, 0.25]
             r.update_scene(d, cam)
             frames.append(r.render().copy())
+        r.close()
         print(f"[{i}] {mt['robot']} goal {mt['goal']}: {len(frames)} frames so far")
-    if a.record.endswith(".mp4"):
-        import imageio.v2 as iio
-        iio.mimsave(a.record, frames, fps=a.fps)
+    if a.record.endswith(".mp4"):                 # H.264 / yuv420p: pausable and seekable in any player
+        import imageio_ffmpeg
+        h, w = frames[0].shape[:2]
+        wr = imageio_ffmpeg.write_frames(a.record, (w, h), fps=a.fps, codec="libx264", quality=None,
+                                         output_params=["-pix_fmt", "yuv420p", "-crf", "20", "-movflags", "+faststart"])
+        wr.send(None)
+        for f in frames:
+            wr.send(np.ascontiguousarray(f))
+        wr.close()
     else:
         from PIL import Image
         ims = [Image.fromarray(f) for f in frames]
@@ -88,21 +97,47 @@ if a.record:
     sys.exit(0)
 
 import mujoco.viewer  # noqa: E402
+# keys in the viewer window: space pause / resume, ',' and '.' step back / forward 10 ms (while paused), R restart,
+# N next jump (each jump loops until N; closing the window also moves on), Q quit
+KEY = dict(space=32, comma=44, period=46, n=78, r=82, q=81)
 for i in idx:
     mt = T["meta"][i]
     m, d = tl.go1_model(tl.box_of(mt))
     print(f"[{i}] {mt['robot']} ({mt.get('cond')}) it {mt['iteration']} goal {mt['goal']}: ex {100 * mt['ex']:+.1f} cm "
-          f"ez {100 * mt['ez']:+.1f} cm{' FELL' if mt['fell'] else ''}")
+          f"ez {100 * mt['ez']:+.1f} cm{' FELL' if mt['fell'] else ''}   [space pause, , . step, R restart, N next, Q quit]",
+          flush=True)
     dt = float(T["t"][1] - T["t"][0])
-    with mujoco.viewer.launch_passive(m, d) as v:
+    n = mt["n_ticks"]
+    st = dict(k=0, paused=False, next=False, quit=False)
+
+    def on_key(c):
+        if c == KEY["space"]:
+            st["paused"] = not st["paused"]
+        elif c == KEY["comma"]:
+            st["k"] = max(0, st["k"] - 5)
+        elif c == KEY["period"]:
+            st["k"] = min(n - 1, st["k"] + 5)
+        elif c == KEY["r"]:
+            st["k"] = 0
+        elif c == KEY["n"]:
+            st["next"] = True
+        elif c == KEY["q"]:
+            st["next"] = st["quit"] = True
+
+    with mujoco.viewer.launch_passive(m, d, key_callback=on_key) as v:
         v.cam.distance, v.cam.elevation, v.cam.azimuth = 1.8, -12, 90
-        v.cam.lookat[:] = [0.3, 0, 0.25]
-        for k in range(mt["n_ticks"]):
-            if not v.is_running():
-                break
+        v.cam.lookat[:] = [float(T["pos"][i, 0, 0]) + 0.3, 0, 0.25]
+        hold = 0
+        while v.is_running() and not st["next"]:
             t0 = time.time()
-            tl.set_pose(m, d, T, i, k)
+            tl.set_pose(m, d, T, i, st["k"])
             mujoco.mj_forward(m, d)
             v.sync()
+            if not st["paused"]:
+                if st["k"] < n - 1:
+                    st["k"] += 1
+                elif (hold := hold + 1) * dt > 1.0:               # hold the landing 1 s, then loop
+                    st["k"], hold = 0, 0
             time.sleep(max(0.0, dt / a.speed - (time.time() - t0)))
-        time.sleep(0.8)
+    if st["quit"]:
+        break

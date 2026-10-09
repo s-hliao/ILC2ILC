@@ -7,7 +7,9 @@ animate_hw_stage.py: side-view animations (matplotlib, GIF) of recorded Go1 jump
                                          batches' base paths stay, faded -- the trials converging
   compare  A.npz B.npz ... --robot R     sim-to-sim transfer side by side: one panel per file (method), one segment
                                          per test goal
-Options: --out FILE (default figures/ilc2real/anim/<mode>_<traj>_<robot>.gif), --fps 17, --stride 30 (2 ms ticks per frame:
+  eval     EVAL.npz --robot R            one method's evaluation on the reserved test goals (never trained on, never
+                                         flown in the hardware stage): one panel per goal, all jumping at once
+Options: --out FILE (default figures/ilc2real/anim/<mode>_<traj>_<robot>.gif), --label (eval: the method's name), --fps 17, --stride 30 (2 ms ticks per frame:
 real time at 17 fps), --dpi 100, --colors 48 (the GIF palette: few colours keep it small enough to commit),
 --format gif|mp4 (mp4 needs ffmpeg). All of them at once:
 make_animations.py. Poses come from the recorded ground truth through the menagerie
@@ -24,10 +26,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import traj_lib as tl  # noqa: E402
 
 ap = argparse.ArgumentParser()
-ap.add_argument("mode", choices=("hwstage", "compare"))
+ap.add_argument("mode", choices=("hwstage", "compare", "eval"))
 ap.add_argument("traj", nargs="+")
 ap.add_argument("--robot", required=True)
 ap.add_argument("--labels", nargs="*", default=None, help="compare: a label per file")
+ap.add_argument("--label", help="eval: the method's name")
 ap.add_argument("--out")
 ap.add_argument("--fps", type=int, default=17)
 ap.add_argument("--stride", type=int, default=30, help="ticks (2 ms) per frame: 30 at 17 fps ~ real time")
@@ -70,6 +73,14 @@ if a.mode == "hwstage":
         cond = T["meta"][idx[0]].get("train_cond", "nominal")
         segments.append((f"{a.robot}, hardware stage ({T['name']}, training under: {cond}) -- batch {it + 1} of {len(its)}: "
                          f"the policy after {it} update{'s' if it != 1 else ''}", panels))
+elif a.mode == "eval":
+    T = Ts[0]
+    idx = tl.select(T, robot=a.robot)
+    goals = sorted({tuple(round(g, 4) for g in T["meta"][i]["goal"]) for i in idx}, key=lambda g: (g[1], g[0]))
+    panels = [(f"goal x {g[0]:.3f} m" + (f", box {g[1]:.3f} m" if g[1] > 0.004 else " (flat)"), T,
+               tl.select(T, robot=a.robot, goal=g)[0], []) for g in goals]
+    segments.append((f"{a.label or T['name'].replace('eval_', '')}, {a.robot}: the reserved test goals "
+                     f"(never trained on, never flown in the hardware stage)", panels))
 else:
     labels = a.labels or [T["name"].replace("eval_", "") for T in Ts]
     goals = sorted({tuple(round(g, 4) for g in m["goal"]) for T in Ts for m in T["meta"] if m["robot"] == a.robot},
@@ -83,7 +94,7 @@ else:
         segments.append((f"{a.robot}, sim-to-sim transfer, test goal x {g[0]:.3f} m" + (f", box {g[1]:.3f} m" if g[1] > 0.004 else " (flat)"), panels))
 
 npan = max(len(p) for _, p in segments)
-ncol = min(npan, 3)
+ncol = min(npan, 4 if a.mode == "eval" else 3)
 nrow = int(np.ceil(npan / ncol))
 fig, axs = plt.subplots(nrow, ncol, figsize=(4.9 * ncol, 3.0 * nrow + 0.7), squeeze=False, facecolor=SURF)
 axs = axs.ravel()
@@ -91,7 +102,8 @@ sup = fig.suptitle("", x=0.01, ha="left", fontsize=13, color=INK)
 frames = []                                       # (segment, tick)
 for s, (_, panels) in enumerate(segments):
     n = max(p[1]["meta"][p[2]]["n_ticks"] for p in panels)
-    frames += [(s, k) for k in range(0, n, a.stride)] + [(s, n - 1)] * int(0.6 * a.fps)      # hold the landing
+    hold = 2.0 if a.mode == "eval" else 0.6                                                     # hold the landing (s)
+    frames += [(s, k) for k in range(0, n, a.stride)] + [(s, n - 1)] * int(hold * a.fps)
 
 
 def base_path(T, i, k=None):
@@ -148,8 +160,16 @@ fig.text(0.01, 0.005, ("orange: this jump's trunk path; blue: the same goal's ea
 fig.tight_layout(rect=(0, 0.035, 1, 0.93))
 if a.format == "mp4":
     from matplotlib.animation import FFMpegWriter
+    try:                                          # no system ffmpeg here: the imageio-ffmpeg wheel's binary
+        import imageio_ffmpeg
+        matplotlib.rcParams["animation.ffmpeg_path"] = imageio_ffmpeg.get_ffmpeg_exe()
+    except ImportError:
+        pass
     out = os.path.splitext(out)[0] + ".mp4"
-    FuncAnimation(fig, draw, frames=len(frames), blit=False).save(out, writer=FFMpegWriter(fps=a.fps, bitrate=2400), dpi=a.dpi)
+    # H.264 / yuv420p (plays and seeks in every player and browser), even frame size, index at the front
+    w = FFMpegWriter(fps=a.fps, codec="libx264", extra_args=["-pix_fmt", "yuv420p", "-crf", "23", "-preset", "slow",
+                                                             "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2", "-movflags", "+faststart"])
+    FuncAnimation(fig, draw, frames=len(frames), blit=False).save(out, writer=w, dpi=a.dpi, savefig_kwargs=dict(facecolor=SURF))
 else:
     # one palette for the whole GIF (from a sample of frames), no dithering: flat colours compress well and the
     # unchanged pixels between frames are written once (Pillow stores only each frame's changed box)
