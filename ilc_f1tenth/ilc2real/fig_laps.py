@@ -15,12 +15,18 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt                  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+import argparse                                  # noqa: E402
+_ap = argparse.ArgumentParser()
+_ap.add_argument('--root', default=HERE, help='results root (runs/hw, runs/trackilc_laps)')
+_ap.add_argument('--out', default=None)
+_A = _ap.parse_args()
+ROOT = os.path.abspath(_A.root)
 DRIFT = ['mocap_square2fast_b25', 'mocap_figfast_b25']
 SURF, INK, INK2 = '#fcfcfb', '#0b0b0b', '#52514e'
 
 
 def ev(arm):
-    f = os.path.join(HERE, 'runs/hw', arm, 'eval_big.json')
+    f = os.path.join(ROOT, 'runs/hw', arm, 'eval_big.json')
     return json.load(open(f)) if os.path.exists(f) else None
 
 
@@ -44,12 +50,12 @@ def series(net, extra=()):
 LINES = [
     ('ours (nominal Fiala sim, seed 0), then our hardware stage', '#0072B2', 'o', '-',
      series('v3nom_s0', [(24, 'v3nom_s0_hw24'), (48, 'v3nom_s0_hw48'), (96, 'v3nom_s0_hw96')])),
-    ('ours (seed 1)', '#56B4E9', 'v', '-', series('v3nom_s1', [(24, 'v3nom_s1_hw24')])),
-    ('PPO + DR, then our hardware stage', '#009E73', 'D', '-',
+    ('ours (seed 1)', '#0072B2', 'v', ':', series('v3nom_s1', [(24, 'v3nom_s1_hw24')])),
+    ('PPO + DR, then our hardware stage', '#CC79A7', 'D', '-',
      series('ppo_dr', [(24, 'ppo_dr_hw24'), (48, 'ppo_dr_hw48')])),
 ]
-tl = json.load(open(os.path.join(HERE, 'runs/trackilc_laps/summary.json')))['budgets']
-LINES.append(('per-track ILC (plan LQR + feedforward), b laps per plan', '#E69F00', 's', '--',
+tl = json.load(open(os.path.join(ROOT, 'runs/trackilc_laps/summary.json')))['budgets']
+LINES.append(('per-track ILC (plan LQR + feedforward), b laps per plan', '#222222', 's', '--',
               [(0, stats(ev('lqr_zs')))] + sorted((2 * int(b), stats(e)) for b, e in tl.items())))
 VAR = [('6 goals x 1 iteration', 'v3nom_s0_lap6g6', 6), ('larger steps, 6 laps', 'v3nom_s0_lap6big', 6),
        ('larger steps, 10 laps', 'v3nom_s0_lap10big', 10)]
@@ -63,7 +69,8 @@ for ax, (k, lab) in zip(axs, keys):
     for name, col, mk, ls, pts in LINES:
         x = [X(p[0]) for p in pts]
         y = [p[1][k] for p in pts]
-        ax.plot(x, y, ls=ls, marker=mk, color=col, lw=2, ms=6, mec=SURF, label=name)
+        ax.plot(x, y, ls=ls, marker=mk, color=col, lw=2, ms=6, mec=col if ls == ':' else SURF,
+                mfc=SURF if ls == ':' else col, label=name)
         if k == 's':
             ax.vlines(x, [p[1]['lo'] for p in pts], [p[1]['hi'] for p in pts], color=col, lw=1, alpha=0.6)
     for j, (name, arm, x) in enumerate(VAR):
@@ -88,7 +95,7 @@ fig.legend(h, l, loc='lower center', ncol=3, frameon=False, fontsize=8.5)
 fig.suptitle('Lap budget at mu 0.2: full-drift plans (beta 25, both tracks), 5 cars x 12 runs x 5 laps per point; laps axis not to scale after 10',
              x=0.01, ha='left', fontsize=11, color=INK)
 fig.tight_layout(rect=(0, 0.13, 1, 0.95))
-os.makedirs(os.path.join(HERE, 'figs'), exist_ok=True)
-out = os.path.join(HERE, 'figs', 'lap_budget.png')
+out = _A.out or os.path.join(ROOT, 'figs', 'lap_budget.png')
+os.makedirs(os.path.dirname(out), exist_ok=True)
 fig.savefig(out, dpi=130, facecolor=SURF)
 print('->', out)

@@ -345,8 +345,74 @@ def fig7():
     plt.close(fig)
 
 
+# ---- fig 8 --------------------------------------------------------------------------------------------------------
+M = os.path.join(P, 'match')
+
+
+def match_curve(name):
+    """A data-matching run's checkpoints {real jumps per robot: (success %, CI half-width, n)} on the test goals,
+    pooled over r1 s1 r5 (quad_real_ppo.py summary.json / quad_eval_ckpts.py ckpt_summary.json)."""
+    for f in ('summary.json', 'ckpt_summary.json'):
+        fp = os.path.join(M, name, f)
+        if os.path.exists(fp) and 'hist' not in json.load(open(fp)):
+            d = json.load(open(fp))
+            out = []
+            for k, rob in sorted(d.items(), key=lambda kv: int(kv[0])):
+                v = [x for x in rob.values() if x.get('success') is not None and x.get('n')]
+                if len(v) < 3:
+                    continue
+                n = sum(x['n'] for x in v)
+                p, h = wilson(round(sum(x['success'] * x['n'] for x in v)), n)
+                out.append((int(k), 100 * p, 100 * h, n))
+            return out
+    return []
+
+
+def fig8():
+    """The data-matching study: the baselines trained ON THE ROBOTS with privileged data, from their sim policies --
+    how many real jumps until they match our best model after the hardware stage?"""
+    fig, ax = plt.subplots(figsize=(8.4, 4.6))
+    tgt = rate(jumps('drB_hw24', 'final', R3))
+    ax.axhspan(tgt[0] - tgt[1], tgt[0] + tgt[1], color=C['green'], alpha=0.12, lw=0)
+    ax.axhline(tgt[0], color=C['green'], lw=1.2, ls='--')
+    ax.errorbar([24], [tgt[0]], yerr=[tgt[1]], color=C['green'], marker='^', ms=8, capsize=3, lw=0,
+                label=f'ours: our learner + DR (B) + 24 real jumps ({tgt[0]:.1f} %)', zorder=5)
+    ours = [(0, jumps('hw6g16_v10s2it20', 'start', R3)), (24, jumps('gate_loose', 'final', R3)),
+            (48, jumps('hw6g_v10s2it20', 'final', R3)), (96, jumps('hw6g16_v10s2it20', 'final', R3))]
+    o = [(b, *rate(rs)) for b, rs in ours if rs]
+    ax.plot([q[0] for q in o], [q[1] for q in o], color=C['blue'], marker='o', ms=5, lw=1.5,
+            label='ours, nominal-sim learner + our hardware stage')
+    runs = [('ppo_real', 'PPO+DR, then PPO on the robot (privileged critic)', C['pink'], 's', '-'),
+            ('rma_real', 'RMA teacher with the TRUE dynamics, then PPO on the robot', C['red'], 'D', '-'),
+            ('fada_real', "FADA: LoRA on the robot, its own (sim) planner", C['orange'], 'v', '-'),
+            ('fada_real_oracle', 'FADA with an ORACLE planner (fit to our real jumps)', C['orange'], 'v', '--')]
+    for name, lab, col, mk, ls in runs:
+        c = match_curve(name)
+        if not c:
+            continue
+        x = [q[0] for q in c]
+        ax.errorbar(x, [q[1] for q in c], yerr=[q[2] for q in c], color=col, marker=mk, ms=5, lw=1.5, ls=ls,
+                    capsize=2, mfc='white' if ls == '--' else col, label=lab)
+        hit = [q[0] for q in c if q[1] >= tgt[0]]
+        if hit:
+            ax.annotate(f'matches at {hit[0]}', (hit[0], tgt[0]), textcoords='offset points', xytext=(4, 8),
+                        fontsize=8, color=col)
+    ax.set_xscale('symlog', linthresh=24, linscale=0.6)
+    ticks = [0, 24, 48, 96, 192, 384, 768, 1536, 2016]
+    ax.set_xticks(ticks)
+    ax.set_xticklabels([str(t) for t in ticks], fontsize=8)
+    ax.set_xlim(-2, 2300)
+    ax.set_ylim(0, 70)
+    ax.set_xlabel('real jumps per robot (the baselines: on the robot itself, with privileged information)')
+    ax.set_ylabel('success on the reserved test goals (%)')
+    ax.legend(fontsize=7.5, frameon=False, loc='upper center', bbox_to_anchor=(0.5, -0.15), ncol=2)
+    ax.set_title('Real data needed to match ILC2Real (robots r1 s1 r5; 95 % intervals)', fontsize=11)
+    fig.savefig(os.path.join(OUT, 'fig8_real_data_match.png'))
+    plt.close(fig)
+
+
 if __name__ == '__main__':
-    for f in (fig1, fig2, fig3, fig4, fig5, fig6, fig7):
+    for f in (fig1, fig2, fig3, fig4, fig5, fig6, fig7, fig8):
         try:
             f()
             print('ok', f.__name__)
