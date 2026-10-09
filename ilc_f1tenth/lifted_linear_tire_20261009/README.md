@@ -4,7 +4,7 @@ F1TENTH counterpart of the quadruped's `JumpILC` (`ilc_quad/ilc_gen.py`):
 
 | | quadruped | here |
 |---|---|---|
-| trial 1 | full-body TO (IPOPT) | Fiala/brush-tire NMPC over the whole reference (llampc `nmpc_gen_fiala_fixed`, acados SQP), required to converge (status 0) |
+| trial 1 | full-body TO (IPOPT) from an SRB guess | Fiala/brush-tire TO over the whole reference (`trajopt.py`, IPOPT) from a linear-tire plan, required to converge; the MB results below used the earlier acados Fiala NMPC (`initial_to.py`) |
 | learning model | planar SRB | 9-state single-track, **linear tires** (`lifted_ilc.linear_tire_model`) |
 | update | one QP on the lifted `G` along the measured trial | same: `min ½‖e − GΔu‖²_W + ½‖Δu‖²_S + ½‖U+Δu‖²_R`, rate limits, steering/speed-command limits |
 | safeguard | worse trial → back to the best, heavier step | same (`accept_tol` 2 %, `Qu` ×4 per rejection, ÷2 per improvement) |
@@ -33,10 +33,12 @@ The snapshot `../successful_defect_aware_20261008` is imported, never modified.
 ```bash
 cd /workspaces/ilc_ws/src/ilc_f1tenth/lifted_linear_tire_20261009
 (cd mb_sim && python3 mb_bridge.py &)                    # or the stock bridge with sim_open40.yaml
-python3 initial_to.py figure_eight --rate 40 --model fiala
-python3 -u run_lifted.py --method lifted --history references/figure_eight_40hz_fiala_to.npz \
+python3 trajopt.py mocap_figfast --rate 40               # IPOPT TO (linear-tire guess -> Fiala)
+python3 -u run_lifted.py --method lifted --history references/mocap_figfast_40hz_ipopt_to.npz \
     --trials 12 --output results/<new_dir>
 ```
+
+Current state, open decisions and next steps: `PROGRESS.md`.
 
 ## Results: position RMSE (m) by trial
 
