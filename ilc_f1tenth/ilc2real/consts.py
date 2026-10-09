@@ -1,5 +1,7 @@
 """Constants shared by the JAX sim (sim_jax) and its numpy twin (sim_jax_np): kept jax-free so the CPU worker processes
 of the real cars never initialize a GPU backend."""
+import os
+
 import numpy as np
 
 PREVIEW = np.array([0.0, 0.2, 0.4, 0.7, 1.0, 1.5])
@@ -10,5 +12,7 @@ DEV_SCALE = np.array([0.1, 0.2, 0.5, 0.5, 1.0, 0.5, 10.0, 0.1])    # e_y e_psi v
 ERR_SCALE = np.array([0.05, 0.10, 0.30, 0.30, 0.50, 1e9])
 TASK_SCALE = np.array([0.05, 1e9, 1e9, 1e9, 1e9, 0.30])
 NE = len(ERR_SCALE)
-FAIL_EY, FAIL_EPSI = 0.6, 1.2
+# a lane / run fails when its lateral offset exceeds the room's safety envelope (F1T_SAFETY_EY, m; the walls) or
+# the old departure limit 0.6 m when unset, or its heading error exceeds 1.2 rad (spin)
+FAIL_EY, FAIL_EPSI = float(os.environ.get('F1T_SAFETY_EY') or 0.6), 1.2
 WIN = np.arange(-20, 61)

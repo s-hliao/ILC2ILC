@@ -33,6 +33,9 @@ def run(car_name, plan, policy=None, laps=1.0, s0=0.0, pert=None, seed=0, noise=
     offsets on the plan's s-grid added to the action (per-track ILC baseline). x_start: a planar start state
     (continuing a run); else the plan's state at s0 plus pert (5 numbers, as sim_jax.start_states)."""
     rng = np.random.default_rng(seed)
+    # the room's safety envelope (F1T_SAFETY_EY, m): the run is stopped -- a crash -- as soon as the TRUE lateral
+    # offset from the path exceeds it (the walls / the operator's kill switch); unset: the old departure limit
+    max_ey = float(os.environ.get('F1T_SAFETY_EY') or sn.FAIL_EY)
     c = mc.car_config(car_name)
     N0 = cm.NOMINAL
     pl = sn.PlanNP(plan)
@@ -55,8 +58,9 @@ def run(car_name, plan, policy=None, laps=1.0, s0=0.0, pert=None, seed=0, noise=
     xm = mc.mb_from_planar(xs0, c['p'])
     T = T_max or int(math.ceil(laps * plan['lap_time'] / DT))
     buf = np.zeros((2, 2))
-    X, Xm, OBS, MU, A, ERR, ERRT, IDX, APP = [], [], [], [], [], [], [], [], []
-    prog, failed = 0.0, False
+    X, Xm, OBS, MU, A, ERR, ERRT, IDX, APP, OBST = [], [], [], [], [], [], [], [], [], []
+    pname = plan.get('name', '')
+    prog, failed, crash, peak_ey = 0.0, False, '', 0.0
     hist, last_a = [], np.zeros(2)
     for t in range(T):
         xt = mc.planar(xm)
@@ -68,11 +72,14 @@ def run(car_name, plan, policy=None, laps=1.0, s0=0.0, pert=None, seed=0, noise=
         prog += dprog * pl.ds
         idx = i_new
         obs, err = pl.features(idx, xmeas)
-        _, err_true = pl.features(idx, xt)
+        obs_true, err_true = pl.features(idx, xt)
         if policy is None:
             mu = (pl.expert(idx, xmeas) - cm.A_OFF) / cm.A_SCALE
         elif isinstance(policy, dict) and 'fada' in policy:    # FADA: IDM(o, lam d) with d the plan deviation
-            mu = mlp_np(policy['fada'], np.r_[obs, policy['lam'] * obs[:8]])
+            orc = policy.get('oracle') or {}
+            d_next = orc[pname][(idx + 1) % len(orc[pname])] if pname in orc else policy['lam'] * obs[:8]
+            mu = mlp_np(policy['fada'], np.r_[obs, d_next])          # oracle planner: the deviation a policy
+            #                                                          that works on this car reaches there
         elif isinstance(policy, dict):                 # RMA: pi(o, phi(history of obs deviations, actions))
             hist.append(np.r_[obs[:8], last_a])
             Hn = policy['hist']
@@ -89,23 +96,27 @@ def run(car_name, plan, policy=None, laps=1.0, s0=0.0, pert=None, seed=0, noise=
         d_cmd = (buf[0][0] if c['d_delay'] > 0 else ap[0]) + c['d_off']
         i_cmd = buf[0][1] if c['i_delay'] > 0 else ap[1]
         buf = np.stack([ap, buf[0]])
-        X.append(xmeas); Xm.append(xt); OBS.append(obs); MU.append(mu); A.append(a); ERR.append(err); ERRT.append(err_true)
+        X.append(xmeas); Xm.append(xt); OBS.append(obs); OBST.append(obs_true); MU.append(mu); A.append(a); ERR.append(err); ERRT.append(err_true)
         IDX.append(idx); APP.append([d_cmd, i_cmd])
-        if abs(err_true[0]) > sn.FAIL_EY or abs(err_true[1]) > sn.FAIL_EPSI or xt[3] < 0.3:
+        peak_ey = max(peak_ey, abs(float(err_true[0])))
+        if abs(err_true[0]) > max_ey or abs(err_true[1]) > sn.FAIL_EPSI or xt[3] < 0.3:
             failed = True
+            crash = 'wall' if abs(err_true[0]) > max_ey else ('spin' if abs(err_true[1]) > sn.FAIL_EPSI else 'stall')
             break
         try:
             xm = mc.step(xm, d_cmd, i_cmd, c, DT)
         except (ZeroDivisionError, FloatingPointError):
-            failed = True
+            failed, crash = True, 'numerics'
             break
         if not np.all(np.isfinite(xm)):
-            failed = True
+            failed, crash = True, 'numerics'
             break
     xt = mc.planar(xm)
-    return dict(x=np.array(X), x_true=np.array(Xm), x_end=xt, idx_end=idx, obs=np.array(OBS), mu=np.array(MU),
+    return dict(x=np.array(X), x_true=np.array(Xm), x_end=xt, idx_end=idx, obs=np.array(OBS), obs_true=np.array(OBST),
+                mu=np.array(MU),
                 a=np.array(A), err=np.array(ERR), err_true=np.array(ERRT), idx=np.array(IDX), applied=np.array(APP), progress=prog,
-                laps=prog / pl.L, failed=failed, steps=len(X), car=car_name, plan=plan.get('name', ''))
+                laps=prog / pl.L, failed=failed, crash=crash, peak_ey=peak_ey, max_ey=max_ey, steps=len(X), car=car_name,
+                plan=plan.get('name', ''))
 
 
 def _worker(args):
@@ -145,6 +156,7 @@ def lap_metrics(r, plan, ey_ok=0.10, pace_ok=0.9):
     per_lap = [rms(e[k:k + steps_per_lap, 0]) for k in range(0, len(e) - steps_per_lap // 2, steps_per_lap)]
     m = dict(laps=float(r['laps']), failed=bool(r['failed']), rms_ey=rms(e[:, 0]), rms_dbeta=rms(beta - beta_ref),
              mean_abs_beta=float(np.mean(np.abs(beta))), mean_abs_beta_ref=float(np.mean(np.abs(beta_ref))),
-             rms_dv=rms(v - v_ref), pace=float(np.mean(v) / np.mean(v_ref)), per_lap_ey=per_lap)
+             rms_dv=rms(v - v_ref), pace=float(np.mean(v) / np.mean(v_ref)), per_lap_ey=per_lap,
+             crash=r.get('crash', ''), peak_ey=float(r.get('peak_ey', np.max(np.abs(e[:, 0])))))
     m['success'] = bool(not m['failed'] and m['rms_ey'] <= ey_ok and m['pace'] >= pace_ok)
     return m

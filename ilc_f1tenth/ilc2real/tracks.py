@@ -8,7 +8,8 @@ import numpy as np
 from scipy.interpolate import splprep, splev
 from scipy.ndimage import gaussian_filter1d
 
-TRACK_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'lifted_linear_tire_20261009', 'tracks')
+TRACK_DIR = os.environ.get('F1T_TRACKS') or os.path.join(os.path.dirname(os.path.abspath(__file__)), '..',
+                                                       'lifted_linear_tire_20261009', 'tracks')
 
 
 class Track:

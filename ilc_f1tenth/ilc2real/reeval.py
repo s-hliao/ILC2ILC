@@ -28,7 +28,8 @@ def load(path):
     n = len([k for k in d.files if k.startswith('W')])
     pol = [(d[f'W{i}'], d[f'b{i}']) for i in range(n)]
     if 'mode' in d.files and str(d['mode']) == 'fada' or 'lam' in d.files:
-        return dict(fada=pol, lam=float(d['lam']))
+        orc = {k[len('oracle__'):]: np.asarray(d[k]) for k in d.files if k.startswith('oracle__')}
+        return dict(fada=pol, lam=float(d['lam']), oracle=orc or None)
     ad = os.path.join(os.path.dirname(path), 'rma_adapt.npz')
     if 'mode' in d.files and str(d['mode']) == 'rma' and os.path.exists(ad):
         e = np.load(ad)
@@ -91,6 +92,8 @@ def main():
             m.pop('per_lap_ey', None)
             ev.setdefault(j['car_name'], {}).setdefault(j['plan']['name'], []).append(m)
         summ = {c: {n: dict(success=float(np.mean([m['success'] for m in ms])), fail=float(np.mean([m['failed'] for m in ms])),
+                            wall=float(np.mean([m.get('crash') == 'wall' for m in ms])),
+                            peak_ey=float(np.max([m.get('peak_ey', 0.0) for m in ms])),
                             rms_ey=float(np.mean([m['rms_ey'] for m in ms if not m['failed']])) if any(not m['failed'] for m in ms) else None,
                             rms_dbeta=float(np.mean([m['rms_dbeta'] for m in ms if not m['failed']])) if any(not m['failed'] for m in ms) else None,
                             pace=float(np.mean([m['pace'] for m in ms if not m['failed']])) if any(not m['failed'] for m in ms) else None,

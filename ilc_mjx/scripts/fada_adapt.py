@@ -34,6 +34,13 @@ ap.add_argument("--eval", default="final", choices=("val", "final", "holdout", "
 ap.add_argument("--perturbed", action="store_true")
 ap.add_argument("--eval-episodes", type=int, default=4)
 ap.add_argument("--gpu", default="0")
+ap.add_argument("--train-episodes", type=int, default=1, help="episodes per goal per iteration (the data-matching "
+                "study: 4 x 6 goals = 24 jumps an iteration, up to ~2000 jumps per robot)")
+ap.add_argument("--oracle-policy", default="", help="an ORACLE PLANNER: a deploy dir with {robot} (our best model on "
+                "that robot, e.g. drB_hw24/{robot}/it4/policy) flown on the training goals; FADA's planner is refitted "
+                "to the next-sample errors it reaches there (it knows what works on this robot); then the usual "
+                "adaptation. Its jumps are counted separately (oracle_jumps)")
+ap.add_argument("--oracle-episodes", type=int, default=4, help="oracle jumps per training goal")
 a = ap.parse_args()
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", a.gpu)
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
@@ -158,7 +165,42 @@ def run_robot(robot):
         print(f"[{robot}] {msg}", flush=True)
         logf.write(msg + "\n")
         logf.flush()
-    w = dict(W0)
+    base = dict(W0)
+    oracle_jumps = 0
+    if a.oracle_policy:
+        odir = a.oracle_policy.format(robot=robot)
+        rdir = os.path.join(out, "oracle", "real")
+        shutil.rmtree(rdir, ignore_errors=True)
+        fly(odir, robot, a.goals, a.seed + 7, os.path.join(out, "oracle", "real.json"), rdir, episodes=a.oracle_episodes)
+        Po, Pt = [], []
+        for f in sorted(os.listdir(rdir)) if os.path.isdir(rdir) else []:
+            z = np.load(os.path.join(rdir, f))
+            oracle_jumps += 1
+            if bool(z["fell"]):
+                continue
+            obs = np.asarray(z["obs"], float)
+            Po.append(obs[:Nc, :OD])
+            Pt.append(obs[np.minimum(np.arange(Nc) + H, Nc), :6])
+        Po, Pt = (jnp.asarray(np.concatenate(v), jnp.float32) for v in (Po, Pt))
+        Pw = {k: v for k, v in base.items() if k.startswith("P_")}
+
+        def ploss(pw):
+            pred = jax.vmap(lambda o: JumpEnv.planner(pw, o))(Po)
+            return ((pred - Pt) ** 2).mean()
+        vg = jax.jit(jax.value_and_grad(ploss))
+        mo = jax.tree_util.tree_map(jnp.zeros_like, Pw)
+        vo = jax.tree_util.tree_map(jnp.zeros_like, Pw)
+        l0 = None
+        for s_ in range(1, 3001):
+            l, g = vg(Pw)
+            l0 = l if l0 is None else l0
+            mo = jax.tree_util.tree_map(lambda m_, g_: 0.9 * m_ + 0.1 * g_, mo, g)
+            vo = jax.tree_util.tree_map(lambda v_, g_: 0.999 * v_ + 0.001 * g_ ** 2, vo, g)
+            Pw = jax.tree_util.tree_map(lambda p_, m_, v_: p_ - 1e-3 * (m_ / (1 - 0.9 ** s_))
+                                        / (jnp.sqrt(v_ / (1 - 0.999 ** s_)) + 1e-8), Pw, mo, vo)
+        base.update(Pw)
+        say(f"oracle planner: {oracle_jumps} jumps of {odir}, planner mse {float(l0):.4f} -> {float(l):.4f}")
+    w = dict(base)
     data, hist = [], []
     iters = a.iters if a.rank > 0 else 0
     for it in range(iters + 1):
@@ -169,7 +211,8 @@ def run_robot(robot):
         t0 = time.time()
         rdir = os.path.join(out, f"it{it}", "real")
         shutil.rmtree(rdir, ignore_errors=True)
-        fly(pdir, robot, a.goals, a.seed + 101 * it, os.path.join(out, f"it{it}", "real.json"), rdir)
+        fly(pdir, robot, a.goals, a.seed + 101 * it, os.path.join(out, f"it{it}", "real.json"), rdir,
+            episodes=a.train_episodes)
         line = []
         for f in sorted(os.listdir(rdir)) if os.path.isdir(rdir) else []:
             z = np.load(os.path.join(rdir, f))
@@ -184,10 +227,10 @@ def run_robot(robot):
         if not data:
             continue
         O, E, A_, M = (jnp.asarray(np.concatenate([d[i] for d in data]), jnp.float32) for i in range(4))
-        w, l0, l1 = lora_fit(W0, O, E, A_, M, jax.random.PRNGKey(it))
+        w, l0, l1 = lora_fit(base, O, E, A_, M, jax.random.PRNGKey(it))
         say(f"it {it}: " + " | ".join(line) + f"; LoRA on {len(data)} trials: IDM mse {l0:.2e} -> {l1:.2e}"
             f"  [{time.time() - t0:.0f} s]")
-    res = dict(robot=robot, hist=hist, args=vars(a))
+    res = dict(robot=robot, hist=hist, args=vars(a), oracle_jumps=oracle_jumps)
     if a.eval != "none":
         goals, seed = EVAL[a.eval]
         for tag, pd_ in (("start", os.path.join(out, "it0", "policy")), ("final", os.path.join(out, f"it{iters}", "policy"))):

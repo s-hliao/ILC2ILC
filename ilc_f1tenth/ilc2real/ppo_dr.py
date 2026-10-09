@@ -159,6 +159,10 @@ def save(tag):
     act = params['actor']
     np.savez(os.path.join(a.out, f'policy_{tag}.npz'), **{f'W{i}': np.asarray(W) for i, (W, b) in enumerate(act)},
              **{f'b{i}': np.asarray(b) for i, (W, b) in enumerate(act)}, mode=a.mode)
+    # the whole agent (critic, exploration std), for fine-tuning on the real cars (ppo_real_car.py)
+    cr = params['critic']
+    np.savez(os.path.join(a.out, f'agent_{tag}.npz'), log_std=np.asarray(params['log_std']), mode=a.mode, nz=NZ,
+             **{f'cW{i}': np.asarray(W) for i, (W, b) in enumerate(cr)}, **{f'cb{i}': np.asarray(b) for i, (W, b) in enumerate(cr)})
 
 
 for it in range(a.iters):

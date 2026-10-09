@@ -19,7 +19,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 os.chdir(HERE)
 PY = os.path.expanduser('~/miniconda3/envs/f1t/bin/python')
 PD = os.environ.get('F1T_PLANS') or 'plans'          # the plan bank (per friction: F1T_MU / F1T_PLANS)
-GPU_JOBS, CPU_JOBS, CPU_PROCS = 8, 3, 8
+GPU_JOBS, CPU_JOBS, CPU_PROCS = 8, 2, 8
 
 PL8 = ' '.join(f'mocap_{t}_b{b}' for t in ('square2fast', 'figfast') for b in (0, 10, 18, 25))
 PL14 = PL8 + ' ' + ' '.join(f'mocap_{t}_b{b}_mu80' for t in ('square2fast', 'figfast') for b in (10, 18, 25))

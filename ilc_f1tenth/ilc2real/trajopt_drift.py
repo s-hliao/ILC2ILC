@@ -29,6 +29,8 @@ from tracks import Track
 
 NZ = 8
 A_LAT = 5.5 * cm.NOMINAL['muf'] / 0.6        # holdable lateral acceleration: ~0.93 mu g (drift equilibria)
+# a slower plan where the multi-body car cannot hold that (F1T_ALAT_SCALE < 1: the tight figfast's 0.47 m lobes)
+A_LAT *= float(os.environ.get('F1T_ALAT_SCALE') or 1.0)
 
 
 def radau3():

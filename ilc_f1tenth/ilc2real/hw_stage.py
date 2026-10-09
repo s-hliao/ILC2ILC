@@ -4,7 +4,7 @@ hw_stage.py --policy NPZ --out DIR: the hardware stage of ILC2Real on the F1TENT
 ILC of the sim network on each "real" car (mb_car's multi-body cars), the structure from the nominal model, every
 lap used, then the multi-lap evaluation. Per car, from the same starting network:
 
-  each iteration (--iters; one lap at each of --goals: 4 x 6 = 24 laps)
+  each iteration (--iters; one trial of --trial-laps chained laps at each of --goals: 4 x 6 x 1 = 24 laps)
     1. the car's current network flies each goal's plan for one lap from the plan's start (--train-starts S: from a
        random arc length with a start perturbation of relative size S instead), measured with sensing noise
     2. per lap the closed-loop GN ILC step from the NOMINAL model's Jacobians at the MEASURED states (ilc_core),
@@ -35,6 +35,10 @@ ap.add_argument('--anchor-plans', nargs='+', default=[f'mocap_{t}_b{b}' for t in
 ap.add_argument('--rollback', type=float, default=0.7, help='a car whose laps this iteration progress less than this '
                 'fraction of the last kept iteration\'s (a new spin-out) is rolled back to its previous network and its '
                 'step cap halved (0: off)')
+ap.add_argument('--crash-rollback', type=int, default=1, help='a car that crashes (wall / spin) on a goal it flew '
+                'cleanly in the last kept iteration is rolled back to that network and its step cap halved (1: on)')
+ap.add_argument('--max-crashes', type=int, default=0, help='crash budget per car: after this many crashed trials the '
+                'car stops adapting and keeps its last kept network (0: no budget)')
 ap.add_argument('--iters', type=int, default=4)
 ap.add_argument('--beta', type=float, default=0.5)
 ap.add_argument('--delta', type=float, default=0.05)
@@ -46,6 +50,9 @@ ap.add_argument('--objective', default='task', choices=('task', 'plan'),
 ap.add_argument('--err-scale', type=float, nargs=6, default=None, metavar=('EY', 'EPSI', 'VX', 'VY', 'R', 'V'),
                 help='explicit ILC error-row scales (overrides --objective)')
 ap.add_argument('--train-starts', type=float, default=0.0)
+ap.add_argument('--trial-laps', type=int, default=1, help='laps per trial, chained without a reset (2: the second lap '
+                'starts where the first ended, so the ILC sees the lap-to-lap behaviour the multi-lap evaluation tests); '
+                'each trial costs that many real laps')
 ap.add_argument('--anchor-w', type=float, default=1.0)
 ap.add_argument('--anchor-n0', type=float, default=6.0)
 ap.add_argument('--age-decay', type=float, default=0.5)
@@ -118,6 +125,8 @@ def evaluate(policies, plans_by_name, eval_names, seed, laps, runs):
             ok = [m for m in ms if not m['failed']]
             summ[car][name] = dict(
                 success=float(np.mean([m['success'] for m in ms])), fail=float(np.mean([m['failed'] for m in ms])),
+                wall=float(np.mean([m.get('crash') == 'wall' for m in ms])),          # stopped at the room's envelope
+                peak_ey=float(np.max([m.get('peak_ey', 0.0) for m in ms])),
                 laps=float(np.mean([m['laps'] for m in ms])),
                 rms_ey=float(np.mean([m['rms_ey'] for m in ok])) if ok else None,
                 rms_dbeta=float(np.mean([m['rms_dbeta'] for m in ok])) if ok else None,
@@ -159,7 +168,8 @@ def main():
     gn_names = list(dict.fromkeys(a.goals + [fb(g) for g in a.goals if a.fallback_suffix and fb(g) in by_name]))
     goal_plans = [by_name[g] for g in gn_names]
     P = sj.Plans(goal_plans, gn_names)
-    T = int(np.ceil(1.05 * max(P.lap_time) / sj.DT))
+    T1 = int(np.ceil(1.05 * max(P.lap_time) / sj.DT))                 # one lap (the trust-region pool)
+    T = int(np.ceil((a.trial_laps + 0.05) * max(P.lap_time) / sj.DT))  # one trial
     policy_fn = lambda ps, o: sj.mlp(ps, o)
     gns = {}
 
@@ -180,7 +190,7 @@ def main():
         x0, i0 = sj.start_states(PA, jax.random.PRNGKey(k), [q], [rs.uniform() * float(PA.L[q])], pert=0.5)
         xs.append(x0[0]); ids.append(i0[0])
     jb = [(jnp.array(W), jnp.array(b)) for W, b in base]
-    pool = sj.rollout(PA, lambda o: policy_fn(jb, o), T, jnp.stack(xs), jnp.stack(ids), jnp.array(pid),
+    pool = sj.rollout(PA, lambda o: policy_fn(jb, o), T1, jnp.stack(xs), jnp.stack(ids), jnp.array(pid),
                       sj.nominal_params(n_pool))
     ok = ~np.asarray(pool['failed'])
     O_anchor = np.asarray(pool['obs'])[ok]
@@ -207,9 +217,12 @@ def main():
     data = {c: [] for c in a.cars}
     real_laps = {c: 0.0 for c in a.cars}
     trials = {c: [] for c in a.cars}
+    crashes = {c: [] for c in a.cars}                 # every crashed training trial: it, goal, reason, peak |e_y|
+    last_crashed = {c: set() for c in a.cars}         # goals that crashed in the last kept iteration
+    frozen = {c: False for c in a.cars}               # crash budget used up: no more trials, last kept network
     for it in range(a.iters):
         jobs = []
-        for c in a.cars:
+        for c in [c for c in a.cars if not frozen[c]]:
             pol = [(np.asarray(W), np.asarray(b)) for W, b in params[c]]
             for gi, g in enumerate(a.goals):
                 pl = by_name[goal_now[c][g]]
@@ -218,11 +231,16 @@ def main():
                     pert = rs.uniform(-1, 1, 5) * a.train_starts
                 else:
                     s0, pert = 0.0, rs.uniform(-0.1, 0.1, 5)
-                jobs.append(dict(car_name=c, plan=pl, policy=pol, laps=1.05, s0=s0, pert=pert,
+                jobs.append(dict(car_name=c, plan=pl, policy=pol, laps=a.trial_laps + 0.05, s0=s0, pert=pert,
                                  seed=a.seed + 100 * it + gi))
         res = rc.run_many(jobs)
-        for c in a.cars:
+        for c in [c for c in a.cars if not frozen[c]]:
             rr = [r for r, j in zip(res, jobs) if j['car_name'] == c]
+            crashed = {g for g, r in zip(a.goals, rr) if r['failed']}
+            for g, r in zip(a.goals, rr):
+                if r['failed']:
+                    crashes[c].append(dict(it=it, goal=goal_now[c][g], reason=r.get('crash', ''),
+                                           peak_ey=r.get('peak_ey'), laps=r['laps']))
             pid_c = np.array([gn_names.index(j['plan']['name']) for j in jobs if j['car_name'] == c])
             for gi, (g, r) in enumerate(zip(a.goals, rr)):          # goal fallback on repeated spin-outs
                 fails_row[c][g] = fails_row[c][g] + 1 if r['failed'] else 0
@@ -234,13 +252,22 @@ def main():
             prog = float(np.mean([max(r['laps'], 0.0) for r in rr]))
             for r in rr:
                 real_laps[c] += max(r['laps'], 0.0)
-            if a.rollback > 0 and last_prog[c] is not None and prog < a.rollback * last_prog[c]:
-                params[c] = prev_params[c]                 # a new spin-out: back to the last kept network
+            new_crash = sorted(crashed - last_crashed[c]) if a.crash_rollback and last_prog[c] is not None else []
+            if a.max_crashes and len(crashes[c]) >= a.max_crashes:
+                frozen[c] = True                           # crash budget used up: keep the last kept network
+                if new_crash or (last_prog[c] is not None and prog < a.rollback * last_prog[c]):
+                    params[c] = prev_params[c]
+                print(json.dumps(dict(it=it, car=c, frozen=True, crashes=len(crashes[c]))), flush=True)
+                continue
+            if (a.rollback > 0 and last_prog[c] is not None and prog < a.rollback * last_prog[c]) or new_crash:
+                params[c] = prev_params[c]                 # less progress or a new crash: back to the last kept network
                 cap[c] *= 0.5
-                rollbacks[c].append(dict(it=it, prog=prog, last=last_prog[c], cap=cap[c]))
-                print(json.dumps(dict(it=it, car=c, rollback=True, prog=prog, last=last_prog[c], cap=cap[c])), flush=True)
+                rollbacks[c].append(dict(it=it, prog=prog, last=last_prog[c], cap=cap[c], new_crash=new_crash))
+                print(json.dumps(dict(it=it, car=c, rollback=True, prog=prog, last=last_prog[c], cap=cap[c],
+                                      new_crash=new_crash)), flush=True)
                 continue
             last_prog[c] = prog
+            last_crashed[c] = crashed
             prev_params[c] = params[c]
             xs, idx, acts, err, valid = ilc_core.pad_runs(rr, T)
             step, J, Jp = gn_for(cap[c])(params[c], jnp.array(xs), jnp.array(idx), jnp.array(acts), jnp.array(pid_c),
@@ -256,7 +283,8 @@ def main():
                 data[c].append(dict(obs=r['obs'][:m][v], y=(r['mu'][:m] + step[k, :m])[v], it=it))
                 mm = rc.lap_metrics(r, by_name[gn_names[pid_c[k]]])
                 trials[c].append(dict(it=it, goal=gn_names[pid_c[k]], failed=mm.get('failed'), rms_ey=mm.get('rms_ey'),
-                                      rms_dbeta=mm.get('rms_dbeta'), J=float(J[k]), J_pred=float(Jp[k])))
+                                      rms_dbeta=mm.get('rms_dbeta'), J=float(J[k]), J_pred=float(Jp[k]),
+                                      crash=r.get('crash', ''), peak_ey=r.get('peak_ey')))
             # fit
             O = np.concatenate([d['obs'] for d in data[c]])
             Y = np.concatenate([d['y'] for d in data[c]])
@@ -289,6 +317,9 @@ def main():
     summary['trials'] = trials
     summary['real_laps'] = real_laps
     summary['rollbacks'] = rollbacks
+    summary['crashes'] = crashes
+    summary['frozen'] = frozen
+    summary['safety_ey'] = float(os.environ.get('F1T_SAFETY_EY') or 0.6)
     summary['seconds'] = time.time() - t0
     json.dump(summary, open(os.path.join(a.out, 'summary.json'), 'w'), indent=1)
     for c in a.cars:
