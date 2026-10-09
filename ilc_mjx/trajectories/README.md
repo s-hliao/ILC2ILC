@@ -44,7 +44,7 @@ the GPU sim (`sim_quad_model.BOX_DEPTH`). Every file here was re-flown on the fi
 python scripts/replay_mujoco.py trajectories/gate_loose.npz --robot real_s1 --goal 0.575 0.15   # its 4 batches
 python scripts/replay_mujoco.py trajectories/eval_ppo_dr.npz --robot real_r4 --goal 0.54 0.14 --speed 0.5
 python scripts/replay_mujoco.py trajectories/eval_ours_24jumps.npz --robot real_r1 --speed 0.25   # all 8 test goals
-# viewer keys: space pause/resume, ',' '.' step 10 ms back/forward, R restart, N next jump (each loops until N), Q quit
+# viewer keys: space pause/resume, ',' '.' step 10 ms back/forward, R restart, N / P next / previous jump (each loops until then), Q quit (one window for all jumps)
 python scripts/replay_mujoco.py trajectories/gate_loose.npz --robot real_r1 --check             # headless sanity check
 python scripts/replay_mujoco.py trajectories/gate_loose.npz --robot real_s1 --goal 0.575 0.15 --record s1_box.mp4  # rendered video (needs OpenGL)
 

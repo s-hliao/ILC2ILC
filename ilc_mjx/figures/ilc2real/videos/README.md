@@ -44,8 +44,10 @@ Viewer keys:
 - space: pause / resume
 - `,` / `.`: step 10 ms back / forward
 - R: restart
-- N: next jump
-- Q: quit
+- N / P: next / previous jump
+- Q, or closing the window: quit
+
+All the selected jumps play in one window.
 
 The mouse orbits, pans and zooms as in MuJoCo's simulate.
 
