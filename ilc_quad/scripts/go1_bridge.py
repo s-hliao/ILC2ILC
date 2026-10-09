@@ -20,7 +20,7 @@ FL, RR, RL like Go2's, so go2_lowcmd's leg maps apply unchanged.
 Safety, independent of the controller (the same as go2_bridge):
     watchdog     no joint_cmd for `cmd_timeout` s -> damping (kp = 0, kd = damp_kd,
                  tau = 0), until commands resume
-    joint limits a measured joint more than `limit_margin` past its MJCF range ->
+    joint limits a measured joint more than `limit_margin` (0.20 rad) past its MJCF range ->
                  damping, latched until /clear_fault
     clipping     tau to the MJCF torque limits, q targets to the joint range, kp/kd
                  to [0, kp_max] / [0, kd_max]
@@ -89,7 +89,10 @@ class Go1Bridge(Node):
         p("power_level", 10)              # sdk.Safety.PowerProtect factor, 1..10
         p("cmd_timeout", 0.05)
         p("damp_kd", 2.0)
-        p("limit_margin", 0.05)
+        # 0.20 rad (was 0.05): jumping drives the rear calves through full extension at takeoff -- up to 0.14 rad past
+        # -0.89 at 10-16 rad/s in 25% of the CPU robots' jumps (log/dilc/plane/fixbox/audit_dynamics.py) -- which
+        # would latch damping mid-takeoff; 0.20 still catches a runaway joint
+        p("limit_margin", 0.20)
         p("kp_max", 100.0)
         p("kd_max", 10.0)
         get = lambda name: self.get_parameter(name).value

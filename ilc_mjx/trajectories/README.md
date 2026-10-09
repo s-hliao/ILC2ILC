@@ -20,9 +20,7 @@ Go1's soft foot contact (menagerie `solimp 0.015 1 0.023`) let a hard landing (a
 sink past a low box's mid-plane. The sphere-box contact then pushes the foot out through the box's *bottom* face and
 pins it on the floor inside the box. In replays the feet look like they go through the top. It hit roughly a quarter of
 the box jumps, mostly on the 3.5-10 cm boxes. The box (and the start step) now reach 0.3 m under the floor, as in
-the GPU sim (`sim_quad_model.BOX_DEPTH`). `gate_loose` and every `eval_*` file are re-recorded on the fixed robots
-(`log/dilc/plane/fixbox/run.sh`). `hwstage_tp_*`, `hwstage_fada_lora` and `hwstage_rma_crosstrial_calibration` were
-flown before the fix and can show the artifact.
+the GPU sim (`sim_quad_model.BOX_DEPTH`). Every file here was re-flown on the fixed robots, hardware stages included (`log/dilc/plane/fixbox/`: rerun_all.py, post.sh), and an audit of the new recordings finds no jump that ends with a foot inside a box (`fixbox/audit_dynamics.py`).
 
 ## Contents of each npz
 

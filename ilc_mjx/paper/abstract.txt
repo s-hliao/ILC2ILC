@@ -11,10 +11,17 @@ Placeholders (bracketed text above) -- fill or remove before submission:
 - [CAR DRIFTING]: the F1TENTH drifting task (not run yet).
 - Hardware deployments on the Go1 and the F1TENTH (not run yet). The per-goal ILC part is NOT supported as written:
   at equal budgets in sim-to-sim (log/dilc/plane/jilc_budget.py) per-goal ILC trained on the 8 test goals reaches
-  36% at 24 trials per robot (ours 33%, trained on 6 other goals) and 45% at 96 (ours 39%). Suggested wording:
+  36% at 24 trials per robot (ours 34%, trained on 6 other goals) and 48% at 96 (ours 36%) [re-run 2026-10-09]. Suggested wording:
   "... where, at equal trial budgets, it matches per-goal ILC trained on the evaluation goals themselves, while
   never flying them." (Per-goal ILC over the whole 76-goal plane at 3 trials per goal = 228 trials vs our 24.)
 - "Code is available at:" the repository URL.
-Numbers as of 2026-10-08: 1,920 sim jumps vs 76,800 (PPO, RMA) and 102,400 (FADA); ~32 min vs ~5 h (PPO, RMA) and
-~16 h (FADA) of GPU time (approximate: runs shared GPUs); 33% success after 24 real trials vs 20% (PPO + DR) and
-17% (RMA), reserved test goals, 4 CPU robots; FADA's rerun pending.
+Numbers as of 2026-10-09 (every CPU-robot stage re-run after the box fix; log/dilc/plane/master_table.txt):
+1,920 sim jumps vs 76,800 (PPO, RMA) and 102,400 (FADA); ~32 min vs ~5 h (PPO, RMA) and ~16 h (FADA) of GPU time
+(approximate: runs shared GPUs). Reserved test goals, 4 CPU robots (r1 s1 r4 r5), n = 128 jumps each (+-8 points):
+ours 23% zero-shot -> 34% after 24 real trials; PPO + DR 20%, RMA 17%, RMA cross-trial 20%, FADA (48 LoRA jumps) 27%.
+- "1.6 to 1.9 times their success rate": now 1.7x (PPO + DR) and 2.0x (RMA), but only 1.26x FADA, which spends 48
+  real jumps. Suggested: "...reaches 1.7 to 2.0 times the success rate of PPO and RMA, and exceeds FADA with half its
+  real trials, in sim-to-sim transfer."
+- "improves it further by x": DR fine-tune (A) 34% -> 39% (+5 points) with our 24-trial stage; DR from scratch (B)
+  41% -> 42% (nominal starts) / 45% (varied starts). The gain on top of DR is within the +-8-point interval: claim
+  compatibility and the best overall result (45%), not a significant improvement.
