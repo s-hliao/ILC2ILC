@@ -1,8 +1,9 @@
+# caches and logs
 __pycache__/
 logs/
-runs/**/*.npz
+# run outputs, plan banks and caches: large or regenerable (trajopt_drift.py / cache_lqr.py / the schedulers)
+*.npz
+*.npy
+*.done
 runs/**/log.jsonl
-plans_extra/
-# policy snapshots / run outputs anywhere (archives, aborted runs): large; the plan banks' npz stay tracked
-**/runs/**/*.npz
-runs_aborted*/**/*.npz
+runs_aborted*/

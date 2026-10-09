@@ -152,16 +152,17 @@ def fig2():
     rows = [('ours, zero-shot', rate(jumps('hw6g16_v10s2it20', 'start', R3)), C['grey']),
             ('ours + 24 real jumps', rate(jumps('gate_loose', 'final', R3)), C['blue']),
             ('ours + 96 real jumps', rate(jumps('hw6g16_v10s2it20', 'final', R3)), C['blue']),
-            ('ours, DR fine-tune (A) + 24', rate(jumps('drA_hw24', 'final', R3)), C['sky']),
-            ('ours, DR from scratch (B) + 24', rate(jumps('drB_hw24', 'final', R3)), C['sky']),
+            ('our learner + DR (A: DR fine-tune), zero-shot', rate(jumps('drA_hw24', 'start', R3)), C['grey']),
+            ('our learner + DR (A) + 24 real jumps', rate(jumps('drA_hw24', 'final', R3)), C['sky']),
+            ('our learner + DR (B: DR from scratch), zero-shot', rate(jumps('drB_hw24', 'start', R3)), C['grey']),
+            ('our learner + DR (B) + 24 real jumps', rate(jumps('drB_hw24', 'final', R3)), C['sky']),
             ('per-goal ILC, 3 trials / test goal (24)', rate_f(jilc_eval(3, R3)), C['orange']),
             ('per-goal ILC, 12 trials / test goal (96)', rate_f(jilc_eval(12, R3)), C['orange']),
-            ('our learner + DR, zero-shot', rate(jumps('base/eval_dr_plain', 'start', R3)), C['pink']),
             ('PPO + DR, zero-shot', rate(jumps('base/eval_ppo_plain', 'start', R3)), C['pink']),
             ('RMA, zero-shot', rate(jumps('base/eval_rma', 'start', R3)), C['pink']),
             ('RMA cross-trial (6 calibration jumps)', rate(jumps('base/eval_rma_ctx', 'final', R3)), C['pink']),
             ('FADA (48 LoRA jumps)', rate(jumps('base/eval_fada', 'final', R3)), C['pink'])]
-    fig, ax = plt.subplots(figsize=(8.2, 5.0))
+    fig, ax = plt.subplots(figsize=(8.6, 5.6))
     y = np.arange(len(rows))[::-1]
     for yi, (lab, (p, h, n), col) in zip(y, rows):
         ax.barh(yi, p, 0.7, xerr=h, color=col, capsize=2, error_kw=dict(lw=0.8), edgecolor='white', linewidth=1.5)
@@ -172,8 +173,9 @@ def fig2():
     ax.set_xlim(0, 65)
     ax.grid(axis='y', alpha=0)
     handles = [plt.Rectangle((0, 0), 1, 1, color=c) for c in (C['grey'], C['blue'], C['sky'], C['orange'], C['pink'])]
-    ax.legend(handles, ['ours, zero-shot', 'ours + hardware stage', 'ours + DR variant', 'per-goal ILC (JumpILC)',
-                        'DR / RL baselines'], fontsize=8, loc='lower right', frameon=False)
+    ax.legend(handles, ['zero-shot (no real jumps)', 'ours + hardware stage', 'our learner + DR + hardware stage',
+                        'per-goal ILC (JumpILC)', 'RL / adaptation baselines'], fontsize=8, frameon=False,
+              loc='upper center', bbox_to_anchor=(0.35, -0.1), ncol=3)
     ax.set_title('ILC2Real vs baselines (robots r1 s1 r5, 95 % Wilson)', fontsize=11)
     fig.savefig(os.path.join(OUT, 'fig2_methods.png'))
     plt.close(fig)
