@@ -40,6 +40,9 @@ the GPU sim (`sim_quad_model.BOX_DEPTH`). Every file here was re-flown on the fi
 ## Replay
 
 ```bash
+# what can be replayed (no MuJoCo needed): every recording; one recording's robots, goals and trials (landing errors)
+python scripts/replay_mujoco.py --list
+python scripts/replay_mujoco.py --list gate_loose            # a bare name works too, in place of trajectories/<name>.npz
 # MuJoCo viewer (needs a display and a mujoco_menagerie checkout: $MUJOCO_MENAGERIE_PATH or ~/mujoco_menagerie)
 python scripts/replay_mujoco.py trajectories/gate_loose.npz --robot real_s1 --goal 0.575 0.15   # its 4 batches
 python scripts/replay_mujoco.py trajectories/eval_ppo_dr.npz --robot real_r4 --goal 0.54 0.14 --speed 0.5

@@ -32,6 +32,9 @@ Run it from `src/ilc_mjx` on a machine with a display. It needs `pip install muj
 checkout (`$MUJOCO_MENAGERIE_PATH` or `~/mujoco_menagerie`).
 
 ```bash
+# what can be replayed: every recording, then one recording's robots / goals / trials with their landing errors
+python scripts/replay_mujoco.py --list
+python scripts/replay_mujoco.py --list eval_ours_24jumps
 # one method, one robot, all 8 test goals in turn (each loops until you press N)
 python scripts/replay_mujoco.py trajectories/eval_ours_24jumps.npz --robot real_r1 --speed 0.5
 # one goal (x, box height in m)

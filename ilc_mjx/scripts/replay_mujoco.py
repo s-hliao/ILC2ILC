@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """
-replay_mujoco.py TRAJ.npz [--robot R] [--iteration K] [--goal X H] [--index I] [--all] [--speed S] [--check]:
+replay_mujoco.py TRAJ [--robot R] [--iteration K] [--goal X H] [--index I] [--all] [--speed S] [--check]:
 replay recorded Go1 jumps (export_trajectories.py) in the MuJoCo viewer -- the ground truth the CPU robot recorded,
-posed kinematically (qpos per 2 ms tick), with the jump's box in the scene.
+posed kinematically (qpos per 2 ms tick), with the jump's box in the scene. TRAJ: a path, or a name in ../trajectories
+(e.g. eval_ours_24jumps).
+
+  --list               what can be replayed (no MuJoCo needed): without TRAJ every recording in ../trajectories (what it
+                       is, robots, goals, jumps); with TRAJ its robots, goals and trials, each with its landing error
+                       (ok = no fall, |ex| <= 5 cm, |ez| <= 3 cm), and the command to replay it
 
   --index I            one jump; otherwise every jump matching --robot / --iteration / --goal, one after another
   --all                with no filter: every jump in the file
@@ -15,18 +20,21 @@ N / P next / previous jump (each jump loops until then), Q or closing the window
                        (needs imageio-ffmpeg); --size W H (even numbers), --fps (default 30). Needs OpenGL (a desktop; on a headless
                        machine MUJOCO_GL=egl or osmesa if installed)
 Examples:
+  replay_mujoco.py --list                                                             # every recording
+  replay_mujoco.py --list eval_ours_24jumps                                           # its robots / goals / trials
   replay_mujoco.py trajectories/gate_loose.npz --robot real_r1 --goal 0.5 0.15        # its 4 hardware-stage tries
   replay_mujoco.py trajectories/eval_ppo_dr.npz --robot real_r4 --goal 0.54 0.14      # a baseline's transfer
 Needs a display for the viewer, and a mujoco_menagerie checkout ($MUJOCO_MENAGERIE_PATH or ~/mujoco_menagerie).
 """
-import argparse, os, sys, time
+import argparse, json, os, sys, textwrap, time
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import traj_lib as tl  # noqa: E402
 
 ap = argparse.ArgumentParser()
-ap.add_argument("traj")
+ap.add_argument("traj", nargs="?")
+ap.add_argument("--list", action="store_true")
 ap.add_argument("--robot")
 ap.add_argument("--iteration", type=int)
 ap.add_argument("--goal", type=float, nargs=2)
@@ -38,6 +46,79 @@ ap.add_argument("--record")
 ap.add_argument("--size", type=int, nargs=2, default=[640, 400])
 ap.add_argument("--fps", type=int, default=30)
 a = ap.parse_args()
+TRDIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "trajectories"))
+TP = dict(blk15="1.5 cm block under the feet", blk2="2 cm block under the feet", crouch="crouched start",
+          tall="tall start", noseup="nose-up start", nosedn="nose-down start", mocapbad="bad mocap (120 Hz, 15 ms)",
+          delay10="10 ms actuation delay")
+DESC = {
+    "gate_loose": "ours: hardware stage (deployment recipe), 6 training goals x 4 batches",
+    "hwstage_drA_hw24": "our learner + DR (A: DR fine-tune): hardware stage, 24 jumps",
+    "hwstage_drB_hw24": "our learner + DR (B: DR from scratch): hardware stage, 24 jumps",
+    "hwstage_rma_crosstrial_calibration": "RMA, cross-trial: its 6 calibration jumps",
+    "hwstage_fada_lora": "FADA: on-robot LoRA adaptation",
+    "hwstage_jumpilc_pergoal": "per-goal ILC (JumpILC): trials flown on the test goals themselves",
+    "eval_ours_zeroshot": "TEST GOALS -- ours, zero-shot",
+    "eval_ours_24jumps": "TEST GOALS -- ours, after 24 real jumps",
+    "eval_learner_dr": "TEST GOALS -- our learner + DR (A), zero-shot",
+    "eval_dr_finetune_24jumps": "TEST GOALS -- our learner + DR (A), after 24 real jumps",
+    "eval_dr_scratch_24jumps": "TEST GOALS -- our learner + DR (B), after 24 real jumps",
+    "eval_ppo_dr": "TEST GOALS -- PPO + DR, zero-shot",
+    "eval_rma": "TEST GOALS -- RMA, zero-shot",
+    "eval_rma_crosstrial": "TEST GOALS -- RMA, cross-trial, after calibration",
+    "eval_fada": "TEST GOALS -- FADA, after adaptation",
+    **{f"hwstage_tp_{c}": f"ours: hardware stage under a constant perturbation: {t}" for c, t in TP.items()},
+    **{f"eval_tp_{c}": f"TEST GOALS -- ours after the hardware stage under '{c}' (nominal robot)" for c in TP},
+}
+
+
+def resolve(p):
+    for c in (p, os.path.join(TRDIR, p), os.path.join(TRDIR, p + ".npz")):
+        if os.path.isfile(c):
+            return c
+    raise SystemExit(f"no recording {p!r}: see replay_mujoco.py --list")
+
+
+def meta_of(path):                                # only the meta array (npz members load lazily)
+    return json.loads(str(np.load(path)["meta"]))
+
+
+ok = lambda m: not m["fell"] and abs(m["ex"]) <= 0.05 and abs(m["ez"]) <= 0.03
+gstr = lambda g: f"{g[0]:.4g} {g[1]:.3g}"
+here = os.path.relpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "replay_mujoco.py"))
+if a.list and not a.traj:
+    files = sorted(f for f in os.listdir(TRDIR) if f.endswith(".npz"))
+    print(f"{len(files)} recordings in {TRDIR} (replay with: python {here} <name> --robot R [--goal X H])\n")
+    for f in sorted(files, key=lambda f: (not f.startswith("eval_"), f)):
+        M = meta_of(os.path.join(TRDIR, f))
+        name = f[:-4]
+        rob = sorted({m["robot"] for m in M})
+        goals = {tuple(np.round(m["goal"], 4)) for m in M}
+        its = sorted({m["iteration"] for m in M if m["iteration"] >= 0})
+        print(f"{name:38s} {DESC.get(name, '')}")
+        print(f"{'':38s}   {len(M)} jumps; robots {' '.join(r.replace('real_', '') for r in rob)}; {len(goals)} goals"
+              + (f"; {len(its)} iterations / trials" if its else "") + f"; ok {sum(map(ok, M))}/{len(M)}")
+    print(f"\ndetails of one: python {here} --list <name>")
+    sys.exit(0)
+if not a.traj:
+    raise SystemExit("give a recording (see --list)")
+a.traj = resolve(a.traj)
+if a.list:
+    M = meta_of(a.traj)
+    name = os.path.splitext(os.path.basename(a.traj))[0]
+    print(f"{name}: {DESC.get(name, '')} -- {len(M)} jumps (ok = no fall, |ex| <= 5 cm, |ez| <= 3 cm)")
+    for rb in sorted({m["robot"] for m in M}):
+        R = [(i, m) for i, m in enumerate(M) if m["robot"] == rb]
+        print(f"\n{rb}  ({sum(ok(m) for _, m in R)}/{len(R)} ok)    all of them: python {here} {name} --robot {rb} --speed 0.5")
+        for g in sorted({tuple(np.round(m["goal"], 4)) for _, m in R}, key=lambda g: (g[1], g[0])):
+            G = [(i, m) for i, m in R if np.allclose(m["goal"], g, atol=5e-4)]
+            cells = [(f"it{m['iteration']}\u00a0" if m["iteration"] >= 0 else "") +
+                     ("FELL" if m["fell"] else f"{100 * m['ex']:+.1f}/{100 * m['ez']:+.1f}") + ("\u00a0ok" if ok(m) else "")
+                     for _, m in sorted(G, key=lambda x: x[1]["iteration"])]
+            box = f"box {g[1] * 100:.1f} cm" if g[1] > 0.004 else "flat"
+            head = f"  --goal {gstr(g):12s} {box:12s} ex/ez (cm): "      # (no-break spaces keep each trial on one line)
+            print(textwrap.fill(", ".join(cells), width=118, initial_indent=head, subsequent_indent=" " * len(head),
+                                break_long_words=False, break_on_hyphens=False).replace("\u00a0", " "))
+    sys.exit(0)
 T = tl.load(a.traj)
 if a.index is not None:
     idx = [a.index]
