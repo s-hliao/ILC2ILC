@@ -1,0 +1,206 @@
+diff --git a/f1tenth_stack/config/joy_teleop.yaml b/f1tenth_stack/config/joy_teleop.yaml
+index 795cbd6..7267eb0 100755
+--- a/f1tenth_stack/config/joy_teleop.yaml
++++ b/f1tenth_stack/config/joy_teleop.yaml
+@@ -8,40 +8,34 @@ joy:
+ 
+ joy_teleop:
+   ros__parameters:
++    # 0 STATE (Stop): Active when holding 4. 
++    # Because it's Priority 10 in Mux, it blocks the MPC.
+     default:
+       type: topic
+       interface_type: ackermann_msgs/msg/AckermannDriveStamped
+-      topic_name: teleop
++      topic_name: safety
++      deadman_axes: [4]
+       axis_mappings:
+-        drive-speed:
+-          axis: 1
+-          scale: 0.0
+-          offset: 0.0
+-        drive-steering_angle:
+-          axis: 2
+-          scale: 0.0
+-          offset: 0.0
++        drive-speed: {axis: 1, scale: 0.0, offset: 0.0}
++        drive-steering_angle: {axis: 2, scale: 0.0, offset: 0.0}
+ 
++    # HUMAN CONTROL: Active when holding 6. 
++    # Also blocks the MPC.
+     human_control:
+       type: topic
+       interface_type: ackermann_msgs/msg/AckermannDriveStamped
+       topic_name: teleop
+-      deadman_buttons: [4]
++      deadman_buttons: [6]
+       axis_mappings:
+-        drive-speed:
+-          axis: 1
+-          scale: 5.0
+-          offset: 0.0
+-        drive-steering_angle:
+-          axis: 2
+-          scale: 0.34
+-          offset: 0.0
++        drive-speed: {axis: 1, scale: 5.0, offset: 0.0}
++        drive-steering_angle: {axis: 2, scale: 0.34, offset: 0.0}
+ 
++    # MPC ENABLE: Button 7. 
++    # By sending this to /dev/null, /teleop becomes SILENT.
++    # When /teleop is silent, the Mux finally lets the MPC (/drive) through.
+     autonomous_control:
+       type: topic
+       interface_type: std_msgs/msg/Int8
+       topic_name: /dev/null
+-      deadman_buttons: [5]
+-      message_value:
+-        data:
+-          value: 0
++      deadman_buttons: [7]
++      message_value: {data: {value: 0}}
+diff --git a/f1tenth_stack/config/mux.yaml b/f1tenth_stack/config/mux.yaml
+index 1a02c9f..99ba6e7 100755
+--- a/f1tenth_stack/config/mux.yaml
++++ b/f1tenth_stack/config/mux.yaml
+@@ -1,11 +1,11 @@
+ ackermann_mux:
+   ros__parameters:
+     topics:
++      joystick:
++        topic   : "teleop"
++        timeout : 0.5
++        priority: 100
+       navigation:
+-        topic   : drive
+-        timeout : 0.2
++        topic   : "drive"
++        timeout : 0.5
+         priority: 10
+-      joystick:
+-        topic   : teleop
+-        timeout : 0.2
+-        priority: 100
+\ No newline at end of file
+diff --git a/f1tenth_stack/config/vesc.yaml b/f1tenth_stack/config/vesc.yaml
+index 5531a64..e55b213 100755
+--- a/f1tenth_stack/config/vesc.yaml
++++ b/f1tenth_stack/config/vesc.yaml
+@@ -10,8 +10,8 @@
+     steering_angle_to_servo_offset: 0.5304
+ 
+     port: /dev/sensors/vesc
+-    duty_cycle_min: 0.0
+-    duty_cycle_max: 0.0
++    duty_cycle_min: -1.0
++    duty_cycle_max: 1.0
+     current_min: 0.0
+     current_max: 100.0
+     brake_min: -20000.0
+@@ -23,6 +23,12 @@
+     servo_min: 0.15
+     servo_max: 0.85
+ 
++    # ackermann_to_vesc's direct current mode (drive.jerk == 2.0): the clamp on the motor current command, set to the
++    # current range ILC2Real's networks are trained for (car_model.NOMINAL I_min / I_max, LLA-MPC's -25 .. 50 A); the
++    # duty-cycle mode (drive.jerk == 1.0) clamp is the node's default +-0.95
++    current_command_min: -25.0
++    current_command_max: 50.0
++
+ # No longer needed, all parameters are shared
+ # ackermann_to_vesc_node:
+ #   ros__parameters:
+diff --git a/f1tenth_stack/f1tenth_stack/tf_publisher.py b/f1tenth_stack/f1tenth_stack/tf_publisher.py
+new file mode 100644
+index 0000000..574e214
+--- /dev/null
++++ b/f1tenth_stack/f1tenth_stack/tf_publisher.py
+@@ -0,0 +1,50 @@
++from geometry_msgs.msg import TransformStamped
++import rclpy
++from rclpy.node import Node
++from tf2_ros import TransformBroadcaster
++
++class FramePublisher(Node):
++
++    def __init__(self):
++        super().__init__('f1tenth_tf_publisher')
++
++        self.br = TransformBroadcaster(self)
++        self.timer = self.create_timer(0.001, self.timer_callback)
++
++    def timer_callback(self):
++        t = TransformStamped()
++        t.header.stamp = self.get_clock().now().to_msg()
++        t.header.frame_id = 'base_link'
++        t.child_frame_id = 'laser'
++        t.transform.translation.x = 0.27
++        t.transform.translation.y = 0.0
++        t.transform.translation.z = 0.11
++        t.transform.rotation.x = 0.0
++        t.transform.rotation.y = 0.0
++        t.transform.rotation.z = 0.0
++        t.transform.rotation.w = 1.0
++        self.br.sendTransform(t)
++
++        t2 = TransformStamped()
++        t2.header.stamp = self.get_clock().now().to_msg()
++        t2.header.frame_id = 'base_link'
++        t2.child_frame_id = 'odom'
++        t2.transform.translation.x = 0.0
++        t2.transform.translation.y = 0.0
++        t2.transform.translation.z = 0.0
++        t2.transform.rotation.x = 0.0
++        t2.transform.rotation.y = 0.0
++        t2.transform.rotation.z = 0.0
++        t2.transform.rotation.w = 1.0
++        self.br.sendTransform(t2)
++
++
++def main():
++    rclpy.init()
++    node = FramePublisher()
++    try:
++        rclpy.spin(node)
++    except KeyboardInterrupt:
++        pass
++
++    rclpy.shutdown()
+\ No newline at end of file
+diff --git a/f1tenth_stack/launch/bringup_launch.py b/f1tenth_stack/launch/bringup_launch.py
+index ce934dc..4457f5e 100755
+--- a/f1tenth_stack/launch/bringup_launch.py
++++ b/f1tenth_stack/launch/bringup_launch.py
+@@ -118,7 +118,7 @@ def generate_launch_description():
+         executable='ackermann_mux',
+         name='ackermann_mux',
+         parameters=[LaunchConfiguration('mux_config')],
+-        remappings=[('ackermann_cmd_out', 'ackermann_drive')]
++        remappings=[('ackermann_drive_out', 'ackermann_cmd')]
+     )
+     static_tf_node = Node(
+         package='tf2_ros',
+@@ -137,5 +137,10 @@ def generate_launch_description():
+     ld.add_action(urg_node)
+     ld.add_action(ackermann_mux_node)
+     ld.add_action(static_tf_node)
++    # LLA-MPC-onboard: the centre of gravity (the EKF's body frame, cg) and the VESC IMU relative to base_link
++    ld.add_action(Node(package='tf2_ros', executable='static_transform_publisher', name='static_baselink_to_cg',
++                       arguments=['0.15', '0.0', '0.0', '0.0', '0.0', '0.0', 'base_link', 'cg']))
++    ld.add_action(Node(package='tf2_ros', executable='static_transform_publisher', name='static_baselink_to_imu',
++                       arguments=['0.065', '0.0', '0.09', '0.0', '0.0', '0.0', 'base_link', 'imu_link']))
+ 
+     return ld
+\ No newline at end of file
+diff --git a/f1tenth_stack/setup.py b/f1tenth_stack/setup.py
+index 66628cd..aec0f94 100755
+--- a/f1tenth_stack/setup.py
++++ b/f1tenth_stack/setup.py
+@@ -26,6 +26,7 @@ setup(
+     entry_points={
+         'console_scripts': [
+             'throttle_interpolator = f1tenth_stack.throttle_interpolator:main',
++            'tf_publisher = f1tenth_stack.tf_publisher:main',
+         ],
+     },
+ )

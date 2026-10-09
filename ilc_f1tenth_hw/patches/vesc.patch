@@ -1,0 +1,111 @@
+diff --git a/vesc_ackermann/include/vesc_ackermann/ackermann_to_vesc.hpp b/vesc_ackermann/include/vesc_ackermann/ackermann_to_vesc.hpp
+index b646c36..8257b8f 100644
+--- a/vesc_ackermann/include/vesc_ackermann/ackermann_to_vesc.hpp
++++ b/vesc_ackermann/include/vesc_ackermann/ackermann_to_vesc.hpp
+@@ -51,12 +51,16 @@ private:
+   // conversion gain and offset
+   double speed_to_erpm_gain_, speed_to_erpm_offset_;
+   double steering_to_servo_gain_, steering_to_servo_offset_;
++  // clamps of the two direct actuation modes (vesc_driver applies no default clipping to current commands)
++  double duty_cycle_min_, duty_cycle_max_, current_min_, current_max_;
+ 
+   /** @todo consider also providing an interpolated look-up table conversion */
+ 
+   // ROS services
+   rclcpp::Publisher<Float64>::SharedPtr erpm_pub_;
+   rclcpp::Publisher<Float64>::SharedPtr servo_pub_;
++  rclcpp::Publisher<Float64>::SharedPtr duty_cycle_pub_;
++  rclcpp::Publisher<Float64>::SharedPtr current_pub_;
+   rclcpp::Subscription<AckermannDriveStamped>::SharedPtr ackermann_sub_;
+ 
+   // ROS callbacks
+diff --git a/vesc_ackermann/src/ackermann_to_vesc.cpp b/vesc_ackermann/src/ackermann_to_vesc.cpp
+index 79863f8..4c3e681 100644
+--- a/vesc_ackermann/src/ackermann_to_vesc.cpp
++++ b/vesc_ackermann/src/ackermann_to_vesc.cpp
+@@ -30,6 +30,7 @@
+ 
+ #include "vesc_ackermann/ackermann_to_vesc.hpp"
+ 
++#include <algorithm>
+ #include <cmath>
+ #include <sstream>
+ #include <string>
+@@ -55,9 +56,18 @@ AckermannToVesc::AckermannToVesc(const rclcpp::NodeOptions & options)
+   steering_to_servo_offset_ =
+     declare_parameter<double>("steering_angle_to_servo_offset");
+ 
++  // clamps of the direct actuation modes (LLA-MPC-onboard): current matters most, since vesc_driver applies no
++  // default clipping to current commands -- this is the layer that catches an unsafe value
++  duty_cycle_min_ = declare_parameter<double>("duty_cycle_command_min", -0.95);
++  duty_cycle_max_ = declare_parameter<double>("duty_cycle_command_max", 0.95);
++  current_min_ = declare_parameter<double>("current_command_min", -55.0);
++  current_max_ = declare_parameter<double>("current_command_max", 55.0);
++
+   // create publishers to vesc electric-RPM (speed) and servo commands
+   erpm_pub_ = create_publisher<Float64>("commands/motor/speed", 10);
+   servo_pub_ = create_publisher<Float64>("commands/servo/position", 10);
++  duty_cycle_pub_ = create_publisher<Float64>("commands/motor/duty_cycle", 10);
++  current_pub_ = create_publisher<Float64>("commands/motor/current", 10);
+ 
+   // subscribe to ackermann topic
+   ackermann_sub_ = create_subscription<AckermannDriveStamped>(
+@@ -66,18 +76,36 @@ AckermannToVesc::AckermannToVesc(const rclcpp::NodeOptions & options)
+ 
+ void AckermannToVesc::ackermannCmdCallback(const AckermannDriveStamped::SharedPtr cmd)
+ {
+-  // calc vesc electric RPM (speed)
+-  Float64 erpm_msg;
+-  erpm_msg.data = speed_to_erpm_gain_ * cmd->drive.speed + speed_to_erpm_offset_;
++  if (!rclcpp::ok()) {
++    return;
++  }
+ 
+-  // calc steering angle (servo)
++  // steering (servo), always; the servo position clamped to [0.1, 0.9]
+   Float64 servo_msg;
+-  servo_msg.data = steering_to_servo_gain_ * cmd->drive.steering_angle + steering_to_servo_offset_;
++  servo_msg.data = std::max(
++    0.1, std::min(0.9, steering_to_servo_gain_ * cmd->drive.steering_angle + steering_to_servo_offset_));
++  servo_pub_->publish(servo_msg);
+ 
+-  // publish
+-  if (rclcpp::ok()) {
++  // motor: drive.jerk selects the actuation mode (LLA-MPC-onboard)
++  //   jerk == 1.0 -> duty cycle: drive.acceleration is the duty cycle, clamped to duty_cycle_command_min/max
++  //   jerk == 2.0 -> current:    drive.acceleration is the motor current (A), clamped to current_command_min/max
++  //   otherwise   -> speed (drive.speed -> ERPM) as upstream, or ERPM 0 when |speed| <= 0.01
++  if (cmd->drive.jerk == 1.0) {
++    Float64 duty_msg;
++    duty_msg.data = std::max(duty_cycle_min_, std::min(duty_cycle_max_, static_cast<double>(cmd->drive.acceleration)));
++    duty_cycle_pub_->publish(duty_msg);
++  } else if (cmd->drive.jerk == 2.0) {
++    Float64 current_msg;
++    current_msg.data = std::max(current_min_, std::min(current_max_, static_cast<double>(cmd->drive.acceleration)));
++    current_pub_->publish(current_msg);
++  } else if (std::abs(cmd->drive.speed) > 0.01) {
++    Float64 erpm_msg;
++    erpm_msg.data = speed_to_erpm_gain_ * cmd->drive.speed + speed_to_erpm_offset_;
+     erpm_pub_->publish(erpm_msg);
+-    servo_pub_->publish(servo_msg);
++  } else {
++    Float64 stop_msg;
++    stop_msg.data = 0.0;
++    erpm_pub_->publish(stop_msg);
+   }
+ }
+ 
+diff --git a/vesc_ackermann/src/vesc_to_odom.cpp b/vesc_ackermann/src/vesc_to_odom.cpp
+index 83a11fb..40ef8ca 100644
+--- a/vesc_ackermann/src/vesc_to_odom.cpp
++++ b/vesc_ackermann/src/vesc_to_odom.cpp
+@@ -99,7 +99,8 @@ void VescToOdom::vescStateCallback(const VescStateStamped::SharedPtr state)
+   }
+ 
+   // convert to engineering units
+-  double current_speed = (-state->state.speed - speed_to_erpm_offset_) / speed_to_erpm_gain_;
++  // sign flipped (LLA-MPC-onboard): the car's motor turns the other way
++  double current_speed = -(-state->state.speed - speed_to_erpm_offset_) / speed_to_erpm_gain_;
+   if (std::fabs(current_speed) < 0.05) {
+     current_speed = 0.0;
+   }
