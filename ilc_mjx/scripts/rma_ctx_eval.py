@@ -67,15 +67,27 @@ def export(w, d):
               open(os.path.join(d, "manifest.json"), "w"))
 
 
+# ILC_QUAD_OVERLAY (a container path): an ilc_quad package put first on the robots' PYTHONPATH -- the box-fix reruns
+# (log/dilc/plane/fixbox) fly the fixed robots while other runs keep the installed ones
+OVERLAY = f"export PYTHONPATH={os.environ['ILC_QUAD_OVERLAY']}:$PYTHONPATH && " if os.environ.get("ILC_QUAD_OVERLAY") else ""
+
+
+def flown(*args, **kw):
+    """subprocess.run of a flight, holding a flight token (fly_tokens.py: the reruns' CPU budget)"""
+    from fly_tokens import flight_token
+    with flight_token():
+        return subprocess.run(*args, **kw)
+
+
 def fly(pdir, conds, jumps, seed, json_out, save_dir="", episodes=1):
     j = " ".join(f"--jump {gvec(g)[0]} {gvec(g)[1]}" for g in jumps)
     sd = f"--save-dir {cpath(save_dir)}" if save_dir else ""
-    cmd = (f"cd /ilc_ws && source install/setup.bash && export ROS_LOCALHOST_ONLY=1 OMP_NUM_THREADS=1 && "
+    cmd = (f"cd /ilc_ws && source install/setup.bash && export ROS_LOCALHOST_ONLY=1 OMP_NUM_THREADS=1 && {OVERLAY}"
            f"python3 install/ilc_quad/lib/ilc_quad/dilc_execute.py run --policy {cpath(pdir)} --member policy "
            f"--conds {conds} {j} --episodes {episodes} --seed {seed} --jobs 8 --json {cpath(json_out)} {sd}")
     for attempt in range(2):
         try:
-            subprocess.run(["sg", "docker", "-c", f"docker exec ilc_quad bash -lc '{cmd}'"], stdout=subprocess.DEVNULL,
+            flown(["sg", "docker", "-c", f"docker exec ilc_quad bash -lc '{cmd}'"], stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL, check=False, timeout=900)
             break
         except subprocess.TimeoutExpired:
