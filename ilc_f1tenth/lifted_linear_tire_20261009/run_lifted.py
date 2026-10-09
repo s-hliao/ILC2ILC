@@ -1,7 +1,8 @@
 """
 ILC trials on the F1TENTH gym bridge (public odometry, 35 Hz fixed deadlines), from the
-controls of a nonlinear trajectory optimization (initial_to.py: the snapshot's blend NMPC,
-solved once over the whole reference at --rate), or from a stored history (--history).
+controls of a nonlinear trajectory optimization (trajopt.py: IPOPT, Fiala model, from a
+linear-tire plan, as the quadruped's TO), or from a stored history (--history, e.g. a
+trajopt.py output).
 
   --method lifted   : LiftedILC (lifted_ilc.py), G from --model
   --method ilqr     : the snapshot's defect-aware iLQR (prepare_update), --alpha
@@ -44,14 +45,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--method', choices=['lifted', 'ilqr', 'repeat'], default='lifted')
     ap.add_argument('--model', choices=['linear', 'blend_linear', 'blend'], default='linear')
-    ap.add_argument('--reference', choices=['s_curve', 'figure_eight'], default='s_curve')
+    ap.add_argument('--reference', default='s_curve',
+                    help="s_curve, figure_eight or an llampc track, e.g. mocap_square")
     ap.add_argument('--rate', type=float, default=40.0, help='control / execution rate, Hz')
-    ap.add_argument('--to-max-iter', type=int, default=1000,
-                    help="SQP iteration cap for the initial TO (the snapshot's NMPC: 20, which "
-                         "stops short of acados' 1e-6 stationarity tolerance)")
+    ap.add_argument('--to-substeps', type=int, default=16, help='RK4 substeps in the TO')
     ap.add_argument('--allow-unconverged-to', action='store_true')
-    ap.add_argument('--to-model', choices=['fiala', 'blend'], default='fiala',
-                    help='NMPC model of the initial TO (the lifted ILC learns with the linear tire)')
     ap.add_argument('--history', default=None,
                     help='reuse (reference, controls[0], dt) from a stored history instead')
     ap.add_argument('--trials', type=int, default=15, help='trials flown, the first with U0')
@@ -70,16 +68,16 @@ def main():
         h = np.load(a.history, allow_pickle=True)
         ref, U, dt = h['reference'], h['controls'][0].copy(), float(h['dt'])
         to_info = json.loads(str(h['to_info'])) if 'to_info' in h.files else None
-    else:                                        # nonlinear TO for trial 1
-        from initial_to import make_reference, solve_initial_to
+    else:                                        # nonlinear TO for trial 1 (trajopt.py)
+        from initial_to import make_reference
+        from trajopt import trajopt_two_stage
         ref, dt = make_reference(a.reference, a.rate)
-        X_to, U, to_info = solve_initial_to(ref, dt, f'{a.reference}_{a.rate:g}hz', a.to_max_iter,
-                                         a.to_model)
+        X_to, U, to_info = trajopt_two_stage(ref, dt, a.to_substeps)
         np.savez(a.output / 'initial_to.npz', reference=ref, controls=U[None], to_states=X_to, dt=dt,
                  to_info=json.dumps(to_info))
         print('INITIAL_TO', json.dumps(to_info), flush=True)
         if not to_info['converged'] and not a.allow_unconverged_to:
-            raise RuntimeError(f"initial TO did not converge (acados status {to_info['status']})")
+            raise RuntimeError(f"initial TO did not converge (IPOPT: {to_info['status']})")
     (a.output / 'initial_to.json').write_text(json.dumps(to_info, indent=2))
     w = json.loads((SNAPSHOT / 'weights.json').read_text())
     Q, Qf, R = (np.array(w[k]) for k in ('Q', 'Q_f', 'R'))
