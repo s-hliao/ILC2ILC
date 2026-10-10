@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 car_figures.py [--root DIR] [--out DIR] [--tag TEXT]: the F1TENTH ILC2Real figures (the quadruped's quad_figures.py
-set, for the car), from a results root (runs/hw/<arm>/eval_big.json: 5 multi-body cars x 8 plans x 12 runs x 5 chained
+set, for the car), from a results root (runs/hw/<arm>/eval_big.json: 5 multi-body cars x 8 plans x n runs (6 on the tight tracks) x 5 chained
 laps; long_eval.json: 20-lap chains). Success = on track, RMS e_y <= 10 cm, pace >= 90 % (grip or drift); 95 % Wilson
 intervals over cars x plans x runs. --root archive_mu02_wide (the original tracks) until the tight-track rerun is in;
 then the default root (.) regenerates them.
@@ -41,7 +41,7 @@ CAR_LAB = {'real_nom': 'nominal', 'real_mass': 'mass +25 %', 'real_mu': 'frictio
 G = dict(drift=['mocap_square2fast_b25', 'mocap_figfast_b25'],
          heldout=['mocap_square2fast_b21', 'mocap_figfast_b21', 'mocap_square2fast_b14', 'mocap_figfast_b14'],
          grip=['mocap_square2fast_b0', 'mocap_figfast_b0'])
-RUNS = 12
+RUNS = 12                                        # runs per car x plan when an eval has no 'n'
 # the paper palette (the quadruped's quad_figures.py)
 C = dict(blue='#0072B2', orange='#E69F00', green='#009E73', pink='#CC79A7', sky='#56B4E9', red='#D55E00',
          yellow='#F0E442', grey='#7f7f7f', black='#222222')
@@ -78,8 +78,8 @@ def rate(arms, group='drift', cars=None):
         for c in cars or CARS:
             for p in G[group]:
                 if c in e and p in e[c]:
-                    k += e[c][p]['success'] * RUNS
-                    n += RUNS
+                    k += e[c][p]['success'] * e[c][p].get('n', RUNS)
+                    n += e[c][p].get('n', RUNS)
     p, h = wilson(round(k), n)
     return 100 * p, 100 * h, n
 
@@ -141,8 +141,8 @@ def fig1():
         b = json.load(open(tl))['budgets']
         for k in sorted(b, key=int):
             e = b[k]
-            kk = sum(e[c][p]['success'] * RUNS for c in CARS if c in e for p in G['drift'] if p in e[c])
-            nn = sum(RUNS for c in CARS if c in e for p in G['drift'] if p in e[c])
+            kk = sum(e[c][p]['success'] * e[c][p].get('n', RUNS) for c in CARS if c in e for p in G['drift'] if p in e[c])
+            nn = sum(e[c][p].get('n', RUNS) for c in CARS if c in e for p in G['drift'] if p in e[c])
             pp, hh = wilson(round(kk), nn)
             rows.append((f'per-track ILC\n{k} laps / plan ({8 * int(k)})', C['black'], None, (100 * pp, 100 * hh, nn)))
     fig, ax = plt.subplots(figsize=(12.5, 4.6))
@@ -209,8 +209,8 @@ def fig3():
         r = []
         for k in sorted(b, key=int):
             e = b[k]
-            kk = sum(e[c][p]['success'] * RUNS for c in CARS if c in e for p in G['drift'] if p in e[c])
-            nn = sum(RUNS for c in CARS if c in e for p in G['drift'] if p in e[c])
+            kk = sum(e[c][p]['success'] * e[c][p].get('n', RUNS) for c in CARS if c in e for p in G['drift'] if p in e[c])
+            nn = sum(e[c][p].get('n', RUNS) for c in CARS if c in e for p in G['drift'] if p in e[c])
             pp, hh = wilson(round(kk), nn)
             r.append((2 * int(k), 100 * pp, 100 * hh))
         axs[0].errorbar([q[0] for q in r], [q[1] for q in r], yerr=[q[2] for q in r], color=C['black'], marker='D',

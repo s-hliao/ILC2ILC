@@ -354,8 +354,8 @@ def match_curve(name):
     pooled over r1 s1 r5 (quad_real_ppo.py summary.json / quad_eval_ckpts.py ckpt_summary.json)."""
     for f in ('summary.json', 'ckpt_summary.json'):
         fp = os.path.join(M, name, f)
-        if os.path.exists(fp) and 'hist' not in json.load(open(fp)):
-            d = json.load(open(fp))
+        d = json.load(open(fp)) if os.path.exists(fp) else None
+        if isinstance(d, dict) and 'hist' not in d:      # fada_adapt.py's summary.json is a per-robot list
             out = []
             for k, rob in sorted(d.items(), key=lambda kv: int(kv[0])):
                 v = [x for x in rob.values() if x.get('success') is not None and x.get('n')]

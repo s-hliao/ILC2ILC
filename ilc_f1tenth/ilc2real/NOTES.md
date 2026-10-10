@@ -1,5 +1,108 @@
 # ILC2Real on the F1TENTH: continuous drift on the LLA-MPC car
 
+## Tight tracks + 0.3 m envelope (the room), 2026-10-09 15:00 – 2026-10-10 00:16
+
+This is the current result (μ 0.2). The μ 0.2 wide-track results below are archived in `archive_mu02_wide/`.
+
+### Setup
+- **Tracks** (`make_tight_tracks.py`, `tracks_tight/`; plans `plans_mu02_tight/`): square2fast's straights cut 0.5 m
+  per end (1 m each); figfast scaled uniformly in y by 0.886 (0.25 m per end: the 0.5 m cut failed for every
+  controller). **Safety envelope 0.3 m** (`F1T_SAFETY_EY`): |e_y| > 0.3 m is a wall crash. `source env_tight.sh`.
+- **Hardware stage: 2 chained laps per trial** (`--trial-laps 2`, the user's choice; iterations halved for the same
+  24 / 48 / 96-lap budgets). Crashes roll back (`--crash-rollback 1`). The 1-lap arms are in `runs_1lap/`.
+- Evaluation as before: `reeval.py`, 5 cars × 8 plans × 12 runs × 5 chained laps (`results_table.txt`). Success =
+  on track, RMS e_y ≤ 10 cm, pace ≥ 90 %. Numbers below: β-25 plans, success / crash.
+
+### Main result (`figs/fig1_methods.png` … `fig7_plans.png`)
+| | zero-shot | + 24 real laps |
+|---|---|---|
+| ours + DR (B, task objective) `v3drBt_s0` | 72.5 / 0.8 | **80.0 / 0.0** |
+| ours + DR (B) `v3drB_s0` (s1) | 68.3 / 7.5 (68.3) | **78.3 / 0.8** (67.5) |
+| ours + DR (A) `v3drA_s0` (s1) | 75.0 (49.2) | 50.0 / 35.8 (40.8) |
+| ours, nominal sim `v3nom_s0` (s1, s2) | 51.7 (40.8, 40.0) | 40.0 / 44.2 (40.0, 40.0) |
+| PPO+DR (+ our stage) | 36.7 / 54.2 | 47.5 / 50.8 |
+| RMA | 46.7 / 50.8 | – |
+| FADA | 0 / 100 | 0 / 100 |
+| plan LQR | 40.0 / 47.5 | – |
+
+- **80 % is the ceiling for every network of ours: the friction ×0.8 car fails** (4 of 5 cars at 100 %). It runs at
+  e_y 10.5–12.5 cm and 90–92 % pace, just outside the success band.
+- **On the tight tracks the hardware stage helps only the DR (B) networks.** It lowers the nominal-sim learner
+  (52 → 40 %) and DR (A) (75 → 50 %). Their 40–50 % rows are square passing and figfast crashing on every run: the
+  stage's chained laps on figfast push them into the wall. The no-trust-region (`_noTR`, 59 %) and open-loop-G
+  (`_openG`, 58 %) variants do better than the default here.
+- **Chained vs 1-lap trials** (`figs/fig9_chained.png`, same 24 laps): DR (B) 65 → 73 % and crashes 18 → 7 % (seeds
+  pooled); the nominal learner 57 → 40 %, DR (A) 62 → 45 %, no-exploration 49 → 13 %. Chaining suits a network that
+  already holds the path; for a weaker one, the second lap starts from the first lap's error and drags the update.
+
+### Lap budget (`figs/fig4_lap_budget.png`; β 25, success / crash)
+| laps per car | 2 | 4 | 6 | 8 | 10 |
+|---|---|---|---|---|---|
+| ours + DR (B, task) | 70.0 | **80.0** | 80.0 | 80.0 | 80.0 |
+| ours + DR (B) | 71.7 | **80.0** | 77.5 | 61.7 | 65.0 |
+| ours, nominal sim (s0) | 53.3 | 40.0 | 41.7 | 45.8 | 45.8 |
+| PPO+DR + our stage | 40.8 | 36.7 | 48.3 | 36.7 | 48.3 |
+| per-track ILC (laps per plan × 2) | 58.3 | 57.5 | 57.5 | 69.2 | 80.0 |
+
+4 laps per car is enough for the DR (B) networks. The task-objective one (`v3drBt`) holds 80 % to 10 laps; plain
+DR (B) degrades after 6 (the mass and lag cars drop). The per-track ILC reaches 80 % at 10 laps, but only on the
+two plans it flew: it has nothing for the held-out plans.
+
+### Low-friction car (`scheduler_lowmu.py`)
+Lower GLOBAL pace targets (`--pace-target 0.90 / 0.92`; the user rejected a local, curvature-based target) at 2–10
+laps on both DR (B) networks. **real_mu stays at 0 % for every arm except plain DR (B) at 10 laps**: 42 % (pt92) and
+50 % (pt90), and those arms lose the nominal and mass cars (50–92 %): 58–60 % overall. The lower target narrows
+real_mu's e_y (12.5 → 9.4–10.3 cm) but the pace stays at 89–93 %: it moves the car towards the band edge, not into it.
+The task-objective network is unchanged at 80 % for every target and budget. Best real_mu model so far: none.
+
+### Data matching (`figs/fig8_data_matching.png`; `ppo_real_car.py`, `fada_real_car.py`)
+Baselines trained ON the five cars with privileged data, from their sim networks, up to 2,016 episodes (laps) per car:
+- **PPO+DR, privileged critic**: 25 % → 47 % at 768 → **78 % at 1,536** → 90 % at 2,016 laps per car. It passes ours
+  + DR (78–80 %) between 1,536 and 2,016 laps, and it gets the friction car to 50 %.
+- **RMA teacher with each car's TRUE latent**: 53 % → 68 % at 768 → **83 % at 1,536** → 82 %.
+- **FADA**, planner gain 0.5 / 0.8 / 0.95: 0 % at every checkpoint; with the oracle planner (refit on our real laps)
+  18 % at 24, then 0–10 %.
+- **Cost**: ours spends 0 crashes per car in its 24 laps; PPO 230, RMA 55, FADA 1,000–1,900 crashes per car by 2,016.
+- So the baselines need **~60–80× our real data** (1,536 vs 24 laps) and hundreds of wall crashes to match.
+
+### Perturbation suite (`figs/fig10_axes.png`, `fig11_conditions.png`, `fig12_matrix.png`; `runs/axes/*.json`)
+β 25 success, networks adapted on each car WITHOUT the perturbation unless noted:
+- **Single axes** (mass, friction, tire stiffness, motor constant, steering time constant, steering / current
+  delays, steering offset; 22 cars), mean: ours + DR (B) adapted 87.9 %, zero-shot 71.6 %; ours nominal 56.1 %;
+  PPO+DR + stage 48.9 %, zero-shot 29.5 %; RMA 42.0 %; LQR 45.5 %. Friction ×0.7 fails for everyone; at ×0.9 ours + DR (B)
+  adapted reaches 83 %, every other network ≤ 50 %. A 2-period steering delay halves ours (92 → 50 %).
+- **Sensing** (bad mocap, latency ×2, low rate, EKF lag, noise ×3, on all five cars): ours + DR (B) 56.7 %, zero-shot
+  48.7 %; PPO+DR + stage 40.7 %; LQR 40.0 %; RMA 22.7 %. Bad mocap is ours' worst sensing case (40 %: figfast fails).
+- **Starts**: a slow rolling start at 0.6 m/s hands over badly for every network (≤ 30 %; LQR best); a launch to
+  1 m/s first restores ours + DR (B) to 65 % (PPO+DR 40 %).
+- **Held-out track** (`mocap_squareH`, never trained or adapted on): too easy to separate methods. Every network passes
+  4 cars; the baselines also pass the friction car there (PPO / RMA 95–100 %, ours 80 %).
+- **Trained × tested matrix** (the hardware stage run ON a perturbed car, 9 × 9): no row beats the nominal-adapted
+  network by much. Every row keeps 75–100 % on the nominal / mass / tire columns. The steering-delay, bad-mocap and
+  latency columns are 50 % in EVERY row, including the row adapted on that very car (figfast still fails), and no row
+  fixes friction ×0.7 (0 %). Adapting under a perturbation does not overfit to it, but it does not fix the timing
+  ones either.
+
+### Stopping rule for the sim stage (`stop_analysis.py`; `runs/stopping/stop_analysis.md`, `figs/fig13_stopping.png`)
+Two sim stages run to 90 iterations, every 5th snapshot scored by sim-only validation (`sim_validate.py`: held-out
+plans × nominal / perturbed starts / delay / disturbance / DR / wide DR) and by zero-shot transfer to the 5 cars.
+- **The nominal-sim score is flat at 100 % and cannot choose.** Its argmax picks iteration 0–5: regret 12–15 points.
+- **DR-family held-out scores track transfer**: Spearman +0.58 to +0.78 (DR / wide DR success), +0.57 / +0.83 (mean
+  of the 5 non-nominal conditions); held-out e_y under DR up to +0.93. Perturbed starts anti-correlate (−0.35 / −0.68).
+- **Rule: take the snapshot with the best mean held-out success over the non-nominal conditions** → iterations
+  40 / 70, regret 3.3 / 0.4 points (SE per snapshot ~5). The pipeline's fixed 30 iterations: regret 6.7 / 7.9.
+  Early stopping on that score needs a long patience (30 iterations): with 15 it stops the nominal run at
+  iteration 5, before the DR scores start to rise.
+- Same finding as the quadruped's snapsel (DR / perturbed scores predict transfer, the nominal score does not).
+  Caveat: the target here is zero-shot transfer, not transfer after the hardware stage.
+
+### Files
+- Figures: `car_figures.py` (fig1–7; Wilson intervals now use each eval's stored run count),
+  `car_study_figs.py` (fig8–12), `stop_analysis.py` (fig13), `car_traj_figs.py` (traj_*), videos via
+  `make_car_videos.py` (`videos/`).
+- Schedulers (all finished): `scheduler.py`, `scheduler_laps.py`, `scheduler_match.py`, `scheduler_mu.py`,
+  `scheduler_axes.py`, `scheduler_stop.py`, `scheduler_lowmu.py`; `regen_tight.sh` rebuilt the tables / figures / videos.
+
 ## μ 0.2 rerun (plastic tires), 2026-10-09 11:46–13:46
 
 This is the current result. The μ 0.6 rerun from this morning is kept below; its files are in `archive_mu06/`.
