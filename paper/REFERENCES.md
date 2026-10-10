@@ -1,7 +1,8 @@
 # DistILC: related work
 
 Every reference collected for the paper (2026-10-07 to 2026-10-10), grouped by how it relates to DistILC, closest
-prior art first. Each entry appears once; detailed notes and the contrast with our method follow the entries we read.
+prior art first; within each section, the most relevant and best-known entries first. Each entry
+appears once; detailed notes and the contrast with our method follow the entries we read.
 
 **Status of each entry**
 - **[READ]**: full text (or the stated part) read.
@@ -30,14 +31,6 @@ dynamics).
 
 ## 1. Neural networks that carry ILC across references (closest prior art)
 
-- [DBLP] **Arif, Ishihara & Inooka**, "Generalization of Iterative Learning Control for Multiple Desired Trajectories in
-  Robotic Systems", PRICAI 2002, pp. 295-304; also "Experience-Based Iterative Learning Controllers for Robotic
-  Systems", J. Intelligent & Robotic Systems 35(4):381-396, 2002. UNREAD (DBLP record only).
-  - Per the reviewer: a network stores ILC experience and initializes ILC on new trajectories. Cite as the earliest
-    "a network carries ILC across references" precedent.
-- [web] "Realization of a neural network controller by using iterative learning control", Korean conference, 1992 --
-  ILC generates the training data for a neural controller.
-  https://koreascience.or.kr/article/CFKO199211919699902.page?lang=en
 - [READ via HTML] **Chen & Wen**, "Industrial Robot Trajectory Tracking (Control) Using Multi-Layer Neural Networks
   Trained by Iterative Learning Control", Robotics (MDPI) 10(1):50, 2021; arXiv 1903.00082. https://arxiv.org/abs/1903.00082
   - Network: one MLP per joint (2 x 100 ReLU), an approximate inverse of the robot's inner loop, FEEDFORWARD: a
@@ -51,13 +44,6 @@ dynamics).
     on 20 trajectories vs our 24 jumps (or 2-10 laps) per robot with the same Gauss-Newton update as the sim stage,
     every trial updating all goals; high-fidelity vs deliberately nominal simulator; smooth joint tracking vs hybrid
     contact; no RL / DR baselines.
-- [abstract] **Zhang, Wang & Tomizuka**, "Neural-Network-Based Iterative Learning Control for Multiple Tasks", IEEE
-  TNNLS, 2021, doi 10.1109/TNNLS.2020.3017158. https://ieeexplore.ieee.org/document/9186361/
-  - Position-based ILC compensates each task; the ILC outputs over many tasks are written as a function of the
-    reference (position, velocity, acceleration): a linear part + a nonlinear part from complementary networks (general
-    + switching). New references get a compensation without new ILC. Robot arm experiments.
-  - CONTRAST: distills converged per-task FEEDFORWARD compensation; ours is a feedback policy trained by one ILC step
-    per trial, the same update reused on a new robot.
 - [READ] **Ma, Büchler, Schölkopf & Muehlebach**, "A Learning-based Iterative Control Framework for Controlling a Robot
   Arm with Pneumatic Artificial Muscles", RSS 2022. https://www.roboticsproceedings.org/rss18/p029.pdf
   - Network: per-DoF CNN (6 conv + 4 FC, tanh) = FEEDFORWARD; input a non-causal window (+-1 s) of the reference + a
@@ -70,6 +56,24 @@ dynamics).
     learned feedback amplified late-push disturbances -- say so); converged per-reference ILC distilled offline vs one
     step per trial online; ~1,760 real trials vs 24 per robot after a nominal-sim stage; smooth tracking vs contact-rich
     jumps; no sim-to-real, no RL / DR comparison.
+- [abstract] **Zhang, Wang & Tomizuka**, "Neural-Network-Based Iterative Learning Control for Multiple Tasks", IEEE
+  TNNLS, 2021, doi 10.1109/TNNLS.2020.3017158. https://ieeexplore.ieee.org/document/9186361/
+  - Position-based ILC compensates each task; the ILC outputs over many tasks are written as a function of the
+    reference (position, velocity, acceleration): a linear part + a nonlinear part from complementary networks (general
+    + switching). New references get a compensation without new ILC. Robot arm experiments.
+  - CONTRAST: distills converged per-task FEEDFORWARD compensation; ours is a feedback policy trained by one ILC step
+    per trial, the same update reused on a new robot.
+- [DBLP] **Arif, Ishihara & Inooka**, "Generalization of Iterative Learning Control for Multiple Desired Trajectories in
+  Robotic Systems", PRICAI 2002, pp. 295-304; also "Experience-Based Iterative Learning Controllers for Robotic
+  Systems", J. Intelligent & Robotic Systems 35(4):381-396, 2002. UNREAD (DBLP record only).
+  - Per the reviewer: a network stores ILC experience and initializes ILC on new trajectories. Cite as the earliest
+    "a network carries ILC across references" precedent.
+- [memory] **Li, Zhou & Schoellig**, "Deep neural networks for improved, impromptu trajectory tracking of quadrotors",
+  ICRA 2017.
+- [memory] **Pereida, Helwa & Schoellig**, "Data-efficient multirobot, multitask transfer learning for trajectory
+  tracking", RA-L 2018.
+- [memory] **Schoellig et al.**, optimization-based iterative learning for quadrocopter trajectory tracking (ILC
+  background).
 - [abstract] **Lakshmidevinivas et al.**, "Neural Network Augmented Intelligent ILC for a Nonlinear System", IJCNN 2020,
   doi 10.1109/IJCNN48605.2020.9207260.
   - A network trained offline on logged ILC histories approximates the CONVERGED ILC; its output is the first iterate
@@ -79,14 +83,11 @@ dynamics).
   - The network IS the ILC learning operator (and a model) for ONE repetitive process (pneumatic servo, maglev).
     CONTRAST: the network implements the per-task ILC iteration; ours is the deployed multi-goal policy, ILC its
     training rule. (Taken acronym: "GILC" = generalized ILC, ISNN 2006.)
+- [web] "Realization of a neural network controller by using iterative learning control", Korean conference, 1992 --
+  ILC generates the training data for a neural controller.
+  https://koreascience.or.kr/article/CFKO199211919699902.page?lang=en
 - [title only, UNREAD] **Erens**, "Interpolation and neural network based ILC for coping with new references without
   relearning", MSc thesis, TU Eindhoven, 2021 (PDF 0997909_Erens.pdf on research.tue.nl).
-- [memory] **Li, Zhou & Schoellig**, "Deep neural networks for improved, impromptu trajectory tracking of quadrotors",
-  ICRA 2017.
-- [memory] **Pereida, Helwa & Schoellig**, "Data-efficient multirobot, multitask transfer learning for trajectory
-  tracking", RA-L 2018.
-- [memory] **Schoellig et al.**, optimization-based iterative learning for quadrocopter trajectory tracking (ILC
-  background).
 
 ## 2. Trajectory optimization distilled into one network
 
@@ -98,7 +99,6 @@ dynamics).
     counts of the hardware GPS papers before arguing "fewer trials" against them.
 - [memory] **Levine, Finn, Darrell & Abbeel**, "End-to-End Training of Deep Visuomotor Policies", JMLR 2016 (GPS on a
   real robot).
-- [memory] **Mordatch & Todorov**, "Combining the benefits of function approximation and trajectory optimization", RSS 2014.
 - [READ via HTML] **Goikoetxea & Palacián**, "GCImOpt: Learning efficient goal-conditioned policies by imitating optimal
   trajectories", L4DC 2026, PMLR 331:574-588; arXiv 2604.22724. https://proceedings.mlr.press/v331/goikoetxea26a.html
   - Behaviour cloning of a goal-conditioned MLP (state, goal -> control) on 20,000 FATROP-optimal trajectories per task;
@@ -106,10 +106,7 @@ dynamics).
   - ALL SIMULATED; they assume an accurate model and full state; sim-to-real and adaptation are future work.
   - CONTRAST: offline optimal demonstrations under an exact model vs error-driven closed-loop ILC targets under a wrong
     model, plus a hardware stage. SAME VENUE as our target: cite and position directly.
-- [web, search summary] **Panichi et al.**, 2025 journal article: dual-layer coarse-to-refine trajectory optimization +
-  variable-impedance landing, distilled into a network by behaviour cloning (quadruped jumping). Title / venue to find.
-- [web] "Online Trajectory Planning Through Combined Trajectory Optimization and Function Approximation: Application to
-  the Exoskeleton Atalante", arXiv 1910.00514. https://arxiv.org/pdf/1910.00514
+- [memory] **Mordatch & Todorov**, "Combining the benefits of function approximation and trajectory optimization", RSS 2014.
 - Closed-loop pitfalls of distillation (support our structure-probe finding):
   - [web] "Closed-loop optimisation of neural networks for the design of feedback policies under uncertainty",
     ScienceDirect 2023 -- a network fit to MPC solutions can have near-zero training error yet poor closed-loop
@@ -118,6 +115,10 @@ dynamics).
     case study", arXiv 2402.19309. https://arxiv.org/html/2402.19309v1
   - [web] "Learning Lipschitz Feedback Policies from Expert Demonstrations: Closed-Loop Guarantees, Generalization and
     Robustness", arXiv 2103.16629. https://arxiv.org/pdf/2103.16629
+- [web, search summary] **Panichi et al.**, 2025 journal article: dual-layer coarse-to-refine trajectory optimization +
+  variable-impedance landing, distilled into a network by behaviour cloning (quadruped jumping). Title / venue to find.
+- [web] "Online Trajectory Planning Through Combined Trajectory Optimization and Function Approximation: Application to
+  the Exoskeleton Atalante", arXiv 1910.00514. https://arxiv.org/pdf/1910.00514
 
 ## 3. Few real trials with an approximate model (precedent for the hardware stage)
 
@@ -132,8 +133,6 @@ dynamics).
     residual (approximate Jacobian -> exact fixed point under positivity). One damped step, a goal-conditioned network,
     a sim stage, noisy robots. Tested as an arm (hw_abbeel: 36 % vs our 33-35 %, a tie; their derivative point alone,
     --jac-at real, 25 %).
-- [web] **Kolter**, "Learning and Control with Inaccurate Models", PhD thesis, Stanford, 2010.
-  https://zicokolter.com/publications/kolter2010thesis.pdf
 - [READ via HTML] **Chi, Burchfiel, Cousineau, Feng & Song**, "Iterative Residual Policy for Goal-Conditioned Dynamic
   Manipulation of Deformable Objects", RSS 2022 (best paper); arXiv 2203.00663. https://irp.cs.columbia.edu/
   - Learns DELTA DYNAMICS: (observed trajectory image, delta action) -> new trajectory image (DeepLabV3+), from 54 M
@@ -142,6 +141,7 @@ dynamics).
   - CONTRAST: trial-to-trial search over a few open-loop parameters with a frozen learned model, per goal and repeated
     every time; ours updates a closed-loop policy's weights (persists, transfers to unflown goals), uses the nominal
     simulator's Jacobians instead of a learned delta model, ~10^3-10^4 sim episodes instead of 5x10^7.
+- [memory] **Deisenroth & Rasmussen**, "PILCO", ICML 2011 -- sample-efficient model-based policy search.
 - [abstract] **Suresh & Atkeson**, "Learning Dynamic Rope Manipulation Using Task-Level Iterative Learning Control",
   arXiv 2602.21302, 2026. https://arxiv.org/abs/2602.21302
   - Task-level ILC inverting a simplified robot + rope model (QP); one demonstration; learns directly on hardware;
@@ -154,20 +154,23 @@ dynamics).
     transfers between quadrotors. Assumes SISO, minimum-phase, PI-stabilizable plants. CONTRAST: transfer by MAKING the
     dynamics equal vs CORRECTING a policy with grounded updates; per trajectory vs a goal-conditioned network; their
     assumptions fail through contact / flight phases.
+- [web] **Kolter**, "Learning and Control with Inaccurate Models", PhD thesis, Stanford, 2010.
+  https://zicokolter.com/publications/kolter2010thesis.pdf
+- [web] **Chatzilygeroudis et al.**, "A survey on policy search algorithms for learning robot controllers in a handful of
+  trials", arXiv 1807.02303.
 - [web] **Poot, Portegies & Oomen**, "On the Role of Models in Learning Control: Actor-Critic Iterative Learning Control",
   IFAC World Congress 2020; arXiv 2007.00430 -- model-free actor-critic over feedforward basis functions; relevant to our
   value-gradient / residual-critic arms. https://arxiv.org/abs/2007.00430v2
 - [web] "Bridging Reinforcement Learning and Iterative Learning Control: Autonomous Motion Learning for Unknown,
   Nonlinear Dynamics" -- a GP dynamics model, feedforward optimized per trial (balancing robot).
   https://www.ncbi.nlm.nih.gov/pmc/articles/PMC9315427/
-- [web] **Chatzilygeroudis et al.**, "A survey on policy search algorithms for learning robot controllers in a handful of
-  trials", arXiv 1807.02303.
 - [web] "What Matters for Sim-to-Online Reinforcement Learning on Real Robots", arXiv 2602.20220, 2026 -- reusing data
   from a few preceding real trials helps.
-- [memory] **Deisenroth & Rasmussen**, "PILCO", ICML 2011 -- sample-efficient model-based policy search.
 
 ## 4. ILC on legged robots, and quadruped jumping
 
+- [memory: see reference_nguyen_ilc_jumping] **Nguyen et al.**, arXiv 2408.02619 -- the per-goal JumpILC our baseline
+  follows (PD landing).
 - [READ: method + experiments] **Gori, Degiacomo, Pierallini, Angelini & Garabini**, "Contact-Implicit Optimal Planning
   and Iterative Learning Control for Quadrupedal Robots", IEEE Trans. Industrial Electronics, 2026, doi
   10.1109/TIE.2025.3645471.
@@ -176,21 +179,19 @@ dynamics).
     learned "while doing" over 15-20 iterations; +25 % payload, mixed terrain, grass. Metric: joint RMSE. No network.
   - CONTRAST: per-gait joint-tracking feedforward vs a task-level (landing / path) Gauss-Newton step through model
     Jacobians into one goal-conditioned network; single aperiodic jumps; held-out goals.
-- [memory: see reference_nguyen_ilc_jumping] **Nguyen et al.**, arXiv 2408.02619 -- the per-goal JumpILC our baseline
-  follows (PD landing).
+- [web] **Ding et al.**, "Robust Jumping with an Articulated Soft Quadruped via Trajectory Optimization and Iterative
+  Learning" (TO + ILC pronking, per-task reference).
+  https://research.tudelft.nl/en/publications/robust-jumping-with-an-articulated-soft-quadruped-via-trajectory-
 - [web] **Cheng, Alqaham, Gan & Sanyal**, "Iteratively Learning Muscle Memory for Legged Robots to Master Adaptive and
   High Precision Locomotion", arXiv 2507.13662, 2025 -- ILC + a torque library; joint tracking errors down 85 %. CHECK
   how the library generalizes across tasks. https://arxiv.org/abs/2507.13662v1
 - [web] Same group, "Practice Makes Perfect: an iterative approach to achieve precise tracking for legged robots",
   arXiv 2211.11922.
-- [web] **Ding et al.**, "Robust Jumping with an Articulated Soft Quadruped via Trajectory Optimization and Iterative
-  Learning" (TO + ILC pronking, per-task reference).
-  https://research.tudelft.nl/en/publications/robust-jumping-with-an-articulated-soft-quadruped-via-trajectory-
 - [web] **Atanassov, Ding et al.**, "Curriculum-Based Reinforcement Learning for Quadrupedal Jumping: A Reference-free
   Design", arXiv 2401.16337, 2024 -- goal-conditioned DRL jumping (landing target, obstacle).
+- [web] "Continuous Versatile Jumping Using Learned Action Residuals", arXiv 2304.08663.
 - [web] **Apostolides et al.**, "Explosive Jumping with Rigid and Articulated Soft Quadrupeds via Example Guided
   Reinforcement Learning", arXiv 2503.16197, 2025.
-- [web] "Continuous Versatile Jumping Using Learned Action Residuals", arXiv 2304.08663.
 - [web] "Impedance Matching: Enabling an RL-Based Running Jump in a Quadruped Robot", arXiv 2404.15096.
 - [web] "Learning Task-Specific Dynamics to Improve Whole-Body Control", arXiv 1803.01978 -- iterative learning of
   task-space accelerations; cross-task transfer left as future work.
@@ -199,30 +200,30 @@ dynamics).
 ## 5. Sim-to-real baselines and adaptation
 
 - [web] **Peng et al.**, "Sim-to-Real Transfer of Robotic Control with Dynamics Randomization", arXiv 1710.06537 (DR).
-- [web] **Zhao, Queralta & Westerlund**, "Sim-to-Real Transfer in Deep Reinforcement Learning for Robotics: a Survey",
-  arXiv 2009.13303.
 - [memory] **Kumar et al.**, "RMA: Rapid Motor Adaptation for Legged Robots", RSS 2021 -- our RMA baseline (and the
   cross-trial variant).
 - [web] "FADA: Few-Shot Domain Adaptation via Dynamics Alignment for Humanoid Control", arXiv 2606.28476 -- likely the
   FADA our planner + inverse-dynamics + LoRA baseline follows; CHECK.
-- [web] "Robot trains robot: Automatic real-world policy adaptation and learning for humanoids", arXiv 2508.12252.
+- [memory] **Ross, Gordon & Bagnell**, "DAgger", AISTATS 2011 -- the cross-trial RMA student's data collection.
+- [web] **Zhao, Queralta & Westerlund**, "Sim-to-Real Transfer in Deep Reinforcement Learning for Robotics: a Survey",
+  arXiv 2009.13303.
 - [web] "Simulator Adaptation for Sim-to-Real Learning of Legged Locomotion via Proprioceptive Distribution Matching",
   arXiv 2604.11090 -- < 5 min of hardware data (Go2) to adapt the simulator (contrast: we estimate no parameters).
+- [web] "Robot trains robot: Automatic real-world policy adaptation and learning for humanoids", arXiv 2508.12252.
 - [web] "Learning Deployable Locomotion Control via Differentiable Simulation", arXiv 2404.02887 (SHAC, quadruped).
-- [memory] **Ross, Gordon & Bagnell**, "DAgger", AISTATS 2011 -- the cross-trial RMA student's data collection.
 
 ## 6. Methods and tools we use
 
-- [memory] **Czarnecki et al.**, "Sobolev Training for Neural Networks", NeurIPS 2017 -- the --k-match Jacobian matching.
-- [memory] **Heess et al.**, "Learning Continuous Control Policies by Stochastic Value Gradients", NeurIPS 2015.
 - [memory] **Gurumurthy et al.** -- VG-SAC / value-gradient regularization (the critic we audited; find the exact paper).
+- [memory] **Heess et al.**, "Learning Continuous Control Policies by Stochastic Value Gradients", NeurIPS 2015.
+- [memory] **Czarnecki et al.**, "Sobolev Training for Neural Networks", NeurIPS 2017 -- the --k-match Jacobian matching.
 - [memory] Broyden's method (secant update) -- --sens-adapt.
 
 ## 7. The car platform
 
-- [memory] F1TENTH platform (O'Kelly et al., F1TENTH: an open-source autonomous cyber-physical platform; check venue).
 - [web] LLA-MPC-onboard (the car's onboard stack: OptiTrack node, EKF, VESC current control; our hardware layer ports
   it). https://github.com/LLA-Control/LLA-MPC-onboard
+- [memory] F1TENTH platform (O'Kelly et al., F1TENTH: an open-source autonomous cyber-physical platform; check venue).
 - [memory] Fiala brush tire model (Fiala 1954; as used in Pacejka, "Tire and Vehicle Dynamics") -- the car's nominal sim.
 
 ## Also surfaced (less relevant)
