@@ -5,6 +5,8 @@
 This is the current result (μ 0.2). The μ 0.2 wide-track results below are archived in `archive_mu02_wide/`.
 
 ### Setup
+Figures and videos live in `src/paper/car/` (moved out of this package 2026-10-10); the 24-lap figure set is in
+`src/paper/car/figures/old_24lap/`.
 - **Tracks** (`make_tight_tracks.py`, `tracks_tight/`; plans `plans_mu02_tight/`): square2fast's straights cut 0.5 m
   per end (1 m each); figfast scaled uniformly in y by 0.886 (0.25 m per end: the 0.5 m cut failed for every
   controller). **Safety envelope 0.3 m** (`F1T_SAFETY_EY`): |e_y| > 0.3 m is a wall crash. `source env_tight.sh`.
@@ -13,7 +15,7 @@ This is the current result (μ 0.2). The μ 0.2 wide-track results below are arc
 - Evaluation as before: `reeval.py`, 5 cars × 8 plans × 12 runs × 5 chained laps (`results_table.txt`). Success =
   on track, RMS e_y ≤ 10 cm, pace ≥ 90 %. Numbers below: β-25 plans, success / crash.
 
-### Main result (`figs/fig1_methods.png` … `fig7_plans.png`)
+### Main result (`src/paper/car/figures/fig1_methods.png` … `fig7_plans.png`)
 | | zero-shot | + 24 real laps |
 |---|---|---|
 | ours + DR (B, task objective) `v3drBt_s0` | 72.5 / 0.8 | **80.0 / 0.0** |
@@ -31,11 +33,11 @@ This is the current result (μ 0.2). The μ 0.2 wide-track results below are arc
   (52 → 40 %) and DR (A) (75 → 50 %). Their 40–50 % rows are square passing and figfast crashing on every run: the
   stage's chained laps on figfast push them into the wall. The no-trust-region (`_noTR`, 59 %) and open-loop-G
   (`_openG`, 58 %) variants do better than the default here.
-- **Chained vs 1-lap trials** (`figs/fig9_chained.png`, same 24 laps): DR (B) 65 → 73 % and crashes 18 → 7 % (seeds
+- **Chained vs 1-lap trials** (`src/paper/car/figures/old_24lap/fig9_chained.png`, same 24 laps): DR (B) 65 → 73 % and crashes 18 → 7 % (seeds
   pooled); the nominal learner 57 → 40 %, DR (A) 62 → 45 %, no-exploration 49 → 13 %. Chaining suits a network that
   already holds the path; for a weaker one, the second lap starts from the first lap's error and drags the update.
 
-### Lap budget (`figs/fig4_lap_budget.png`; β 25, success / crash)
+### Lap budget (`src/paper/car/figures/old_24lap/fig4_lap_budget.png`; now fig3_budget; β 25, success / crash)
 | laps per car | 2 | 4 | 6 | 8 | 10 |
 |---|---|---|---|---|---|
 | ours + DR (B, task) | 70.0 | **80.0** | 80.0 | 80.0 | 80.0 |
@@ -55,7 +57,7 @@ laps on both DR (B) networks. **real_mu stays at 0 % for every arm except plain 
 real_mu's e_y (12.5 → 9.4–10.3 cm) but the pace stays at 89–93 %: it moves the car towards the band edge, not into it.
 The task-objective network is unchanged at 80 % for every target and budget. Best real_mu model so far: none.
 
-### Data matching (`figs/fig8_data_matching.png`; `ppo_real_car.py`, `fada_real_car.py`)
+### Data matching (`src/paper/car/figures/fig8_data_matching.png`; `ppo_real_car.py`, `fada_real_car.py`)
 Baselines trained ON the five cars with privileged data, from their sim networks, up to 2,016 episodes (laps) per car:
 - **PPO+DR, privileged critic**: 25 % → 47 % at 768 → **78 % at 1,536** → 90 % at 2,016 laps per car. It passes ours
   + DR (78–80 %) between 1,536 and 2,016 laps, and it gets the friction car to 50 %.
@@ -65,7 +67,7 @@ Baselines trained ON the five cars with privileged data, from their sim networks
 - **Cost**: ours spends 0 crashes per car in its 24 laps; PPO 230, RMA 55, FADA 1,000–1,900 crashes per car by 2,016.
 - So the baselines need **~60–80× our real data** (1,536 vs 24 laps) and hundreds of wall crashes to match.
 
-### Perturbation suite (`figs/fig10_axes.png`, `fig11_conditions.png`, `fig12_matrix.png`; `runs/axes/*.json`)
+### Perturbation suite (`src/paper/car/figures/fig10_axes.png` .. `fig12_matrix.png` once the 10-lap suite lands, 24-lap versions in `old_24lap/`; `runs/axes/*.json`)
 β 25 success, networks adapted on each car WITHOUT the perturbation unless noted:
 - **Single axes** (mass, friction, tire stiffness, motor constant, steering time constant, steering / current
   delays, steering offset; 22 cars), mean: ours + DR (B) adapted 87.9 %, zero-shot 71.6 %; ours nominal 56.1 %;
@@ -83,7 +85,17 @@ Baselines trained ON the five cars with privileged data, from their sim networks
   fixes friction ×0.7 (0 %). Adapting under a perturbation does not overfit to it, but it does not fix the timing
   ones either.
 
-### Stopping rule for the sim stage (`stop_analysis.py`; `runs/stopping/stop_analysis.md`, `figs/fig13_stopping.png`)
+### Per-track ablation (`src/paper/car/figures/fig15_pertrack.png`; `scheduler_pertrack.py`, `merge_pertrack.py`)
+One network PER TRACK (its own BC / sim stage / hardware stage on that track's plans) against the method's ONE
+network for both tracks, at equal real laps per car (0 / 4 / 8), seeds 0-1 pooled, beta 25, success / completion:
+- ours + DR (B): shared 68-74 % / 86-97 %; per track 40 % / 50-53 %. Square is identical (80 / 100 %); on figfast
+  the per-track network crashes almost every run (0 % / 1-7 %) where the shared one completes 72-93 %. Training on
+  both tracks HELPS the figfast network.
+- ours, nominal sim: per track slightly better on success (45-54 % vs 40-46 %, from figfast 11-28 % vs 0-12 %),
+  completion the same (55-64 % vs 53-70 %).
+- => the one-network design holds; the cross-track interference suspected for the nominal learner is small.
+
+### Stopping rule for the sim stage (`stop_analysis.py`; `runs/stopping/stop_analysis.md`, `src/paper/car/figures/fig13_stopping.png`)
 Two sim stages run to 90 iterations, every 5th snapshot scored by sim-only validation (`sim_validate.py`: held-out
 plans × nominal / perturbed starts / delay / disturbance / DR / wide DR) and by zero-shot transfer to the 5 cars.
 - **The nominal-sim score is flat at 100 % and cannot choose.** Its argmax picks iteration 0–5: regret 12–15 points.
@@ -99,7 +111,7 @@ plans × nominal / perturbed starts / delay / disturbance / DR / wide DR) and by
 ### Files
 - Figures: `car_figures.py` (fig1–7; Wilson intervals now use each eval's stored run count),
   `car_study_figs.py` (fig8–12), `stop_analysis.py` (fig13), `car_traj_figs.py` (traj_*), videos via
-  `make_car_videos.py` (`videos/`).
+  `make_car_videos.py` (`src/paper/car/videos/`).
 - Schedulers (all finished): `scheduler.py`, `scheduler_laps.py`, `scheduler_match.py`, `scheduler_mu.py`,
   `scheduler_axes.py`, `scheduler_stop.py`, `scheduler_lowmu.py`; `regen_tight.sh` rebuilt the tables / figures / videos.
 

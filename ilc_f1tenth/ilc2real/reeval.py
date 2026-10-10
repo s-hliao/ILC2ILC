@@ -75,7 +75,8 @@ def main():
             continue
         args = json.load(open(os.path.join(d, 'args.json')))
         sfx = args.get('fallback_suffix') or ''
-        names = EVAL + [n + sfx for n in EVAL if sfx and os.path.exists(os.path.join(bank.PLAN_DIR, n + sfx + '.npz'))]
+        ev_names = [n for n in EVAL if n in (args.get('eval_plans') or EVAL)]   # a per-track network: its own track's plans
+        names = ev_names + [n + sfx for n in ev_names if sfx and os.path.exists(os.path.join(bank.PLAN_DIR, n + sfx + '.npz'))]
         plans = {p['name']: p for p in bank.load_bank(names)}
         jobs = []
         for car in args['cars']:

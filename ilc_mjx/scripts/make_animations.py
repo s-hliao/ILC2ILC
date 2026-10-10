@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 make_animations.py [--robots R ...] [--format mp4|gif] [--jobs N] [--only hwstage|eval|compare] [--method M ...]:
-every video from the recorded jumps in ../trajectories, into ../figures/ilc2real/videos/, one folder per method:
+every video from the recorded jumps in ../trajectories, into src/paper/quadruped/videos/, one folder per method:
 
   00_compare_all_methods/<robot>          every method's test-goal evaluation side by side, goal by goal
   <NN>_<method>/hardware_stage_<robot>    the method's real jumps (its hardware stage, or calibration / adaptation),
@@ -21,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TR = os.path.join(HERE, "..", "trajectories")
-OUT = os.path.join(HERE, "..", "figures", "ilc2real", "videos")
+OUT = os.path.normpath(os.path.join(HERE, "..", "..", "paper", "quadruped", "videos"))
 TP = ["blk15", "blk2", "crouch", "tall", "noseup", "nosedn", "mocapbad", "delay10"]
 # folder: (label, hardware-stage file or None, [(when, eval file)])
 METHODS = {

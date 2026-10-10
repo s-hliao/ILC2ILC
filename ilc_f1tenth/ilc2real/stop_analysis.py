@@ -14,7 +14,7 @@ Per sim metric: Spearman rank correlation with real transfer across snapshots (p
 stopping rule picks with its regret (real transfer of the best snapshot minus the picked one's; the best is taken on a
 3-point running mean of the real curve, so a single lucky snapshot does not set the bar). Rules: last snapshot, the
 pipeline's fixed 30 iterations, argmax of the metric, and early stopping on the metric (patience 3 evaluations = 15
-iterations, improvement > 0.5 point; and patience 6 = 30 iterations). -> DIR/stop_analysis.json, DIR/stop_analysis.md, figs/fig13_stopping.png
+iterations, improvement > 0.5 point; and patience 6 = 30 iterations). -> DIR/stop_analysis.json, DIR/stop_analysis.md, src/paper/car/figures/fig13_stopping.png
 """
 import argparse
 import json
@@ -28,7 +28,7 @@ import matplotlib.pyplot as plt                  # noqa: E402
 HERE = os.path.dirname(os.path.abspath(__file__))
 ap = argparse.ArgumentParser()
 ap.add_argument('--out', default=os.path.join(HERE, 'runs/stopping'))
-ap.add_argument('--figs', default=os.path.join(HERE, 'figs'))
+ap.add_argument('--figs', default=os.path.normpath(os.path.join(HERE, '..', '..', 'paper', 'car', 'figures')))   # src/paper
 a = ap.parse_args()
 S = json.load(open(os.path.join(HERE, 'runs/stopping/sim_val.json')))
 R = json.load(open(os.path.join(HERE, 'runs/axes/stop_real.json')))['eval']

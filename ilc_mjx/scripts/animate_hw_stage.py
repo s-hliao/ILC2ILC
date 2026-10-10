@@ -9,7 +9,7 @@ animate_hw_stage.py: side-view animations (matplotlib, GIF) of recorded Go1 jump
                                          per test goal
   eval     EVAL.npz --robot R            one method's evaluation on the reserved test goals (never trained on, never
                                          flown in the hardware stage): one panel per goal, all jumping at once
-Options: --out FILE (default figures/ilc2real/anim/<mode>_<traj>_<robot>.gif), --label (eval: the method's name), --fps 17, --stride 30 (2 ms ticks per frame:
+Options: --out FILE (default src/paper/quadruped/anim/<mode>_<traj>_<robot>.gif), --label (eval: the method's name), --fps 17, --stride 30 (2 ms ticks per frame:
 real time at 17 fps), --dpi 100, --colors 48 (the GIF palette: few colours keep it small enough to commit),
 --format gif|mp4 (mp4 needs ffmpeg). All of them at once:
 make_animations.py. Poses come from the recorded ground truth through the menagerie
@@ -174,7 +174,7 @@ def draw(f):
     return []
 
 
-out = a.out or os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "figures", "ilc2real", "anim",
+out = a.out or os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "paper", "quadruped", "anim",
                             f"{a.mode}_{os.path.splitext(os.path.basename(a.traj[0]))[0]}_{a.robot}.gif")
 os.makedirs(os.path.dirname(out), exist_ok=True)
 fig.text(0.01, 0.005, ("orange: this jump's trunk path; blue: the same goal's earlier batches (light = earliest); dotted: the goal; "

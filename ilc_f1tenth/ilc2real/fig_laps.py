@@ -96,7 +96,8 @@ fig.legend(h, l, loc='lower center', ncol=3, frameon=False, fontsize=8.5)
 fig.suptitle('Lap budget at mu 0.2: full-drift plans (beta 25, both tracks), 5 cars x 12 runs x 5 laps per point; laps axis not to scale after 10; chained 2-lap trials, one per update',
              x=0.01, ha='left', fontsize=11, color=INK)
 fig.tight_layout(rect=(0, 0.13, 1, 0.95))
-out = _A.out or os.path.join(ROOT, 'figs', 'lap_budget.png')
+out = _A.out or (os.path.normpath(os.path.join(HERE, '..', '..', 'paper', 'car', 'figures', 'lap_budget.png')) if ROOT == HERE
+                  else os.path.join(ROOT, 'figs', 'lap_budget.png'))   # src/paper
 os.makedirs(os.path.dirname(out), exist_ok=True)
 fig.savefig(out, dpi=130, facecolor=SURF)
 print('->', out)

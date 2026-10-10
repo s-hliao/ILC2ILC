@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 make_car_videos.py [--root DIR] [--jobs N]: every car video from the recorded trajectories in DIR/trajectories
-(record_car.py) into DIR/videos/, one folder per method (the quadruped's make_animations.py layout):
+(record_car.py) into src/paper/car/videos/ (another --root: DIR/videos/), one folder per method (the quadruped's make_animations.py layout):
 
   00_compare_all_methods/<car>_<plan>   every method side by side on one plan, with the sideslip against the plan's
   <NN>_<method>/hardware_stage_<car>    the method's hardware stage, iteration by iteration (one panel per plan)
@@ -23,7 +23,8 @@ ap.add_argument('--cars', nargs='+', default=['real_nom', 'real_mass', 'real_mu'
 ap.add_argument('--only', choices=('hwstage', 'eval', 'compare'))
 a = ap.parse_args()
 TR = os.path.join(os.path.abspath(a.root), 'trajectories')
-OUT = os.path.join(os.path.abspath(a.root), 'videos')
+OUT = (os.path.normpath(os.path.join(HERE, '..', '..', 'paper', 'car', 'videos')) if os.path.abspath(a.root) == HERE
+       else os.path.join(os.path.abspath(a.root), 'videos'))   # src/paper
 # folder: (label, hardware-stage recording or None, [(when, eval recording)])
 METHODS = {
     '01_ours': ('ours', 'hwstage_ours', [('zeroshot', 'eval_ours_zeroshot'), ('after_24laps', 'eval_ours_24laps')]),
@@ -84,7 +85,7 @@ with ThreadPoolExecutor(a.jobs) as ex:
 os.makedirs(OUT, exist_ok=True)
 open(os.path.join(OUT, 'README.md'), 'w').write('''# F1TENTH ILC2Real car videos
 
-Top-down views of the recorded runs (`../trajectories/`, record_car.py) on the five multi-body "real" cars, MP4 (H.264;
+Top-down views of the recorded runs (`src/ilc_f1tenth/ilc2real/trajectories/`, record_car.py) on the five multi-body "real" cars, MP4 (H.264;
 pause and scrub in any player), real time. Grey: the plan; the path is coloured by |sideslip| (light 0 to dark 35 deg);
 blue: the car and its heading; red: its velocity (the angle between them is the sideslip). Regenerate:
 `python make_car_videos.py --root <results root>` after `record_car.py`.

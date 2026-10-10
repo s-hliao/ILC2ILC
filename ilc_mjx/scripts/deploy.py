@@ -132,6 +132,10 @@ ap.add_argument("--gate", type=float, nargs=3, default=None, metavar=("FALLS", "
                      "may fall at most FALLS more jumps and score at most RATIO x the current one (+0.5), and its "
                      "actions on the robot's own recent states may move at most DA (normalized) from the current "
                      "ones; else the update is rejected (the current policy flies again, its steps halved)")
+ap.add_argument("--gate-dr", action="store_true",
+                help="the gate's sim rollouts under dynamics drawn from the DR family (JumpEnv.sample_dyn; the same draws "
+                     "for the current and the new policy) instead of the nominal dynamics -- for a network trained under "
+                     "DR, whose nominal-sim score is a poor proxy for the robot (the stopping-rule finding)")
 ap.add_argument("--manual-timeout", type=float, default=24 * 3600, help="manual: seconds to wait for the jumps")
 ap.add_argument("--jac-dyn", type=float, nargs=8, default=None, metavar="P",
                 help="the ILC's Jacobians from a fixed, deliberately different model (JumpEnv.DYN_KEYS: mass_scale com_x "
@@ -562,8 +566,8 @@ def anchor_goals(n=16, rng_seed=0):
 
 
 def gate(w_old, w_new, O_real, g_lo, g_hi, it):
-    """The safety gate (--gate): the update in the nominal GPU sim against the current policy, and how far it moves
-    the actions on the robot's own states."""
+    """The safety gate (--gate): the update in the nominal GPU sim (--gate-dr: under DR draws) against the current
+    policy, and how far it moves the actions on the robot's own states."""
     goals = anchor_goals()
     ref = env.references(np.concatenate([goals, goals]))
     q_off, _ = env.explore_noise(32, np.random.default_rng(777 + it), 0.08, 0.0)
@@ -573,9 +577,10 @@ def gate(w_old, w_new, O_real, g_lo, g_hi, it):
     tg[:, :2] = xr[:, 0, :2] + np.concatenate([goals, goals])
     tg[:, 2] = 0.0
     qe, rs = np.asarray(bank["qe"], float), float(bank["r_scale"])
+    dyn = env.dyn_arrays(env.sample_dyn(len(q_off), np.random.default_rng(4242 + it))) if a.gate_dr else None
     res = []
     for w_ in (w_old, w_new):
-        o = env.rollout(w_, ref, jax.random.PRNGKey(0), stochastic=False, q_offset=q_off)
+        o = env.rollout(w_, ref, jax.random.PRNGKey(0), stochastic=False, q_offset=q_off, dyn=dyn)
         e = o["X"][:, env.N] - tg
         sc = 0.01 * rs * (e * qe * e).sum(1) + 20 * o["fell"]
         res.append((int(o["fell"].sum()), float(np.nanmean(sc))))

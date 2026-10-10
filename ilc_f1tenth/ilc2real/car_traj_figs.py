@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 car_traj_figs.py [--root DIR] [--tag TEXT]: static figures of the recorded car trajectories (record_car.py) ->
-DIR/figs/traj_*.png.
+src/paper/car/figures/traj_*.png (another --root: DIR/figs/).
 
   traj_paths_<plan>     every car x the key methods: the path flown (3 laps, no reset) against the plan, coloured by
                         |sideslip|, with the RMS lateral error and the outcome
@@ -26,7 +26,8 @@ ap.add_argument('--root', default=HERE)
 ap.add_argument('--tag', default='')
 a = ap.parse_args()
 ROOT = os.path.abspath(a.root)
-TR, OUT = os.path.join(ROOT, 'trajectories'), os.path.join(ROOT, 'figs')
+TR = os.path.join(ROOT, 'trajectories')
+OUT = os.path.normpath(os.path.join(HERE, '..', '..', 'paper', 'car', 'figures')) if ROOT == HERE else os.path.join(ROOT, 'figs')   # src/paper
 os.makedirs(OUT, exist_ok=True)
 TAG = f' -- {a.tag}' if a.tag else ''
 SURF, INK2 = '#fcfcfb', '#52514e'

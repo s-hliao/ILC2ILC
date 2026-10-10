@@ -62,4 +62,4 @@ python scripts/animate_hw_stage.py compare trajectories/eval_ours_24jumps.npz tr
 python scripts/export_trajectories.py log/dilc/plane/gate_loose
 ```
 
-Rendered videos: `figures/ilc2real/videos/`, one folder per method (see its README.md).
+Rendered videos: `src/paper/quadruped/videos/`, one folder per method (see its README.md).

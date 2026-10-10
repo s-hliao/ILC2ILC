@@ -11,7 +11,7 @@ Perturbations are separated by kind:
                            nose down (the 'rob' evals, every robot)
   sensing / actuation      bad mocap (120 Hz, 15 ms), 10 ms actuation delay
 
--> src/ilc_mjx/figures/ilc2real/NN_name.png. Run: ~/miniconda3/envs/ilcmjx/bin/python ilc2real_figs.py"""
+-> src/paper/quadruped/figures/NN_name.png. Run: ~/miniconda3/envs/ilcmjx/bin/python ilc2real_figs.py"""
 import glob, json, os
 import numpy as np
 import matplotlib
@@ -22,7 +22,7 @@ _REPO = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__))
 _LOG = os.path.normpath(os.path.join(_REPO, '..', 'log', 'dilc'))                                    # run records (not in git)
 
 P = os.path.join(_LOG, "plane")
-OUT = os.path.join(_REPO, "ilc_mjx", "figures", "ilc2real")
+OUT = os.path.join(_REPO, "paper", "quadruped", "figures")
 os.makedirs(OUT, exist_ok=True)
 # reference palette (dataviz skill, light surface): categorical slots in fixed order; sequential blue; diverging
 SURF, INK, INK2, MUTED, GRID = "#fcfcfb", "#0b0b0b", "#52514e", "#8a8984", "#e6e5e0"
@@ -391,6 +391,24 @@ def fig_budget():
             order = np.argsort(xs)
             ax.plot(np.array(xs)[order], np.array(ys)[order], color=CAT[SLOT[k]], lw=1.5 if k == 0 else 1.0,
                     ls="-" if k != 5 else ":", zorder=2)
+    # every 6 real jumps along the same runs: the stage's per-iteration policies <run>/<robot>/it<k>/policy, flown on
+    # the reserved test goals (quad_eval_ckpts.py; it0 / the last one reproduce the runs' start / final evaluations)
+    for run, k, its in (("hw6g16_v10s2it20", 0, range(17)), ("drA_hw24", 4, range(5)), ("drB_hw24", 5, range(5))):
+        xs, ys, los, his = [], [], [], []
+        for it in its:
+            fs = [os.path.join(P, "fixbox", run, rb, f"it{it}", "eval_planefinal.json") for rb in ROBOTS]
+            rs = [r for f in fs if os.path.exists(f) for r in json.load(open(f))]
+            if len(rs) < 8 * 4 * len(ROBOTS):             # every robot's 8 goals x 4 jumps, or the point is left out
+                continue
+            p, lo, hi = wilson(sum(ok(r) for r in rs), len(rs))
+            xs.append(6 * it + (k - 1) * 0.9)
+            ys.append(100 * p)
+            los.append(100 * (p - lo))
+            his.append(100 * (hi - p))
+        if len(xs) > 2:
+            ax.fill_between(xs, np.array(ys) - los, np.array(ys) + his, color=CAT[SLOT[k]], alpha=0.08, lw=0, zorder=1)
+            ax.plot(xs, ys, color=CAT[SLOT[k]], lw=1.0, ls="-", marker=".", ms=5, zorder=2,
+                    label=f"{pts[k][0].split(',')[0]}: every 6 jumps of one run")
     # per-goal ILC (JumpILC) trained on the test goals themselves: trial k+1 per goal, and re-flown with our protocol
     jt = [(8 * kk, jilc_at(kk)) for kk in range(13)]
     jt = [(n, rs) for n, rs in jt if rs]

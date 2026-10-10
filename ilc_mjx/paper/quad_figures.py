@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """quad_figures.py: the quadruped (Go1 goal-plane jumping) results as figures, recomputed from the per-jump records with
 master_table.py's definitions (success = no fall, |ex| <= 5 cm, |ez| <= 3 cm; reserved test goals planefinal; 95 %
-Wilson intervals). Reads ~/ilc_ws/log/dilc/plane (outside the repo) -> ilc_mjx/paper/figs_quad/*.png
+Wilson intervals). Reads ~/ilc_ws/log/dilc/plane (outside the repo) -> src/paper/quadruped/figures_summary/*.png
   fig1_factorial    sim stage {nominal, DR-A, DR-B} x {zero-shot, +24 nominal starts, +24 varied starts}, under
                     nominal / start-perturbed / sensing-perturbed evaluation (robots r1 s1 r4m r5)
   fig2_methods      ours vs every baseline, nominal evaluation (robots r1 s1 r5, shared by all runs)
@@ -21,7 +21,7 @@ import matplotlib.pyplot as plt                  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 P = os.path.normpath(os.path.join(HERE, '..', '..', '..', 'log', 'dilc', 'plane'))    # the per-jump records (not in git)
-OUT = os.path.join(HERE, 'figs_quad')
+OUT = os.path.normpath(os.path.join(HERE, '..', '..', 'paper', 'quadruped', 'figures_summary'))     # src/paper: the paper's material
 os.makedirs(OUT, exist_ok=True)
 ok = lambda r: (not r['fell']) and abs(r['ex']) <= 0.05 and abs(r['ez']) <= 0.03
 START = ['blk15', 'blk2', 'crouch', 'tall', 'noseup', 'nosedn']
@@ -380,8 +380,22 @@ def fig8():
     ours = [(0, jumps('hw6g16_v10s2it20', 'start', R3)), (24, jumps('gate_loose', 'final', R3)),
             (48, jumps('hw6g_v10s2it20', 'final', R3)), (96, jumps('hw6g16_v10s2it20', 'final', R3))]
     o = [(b, *rate(rs)) for b, rs in ours if rs]
-    ax.plot([q[0] for q in o], [q[1] for q in o], color=C['blue'], marker='o', ms=5, lw=1.5,
-            label='ours, nominal-sim learner + our hardware stage')
+    snap = lambda run, its: [(6 * k, rs) for k in its for rs in [[r for rb in R3 for f in [os.path.join(
+        P, 'fixbox', run, rb, f'it{k}', 'eval_planefinal.json')] if os.path.exists(f) for r in json.load(open(f))]]
+        if len(rs) >= 32 * len(R3)]                  # our runs every 6 real jumps (quad_eval_ckpts.py snapshots)
+    for run, its, col, mk, lab in (('hw6g16_v10s2it20', range(17), C['blue'], 'o',
+                                    'ours, nominal-sim learner: our hardware stage, every 6 jumps'),
+                                   ('drB_hw24', range(5), C['green'], '^',
+                                    'ours: our learner + DR (B): our hardware stage, every 6 jumps')):
+        s_ = [(b, *rate(rs)) for b, rs in snap(run, its)]
+        if len(s_) > 2:
+            ax.errorbar([q[0] for q in s_], [q[1] for q in s_], yerr=[q[2] for q in s_], color=col, marker=mk, ms=4,
+                        lw=1.8, capsize=1.5, label=lab, zorder=4)
+            if run.startswith('hw6g16'):
+                o = []                                   # the snapshot curve replaces the separate-run points
+    if o:
+        ax.plot([q[0] for q in o], [q[1] for q in o], color=C['blue'], marker='o', ms=5, lw=1.5,
+                label='ours, nominal-sim learner + our hardware stage')
     runs = [('ppo_real', 'PPO+DR, then PPO on the robot (privileged critic)', C['pink'], 's', '-'),
             ('rma_real', 'RMA teacher with the TRUE dynamics, then PPO on the robot', C['red'], 'D', '-'),
             ('fada_real', "FADA: LoRA on the robot, its own (sim) planner", C['orange'], 'v', '-'),
@@ -397,8 +411,8 @@ def fig8():
         if hit:
             ax.annotate(f'matches at {hit[0]}', (hit[0], tgt[0]), textcoords='offset points', xytext=(4, 8),
                         fontsize=8, color=col)
-    ax.set_xscale('symlog', linthresh=24, linscale=0.6)
-    ticks = [0, 24, 48, 96, 192, 384, 768, 2016]
+    ax.set_xscale('symlog', linthresh=12, linscale=1.0)
+    ticks = [0, 6, 12, 24, 48, 96, 192, 384, 768, 2016]
     ax.set_xticks(ticks)
     ax.set_xticklabels([str(t) for t in ticks], fontsize=8)
     ax.set_xlim(-2, 2300)
@@ -408,6 +422,7 @@ def fig8():
     ax.legend(fontsize=7.5, frameon=False, loc='upper center', bbox_to_anchor=(0.5, -0.15), ncol=2)
     ax.set_title('Real data needed to match ILC2Real (robots r1 s1 r5; 95 % intervals)', fontsize=11)
     fig.savefig(os.path.join(OUT, 'fig8_real_data_match.png'))
+    fig.savefig(os.path.join(HERE, '..', '..', 'paper', 'quadruped', 'figures', '13_real_data_matching.png'))   # the browsed set
     plt.close(fig)
 
 

@@ -2,7 +2,7 @@
 """plane_grid.py: the sim networks over the 2D goal plane (grid_eval.py's maps, nominal GPU sim, one jump per goal):
 per goal (x, h) the landing's |x error| as a colour, a fall as an X, goals outside the plane bank's valid hull grey;
 success (no fall, |ex| <= 5 cm, |ez| <= 3 cm) counted over the hull goals only, the same goals for every network.
--> src/ilc_mjx/figures/plane/plane_grid.png (run with the ilcmjx env)."""
+-> src/paper/quadruped/plane/plane_grid.png (run with the ilcmjx env)."""
 import json
 import os
 import sys
@@ -15,7 +15,7 @@ _REPO = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__))
 _LOG = os.path.normpath(os.path.join(_REPO, '..', 'log', 'dilc'))                                    # run records (not in git)
 
 D = _LOG
-OUT = os.path.join(_REPO, "ilc_mjx", "figures", "plane", "plane_grid.png")
+OUT = os.path.join(_REPO, "paper", "quadruped", "plane", "plane_grid.png")
 PANELS = [("old box network (5 box plans, coilc)", "grid/box_pre_ex1s2_policy_g0_coilc.s0_e1200.json"),
           ("old flat + box network (coilc)", "grid/combo_pre_ex1_policy_g0_coilc.s0_e1200.json"),
           ("plane bank reference alone", "grid/plane_ref.json"),

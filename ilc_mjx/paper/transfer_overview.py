@@ -8,7 +8,7 @@ Sources: log/dilc/RESULTS_SUMMARY.md, deploy/NOTES.md, holdout/RESULTS.txt, budg
 the eval files themselves (goals/, plots/pert_table.py's sources).
 One graph per page in a single window: the < and > buttons (or the left/right arrow keys) page through them.
 Run: ~/miniconda3/envs/ilcmjx/bin/python transfer_overview.py [--page N] [--save DIR]
-(without a display, or with --save, every page is written to DIR, default src/ilc_mjx/figures/transfer_overview/
+(without a display, or with --save, every page is written to DIR, default src/paper/quadruped/transfer_overview/
 NN_name.png -- inside the git repo, so the figures can be committed)."""
 import glob
 import json
@@ -407,7 +407,7 @@ def page_wrong(fig):
 
 
 # saved pages go into the git repo (src/) so they can be committed; log/ is not tracked
-REPO_FIGS = os.path.join(_REPO, "ilc_mjx", "figures", "transfer_overview")
+REPO_FIGS = os.path.join(_REPO, "paper", "quadruped", "transfer_overview")
 # each page's summary column: what was run to make the graph, and what it shows
 XS = 0.69                                                   # the graph's share of the (wider) figure, left
 SUMMARY = {

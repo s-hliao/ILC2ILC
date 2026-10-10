@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """figures.py: the summary figures from the re-evaluated arms (runs/hw/*/eval_big.json; runs/trackilc_big).
-  figs/budget.png   full-drift success and RMS lateral error vs real laps per car: ours (nominal sim seed 0:
+  budget.png   full-drift success and RMS lateral error vs real laps per car: ours (nominal sim seed 0:
                     0 / 24 / 48 / 96 laps) and the per-track ILC (24 / 32 / 96 laps), the plans' LQR as reference
-  figs/methods.png  full-drift success zero-shot vs after 24 real laps per car, per method (mean over sim seeds)"""
+  methods.png  full-drift success zero-shot vs after 24 real laps per car, per method (mean over sim seeds)"""
 import json
 import os
 
@@ -13,6 +13,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt                  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+OLD = os.path.normpath(os.path.join(HERE, '..', '..', 'paper', 'car', 'figures', 'old_24lap'))   # superseded: car_figures.py
 DRIFT = ['mocap_square2fast_b25', 'mocap_figfast_b25']
 
 
@@ -31,7 +32,7 @@ def drift(e):
 
 
 def main():
-    os.makedirs(os.path.join(HERE, 'figs'), exist_ok=True)
+    os.makedirs(OLD, exist_ok=True)
     # budget curve
     fig, ax = plt.subplots(1, 2, figsize=(10, 3.8))
     ours = [(0, 'v3nom_s0_zs'), (24, 'v3nom_s0_hw24r'), (48, 'v3nom_s0_hw48'), (96, 'v3nom_s0_hw96')]
@@ -61,7 +62,7 @@ def main():
     ax[0].legend(fontsize=8)
     fig.suptitle('Few-shot adaptation on the multi-body cars (5 cars, 2 tracks, beta* = 25 deg, 5-lap chains)')
     fig.tight_layout()
-    fig.savefig(os.path.join(HERE, 'figs/budget.png'), dpi=120)
+    fig.savefig(os.path.join(OLD, 'budget.png'), dpi=120)
     # methods
     groups = [('ours (nominal sim)', ['v3nom_s0_zs', 'v3nom_s1_zs', 'v3nom_s2_zs'], ['v3nom_s0_hw24r', 'v3nom_s1_hw24r', 'v3nom_s2_hw24']),
               ('ours + goal fallback\n(14-plan bank)', ['v6nom_s0_zs', 'v6nom_s1_zs'],
@@ -85,8 +86,8 @@ def main():
     ax.set_ylabel('full-drift success (%)'); ax.grid(axis='y', alpha=0.3); ax.legend(fontsize=8)
     ax.set_title('Zero-shot transfer and few-shot adaptation (5 multi-body cars x 2 tracks x 12 five-lap runs)')
     fig.tight_layout()
-    fig.savefig(os.path.join(HERE, 'figs/methods.png'), dpi=120)
-    print('saved figs/budget.png figs/methods.png')
+    fig.savefig(os.path.join(OLD, 'methods.png'), dpi=120)
+    print('saved', OLD)
 
 
 if __name__ == '__main__':
