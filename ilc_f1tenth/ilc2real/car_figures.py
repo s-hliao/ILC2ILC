@@ -110,7 +110,7 @@ METHODS = [
 
 SHORT = {'ours: nominal-sim learner': 'ours', 'ours: our learner + DR (A)': 'ours+DR (A)',
          'ours: our learner + DR (B)': 'ours+DR (B)', 'PPO+DR (+ our hardware stage)': 'PPO+DR',
-         'RMA': 'RMA', 'FADA (its own adaptation)': 'FADA', 'plan LQR': 'plan LQR'}
+                  'RMA': 'RMA', 'FADA (its own adaptation)': 'FADA', 'plan LQR': 'plan LQR'}
 
 
 def bars(ax, rows, ylab, ylim=(0, 105)):

@@ -71,14 +71,36 @@ REAL_CARS = {
 NOISE = np.array([0.003, 0.003, 0.005, 0.03, 0.03, 0.03, 0.5, 0.2])   # X Y psi vx vy r omega_w I (sensing)
 
 
+# sensing / estimation perturbations, applied to the MEASURED state only (real_car.run): name suffix "+<preset>"
+#   noise: x NOISE; delay: control periods of latency; hold: the measurement refreshes every hold periods; vel_tau: a
+#   first-order lag (s) on vx, vy, r (the EKF's velocity lag)
+SENSE = {'mocapbad': dict(noise=3.0, delay=1, hold=2, vel_tau=0.05), 'latency2': dict(delay=2),
+         'lowrate': dict(hold=3), 'ekflag': dict(vel_tau=0.1), 'noisy3': dict(noise=3.0)}
+
+
 def car_config(name):
-    c = REAL_CARS[name]
+    """A "real" car: REAL_CARS[name]; or "ax:key=value,..." -- the nominal car with single parameters changed (mass, mu,
+    ky: multi-body scales; kt: torque-constant scale; tau: servo time constant; d_off: steering offset; d_delay /
+    i_delay: steering / current command delay in periods); either with "+<SENSE preset>" for a sensing perturbation."""
+    base, _, sense = name.partition('+')
+    if base.startswith('ax:'):
+        c = dict(REAL_CARS['real_nom'], mb={})
+        for kv in base[3:].split(','):
+            k, v = kv.split('=')
+            if k in ('mass', 'mu', 'ky'):
+                c['mb'] = dict(c['mb'], **{k: float(v)})
+            elif k in ('d_delay', 'i_delay'):
+                c[k] = int(float(v))
+            else:
+                c[k] = float(v)
+    else:
+        c = REAL_CARS[base]
     p, P = mb_params(**c['mb'])
     mb = c['mb']
     fiala = np.array([N['Cf'] / 2 * mb.get('ky', 1.0), N['Cr'] / 2 * mb.get('ky', 1.0), N['muf'] * mb.get('mu', 1.0),
                       c.get('lsd', LSD)])
     return dict(name=name, p=p, P=P, fiala=fiala, kt=c['kt'] * N['kt'], d_off=c['d_off'], tau=c['tau'],
-                d_delay=c['d_delay'], i_delay=c['i_delay'])
+                d_delay=c['d_delay'], i_delay=c['i_delay'], sense=SENSE[sense] if sense else None)
 
 
 @numba.njit(cache=True)

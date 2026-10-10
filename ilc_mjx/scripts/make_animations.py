@@ -51,13 +51,16 @@ ap.add_argument("--robots", nargs="+", default=["real_r1", "real_s1", "real_r4",
                 help="each file is rendered for the ones of these it has")
 ap.add_argument("--format", default="mp4", choices=("mp4", "gif"))
 ap.add_argument("--jobs", type=int, default=4)
-ap.add_argument("--only", choices=("hwstage", "eval", "compare"))
+ap.add_argument("--only", choices=("hwstage", "eval", "compare", "varied"))
 ap.add_argument("--method", nargs="+", help="only these folders of METHODS")
 ap.add_argument("--dpi", type=int, default=100)
 a = ap.parse_args()
 
 py, anim = sys.executable, os.path.join(HERE, "animate_hw_stage.py")
-path = lambda name: os.path.join(TR, f"{name}.npz")
+# an evaluation recorded with more episodes per goal (trajectories/eval4/: 4 per goal, the statistics' own seeds) is
+# preferred over the 1-episode replay file of the same name
+path = lambda name: next(p for p in (os.path.join(TR, "eval4", f"{name}.npz"), os.path.join(TR, f"{name}.npz"))
+                         if os.path.exists(p) or p.endswith(f"{os.sep}{name}.npz") and os.sep + "eval4" + os.sep not in p)
 robots_in = lambda f: {m["robot"] for m in json.loads(str(np.load(f, allow_pickle=True)["meta"]))}
 common = ["--format", a.format, "--dpi", str(a.dpi)]
 jobs, missing = [], []
@@ -84,6 +87,35 @@ if a.only in (None, "compare") and not a.method:
     for rb in [r for r in a.robots if any(r in robots_in(h[0]) for h in have)]:
         jobs.append([py, anim, "compare", *[h[0] for h in have], "--labels", *[h[1] for h in have], "--robot", rb, *common,
                      "--out", os.path.join(OUT, "00_compare_all_methods", f"{rb}.{a.format}")])
+
+
+# the varied recordings (fixbox/record_varied.sh -> trajectories/varied/): 18 held-out goals across the goal plane, and
+# the 8 standard perturbations on the test goals -- per method and side by side
+VARIED = {"ours_zeroshot": ("01_ours", "zeroshot", "ours, zero-shot"),
+          "ours_24jumps": ("01_ours", "after_24jumps", "ours, 24 real jumps"),
+          "learner_dr": ("02_ours_plus_dr_finetune", "zeroshot", "our learner + DR (A), zero-shot"),
+          "dr_finetune_24jumps": ("02_ours_plus_dr_finetune", "after_24jumps", "our learner + DR (A), 24 real jumps"),
+          "dr_scratch_24jumps": ("03_ours_plus_dr_scratch", "after_24jumps", "our learner + DR (B), 24 real jumps"),
+          "ppo_dr": ("05_ppo_dr", "zeroshot", "PPO + DR"), "rma": ("06_rma", "zeroshot", "RMA"),
+          "rma_crosstrial": ("07_rma_crosstrial", "after_calibration", "RMA, cross-trial"),
+          "fada": ("08_fada", "after_adaptation", "FADA (adapted)")}
+VD = os.path.join(TR, "varied")
+KIND = dict(plane=("heldout_plane", "18 held-out goals across the goal plane (never trained on; incl. x 0.40 / 0.65 m and the 20 cm box)"),
+            pert=("perturbed_test_goals", "the reserved test goals"))
+if a.only in (None, "varied") and not a.method and os.path.isdir(VD):
+    for kind, (stem, glab) in KIND.items():
+        have = []
+        for m, (folder, when, lab) in VARIED.items():
+            f_ = os.path.join(VD, f"{kind}_{m}.npz")
+            if not os.path.exists(f_):
+                continue
+            have.append((f_, lab))
+            for rb in [r for r in a.robots if r in robots_in(f_)]:
+                jobs.append([py, anim, "eval", f_, "--robot", rb, "--label", lab, "--goals-label", glab, *common,
+                             "--out", os.path.join(OUT, folder, f"{when}_{stem}_{rb}.{a.format}")])
+        for rb in [r for r in a.robots if any(r in robots_in(h[0]) for h in have)]:
+            jobs.append([py, anim, "compare", *[h[0] for h in have], "--labels", *[h[1] for h in have], "--robot", rb,
+                         *common, "--out", os.path.join(OUT, "00_compare_all_methods", f"{stem}_{rb}.{a.format}")])
 
 
 def run(cmd):

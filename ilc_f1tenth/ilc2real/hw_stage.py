@@ -4,7 +4,7 @@ hw_stage.py --policy NPZ --out DIR: the hardware stage of ILC2Real on the F1TENT
 ILC of the sim network on each "real" car (mb_car's multi-body cars), the structure from the nominal model, every
 lap used, then the multi-lap evaluation. Per car, from the same starting network:
 
-  each iteration (--iters; one trial of --trial-laps chained laps at each of --goals: 4 x 6 x 1 = 24 laps)
+  each iteration (--iters; one trial of --trial-laps (default 2) chained laps at each of --goals: 2 x 6 x 2 = 24 laps)
     1. the car's current network flies each goal's plan for one lap from the plan's start (--train-starts S: from a
        random arc length with a start perturbation of relative size S instead), measured with sensing noise
     2. per lap the closed-loop GN ILC step from the NOMINAL model's Jacobians at the MEASURED states (ilc_core),
@@ -39,6 +39,8 @@ ap.add_argument('--crash-rollback', type=int, default=1, help='a car that crashe
                 'cleanly in the last kept iteration is rolled back to that network and its step cap halved (1: on)')
 ap.add_argument('--max-crashes', type=int, default=0, help='crash budget per car: after this many crashed trials the '
                 'car stops adapting and keeps its last kept network (0: no budget)')
+ap.add_argument('--record', default='', help='save every trial lap (true state, plan index, actions) to this npz '
+                '(record_car.py: the hardware-stage videos)')
 ap.add_argument('--iters', type=int, default=4)
 ap.add_argument('--beta', type=float, default=0.5)
 ap.add_argument('--delta', type=float, default=0.05)
@@ -50,7 +52,15 @@ ap.add_argument('--objective', default='task', choices=('task', 'plan'),
 ap.add_argument('--err-scale', type=float, nargs=6, default=None, metavar=('EY', 'EPSI', 'VX', 'VY', 'R', 'V'),
                 help='explicit ILC error-row scales (overrides --objective)')
 ap.add_argument('--train-starts', type=float, default=0.0)
-ap.add_argument('--trial-laps', type=int, default=1, help='laps per trial, chained without a reset (2: the second lap '
+ap.add_argument('--goal-cycle', type=int, default=0, help='1: each iteration flies ONE trial, cycling through --goals '
+                '(budget = iters x trial laps; an update after every trial: the small-budget lap ablation, 2..10 laps)')
+ap.add_argument('--pace-local', type=float, default=0.0, help='a LOCAL pace target: 1 - slack x (the plan\'s lateral '
+                'acceleration V^2 |kappa| / its maximum): slower only where the plan corners hardest (the friction-limited '
+                'sections), full pace on the straights; slack 0.1 = 90 %% at the peak')
+ap.add_argument('--pace-target', type=float, default=1.0, help='the task objective asks for this fraction of the plan\'s '
+                'speed (|V| - p |V_plan|; 1: the plan\'s pace). < 1 (e.g. 0.95, inside the >= 90 %% success criterion) lets the '
+                'stage trade speed for the path at a friction limit the nominal model does not know')
+ap.add_argument('--trial-laps', type=int, default=2, help='laps per trial, chained without a reset (2: the second lap '
                 'starts where the first ended, so the ILC sees the lap-to-lap behaviour the multi-lap evaluation tests); '
                 'each trial costs that many real laps')
 ap.add_argument('--anchor-w', type=float, default=1.0)
@@ -217,14 +227,16 @@ def main():
     data = {c: [] for c in a.cars}
     real_laps = {c: 0.0 for c in a.cars}
     trials = {c: [] for c in a.cars}
+    recs = []                                         # --record: every trial lap
     crashes = {c: [] for c in a.cars}                 # every crashed training trial: it, goal, reason, peak |e_y|
     last_crashed = {c: set() for c in a.cars}         # goals that crashed in the last kept iteration
     frozen = {c: False for c in a.cars}               # crash budget used up: no more trials, last kept network
     for it in range(a.iters):
+        goals_it = [a.goals[it % len(a.goals)]] if a.goal_cycle else a.goals
         jobs = []
         for c in [c for c in a.cars if not frozen[c]]:
             pol = [(np.asarray(W), np.asarray(b)) for W, b in params[c]]
-            for gi, g in enumerate(a.goals):
+            for gi, g in enumerate(goals_it):
                 pl = by_name[goal_now[c][g]]
                 if a.train_starts > 0:
                     s0 = rs.uniform() * float(pl['length'])
@@ -236,13 +248,17 @@ def main():
         res = rc.run_many(jobs)
         for c in [c for c in a.cars if not frozen[c]]:
             rr = [r for r, j in zip(res, jobs) if j['car_name'] == c]
-            crashed = {g for g, r in zip(a.goals, rr) if r['failed']}
-            for g, r in zip(a.goals, rr):
+            crashed = {g for g, r in zip(goals_it, rr) if r['failed']}
+            if a.record:
+                for g, r in zip(goals_it, rr):
+                    recs.append((dict(car=c, it=it, plan=goal_now[c][g], failed=bool(r['failed']), crash=r.get('crash', ''),
+                                      laps=float(r['laps'])), r))
+            for g, r in zip(goals_it, rr):
                 if r['failed']:
                     crashes[c].append(dict(it=it, goal=goal_now[c][g], reason=r.get('crash', ''),
                                            peak_ey=r.get('peak_ey'), laps=r['laps']))
             pid_c = np.array([gn_names.index(j['plan']['name']) for j in jobs if j['car_name'] == c])
-            for gi, (g, r) in enumerate(zip(a.goals, rr)):          # goal fallback on repeated spin-outs
+            for gi, (g, r) in enumerate(zip(goals_it, rr)):          # goal fallback on repeated spin-outs
                 fails_row[c][g] = fails_row[c][g] + 1 if r['failed'] else 0
                 if (a.fallback_suffix and goal_now[c][g] == g and fails_row[c][g] >= a.fallback_after
                         and fb(g) in by_name):
@@ -270,6 +286,17 @@ def main():
             last_crashed[c] = crashed
             prev_params[c] = params[c]
             xs, idx, acts, err, valid = ilc_core.pad_runs(rr, T)
+            if a.pace_target != 1.0 or a.pace_local > 0:   # the pace row against the target fraction of the plan's speed
+                for k in range(len(rr)):
+                    pl_k = by_name[gn_names[pid_c[k]]]
+                    zz = np.asarray(pl_k['z'])
+                    vp = np.hypot(zz[:, 2], zz[:, 3])
+                    frac = np.full(len(zz), a.pace_target)
+                    if a.pace_local > 0:
+                        alat = vp ** 2 * np.abs(np.asarray(pl_k['kappa_s']))
+                        frac = frac - a.pace_local * alat / max(alat.max(), 1e-6)
+                    j = idx[k] % len(zz)
+                    err[k, :, 5] += (1.0 - frac[j]) * vp[j]
             step, J, Jp = gn_for(cap[c])(params[c], jnp.array(xs), jnp.array(idx), jnp.array(acts), jnp.array(pid_c),
                              jnp.array(valid), jnp.array(err))
             step, J, Jp = np.asarray(step), np.asarray(J), np.asarray(Jp)
@@ -318,6 +345,9 @@ def main():
     summary['real_laps'] = real_laps
     summary['rollbacks'] = rollbacks
     summary['crashes'] = crashes
+    if a.record and recs:
+        import record_car
+        record_car.save(a.record, recs, [by_name[n] for n in dict.fromkeys(m['plan'] for m, _ in recs)])
     summary['frozen'] = frozen
     summary['safety_ey'] = float(os.environ.get('F1T_SAFETY_EY') or 0.6)
     summary['seconds'] = time.time() - t0

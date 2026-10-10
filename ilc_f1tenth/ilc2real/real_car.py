@@ -28,10 +28,15 @@ def mlp_np(ps, o):
 
 
 def run(car_name, plan, policy=None, laps=1.0, s0=0.0, pert=None, seed=0, noise=True, T_max=None, ff=None,
-        x_start=None, idx_start=None, action_noise=None):
+        x_start=None, idx_start=None, action_noise=None, launch=None):
     """policy: list of (W, b) numpy (the network) or None (the plan's LQR). ff: (M, 2) normalized feedforward
     offsets on the plan's s-grid added to the action (per-track ILC baseline). x_start: a planar start state
-    (continuing a run); else the plan's state at s0 plus pert (5 numbers, as sim_jax.start_states)."""
+    (continuing a run); else the plan's state at s0 plus pert (5 numbers, as sim_jax.start_states).
+    launch: a SLOW ROLLING start -- dict(v0, v_hand, current): the car starts at v0 (0.6 m/s: the multi-body car is
+    kinematic below 0.5 m/s, without the driveline, so it cannot launch from standstill) with zero current and steering;
+    a launch controller (the plan's steering plus path feedback, a fixed current, as LLA-MPC's low-speed mode) drives
+    until |V| >= v_hand (v_hand <= v0: the policy from the start), then the policy (the stall check is off until then). The car's sensing perturbation (car_config 'sense') applies
+    to the measured state."""
     rng = np.random.default_rng(seed)
     # the room's safety envelope (F1T_SAFETY_EY, m): the run is stopped -- a crash -- as soon as the TRUE lateral
     # offset from the path exceeds it (the walls / the operator's kill switch); unset: the old departure limit
@@ -55,18 +60,34 @@ def run(car_name, plan, policy=None, laps=1.0, s0=0.0, pert=None, seed=0, noise=
     else:
         xs0 = np.asarray(x_start, float)
         idx = int(idx_start)
+    if launch:                                        # a slow rolling start: the multi-body car is kinematic below
+        xs0 = np.asarray(xs0, float).copy()           # 0.5 m/s (mb_fiala KIN_THRESH: no driveline force), so a true
+        xs0[3:9] = 0.0                                # standstill cannot launch; v0 0.6 m/s, wheels rolling without
+        xs0[3] = launch.get('v0', 0.6)                # slip, zero current and steering
+        xs0[6] = xs0[3] / N0['rw']
     xm = mc.mb_from_planar(xs0, c['p'])
     T = T_max or int(math.ceil(laps * plan['lap_time'] / DT))
-    buf = np.zeros((2, 2))
+    cmd_hist = [np.zeros(2)] * 4                     # commands, newest last (the steering / current delays)
+    S = c.get('sense') or {}
+    meas_hist, m_last, vel_f = [], None, None
+    launched, handover = not launch, (0 if not launch else -1)
     X, Xm, OBS, MU, A, ERR, ERRT, IDX, APP, OBST = [], [], [], [], [], [], [], [], [], []
     pname = plan.get('name', '')
     prog, failed, crash, peak_ey = 0.0, False, '', 0.0
     hist, last_a = [], np.zeros(2)
     for t in range(T):
         xt = mc.planar(xm)
-        xmeas = xt.copy()
-        if noise:
-            xmeas[:8] += rng.normal(size=8) * mc.NOISE
+        meas_hist.append(xt)                          # sensing: latency, refresh rate, noise, velocity lag
+        if m_last is None or t % int(S.get('hold', 1)) == 0:
+            m_last = meas_hist[max(0, len(meas_hist) - 1 - int(S.get('delay', 0)))].copy()
+            if noise:
+                m_last[:8] += rng.normal(size=8) * mc.NOISE * S.get('noise', 1.0)
+        xmeas = m_last.copy()
+        if S.get('vel_tau', 0) > 0:
+            vel_f = xmeas[3:6].copy() if vel_f is None else vel_f + DT / (S['vel_tau'] + DT) * (xmeas[3:6] - vel_f)
+            xmeas[3:6] = vel_f
+        if len(meas_hist) > 8:
+            meas_hist.pop(0)
         i_new = pl.project(idx, xmeas[:2])
         dprog = ((i_new - idx) + pl.M // 2) % pl.M - pl.M // 2
         prog += dprog * pl.ds
@@ -77,7 +98,9 @@ def run(car_name, plan, policy=None, laps=1.0, s0=0.0, pert=None, seed=0, noise=
             mu = (pl.expert(idx, xmeas) - cm.A_OFF) / cm.A_SCALE
         elif isinstance(policy, dict) and 'fada' in policy:    # FADA: IDM(o, lam d) with d the plan deviation
             orc = policy.get('oracle') or {}
-            d_next = orc[pname][(idx + 1) % len(orc[pname])] if pname in orc else policy['lam'] * obs[:8]
+            dims = policy.get('dims')
+            d_next = orc[pname][(idx + 1) % len(orc[pname])] if pname in orc else \
+                policy['lam'] * (obs[:8] if dims is None else obs[np.asarray(dims)])
             mu = mlp_np(policy['fada'], np.r_[obs, d_next])          # oracle planner: the deviation a policy
             #                                                          that works on this car reaches there
         elif isinstance(policy, dict):                 # RMA: pi(o, phi(history of obs deviations, actions))
@@ -90,16 +113,26 @@ def run(car_name, plan, policy=None, laps=1.0, s0=0.0, pert=None, seed=0, noise=
             mu = mlp_np(policy, obs)
         if ff is not None:
             mu = mu + pl.ref_at(idx, pl.path_coords(idx, xmeas)[0], ff)
+        if not launched:                              # the launch controller until v_hand
+            if math.hypot(xt[3], xt[4]) >= launch['v_hand']:
+                launched, handover = True, t
+            else:
+                s_off, e_y, e_psi = pl.path_coords(idx, xmeas)
+                d_ref = pl.ref_at(idx, s_off, pl.u)[0]
+                d_l = float(np.clip(d_ref - 1.0 * e_y - 0.8 * e_psi, -N0['s_max'], N0['s_max']))
+                mu = (np.array([d_l, launch['current']]) - cm.A_OFF) / cm.A_SCALE
         a = mu + (action_noise[t] if action_noise is not None else 0.0)
         last_a = a
         ap = a * cm.A_SCALE + cm.A_OFF
-        d_cmd = (buf[0][0] if c['d_delay'] > 0 else ap[0]) + c['d_off']
-        i_cmd = buf[0][1] if c['i_delay'] > 0 else ap[1]
-        buf = np.stack([ap, buf[0]])
+        cmd_hist.append(ap)
+        if len(cmd_hist) > 8:
+            cmd_hist.pop(0)
+        d_cmd = cmd_hist[-1 - int(c['d_delay'])][0] + c['d_off']
+        i_cmd = cmd_hist[-1 - int(c['i_delay'])][1]
         X.append(xmeas); Xm.append(xt); OBS.append(obs); OBST.append(obs_true); MU.append(mu); A.append(a); ERR.append(err); ERRT.append(err_true)
         IDX.append(idx); APP.append([d_cmd, i_cmd])
         peak_ey = max(peak_ey, abs(float(err_true[0])))
-        if abs(err_true[0]) > max_ey or abs(err_true[1]) > sn.FAIL_EPSI or xt[3] < 0.3:
+        if abs(err_true[0]) > max_ey or abs(err_true[1]) > sn.FAIL_EPSI or (launched and xt[3] < 0.3):
             failed = True
             crash = 'wall' if abs(err_true[0]) > max_ey else ('spin' if abs(err_true[1]) > sn.FAIL_EPSI else 'stall')
             break
@@ -116,6 +149,7 @@ def run(car_name, plan, policy=None, laps=1.0, s0=0.0, pert=None, seed=0, noise=
                 mu=np.array(MU),
                 a=np.array(A), err=np.array(ERR), err_true=np.array(ERRT), idx=np.array(IDX), applied=np.array(APP), progress=prog,
                 laps=prog / pl.L, failed=failed, crash=crash, peak_ey=peak_ey, max_ey=max_ey, steps=len(X), car=car_name,
+                handover=handover,
                 plan=plan.get('name', ''))
 
 

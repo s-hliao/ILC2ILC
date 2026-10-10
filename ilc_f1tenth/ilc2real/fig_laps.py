@@ -51,14 +51,15 @@ LINES = [
     ('ours (nominal Fiala sim, seed 0), then our hardware stage', '#0072B2', 'o', '-',
      series('v3nom_s0', [(24, 'v3nom_s0_hw24'), (48, 'v3nom_s0_hw48'), (96, 'v3nom_s0_hw96')])),
     ('ours (seed 1)', '#0072B2', 'v', ':', series('v3nom_s1', [(24, 'v3nom_s1_hw24')])),
+    ('our learner + DR (B), then our hardware stage', '#009E73', '^', '-',
+     series('v3drB_s0', [(24, 'v3drB_s0_hw24')])),
     ('PPO + DR, then our hardware stage', '#CC79A7', 'D', '-',
      series('ppo_dr', [(24, 'ppo_dr_hw24'), (48, 'ppo_dr_hw48')])),
 ]
 tl = json.load(open(os.path.join(ROOT, 'runs/trackilc_laps/summary.json')))['budgets']
 LINES.append(('per-track ILC (plan LQR + feedforward), b laps per plan', '#222222', 's', '--',
               [(0, stats(ev('lqr_zs')))] + sorted((2 * int(b), stats(e)) for b, e in tl.items())))
-VAR = [('6 goals x 1 iteration', 'v3nom_s0_lap6g6', 6), ('larger steps, 6 laps', 'v3nom_s0_lap6big', 6),
-       ('larger steps, 10 laps', 'v3nom_s0_lap10big', 10)]
+VAR = []                                         # (the 1-lap era's step-size / goal-set variants: runs_1lap/)
 
 TICKS = [0, 2, 4, 6, 8, 10, 24, 48, 96]
 X = lambda b: TICKS.index(b) if b in TICKS else float(np.interp(b, TICKS, range(len(TICKS))))   # evenly spaced budgets
@@ -92,7 +93,7 @@ axs[0].text(0.1, 33, 'dotted: 80 % = all of the other 4 cars;\nreal_mu (mu x 0.8
 axs[0].set_ylim(30, 102)
 h, l = axs[0].get_legend_handles_labels()
 fig.legend(h, l, loc='lower center', ncol=3, frameon=False, fontsize=8.5)
-fig.suptitle('Lap budget at mu 0.2: full-drift plans (beta 25, both tracks), 5 cars x 12 runs x 5 laps per point; laps axis not to scale after 10',
+fig.suptitle('Lap budget at mu 0.2: full-drift plans (beta 25, both tracks), 5 cars x 12 runs x 5 laps per point; laps axis not to scale after 10; chained 2-lap trials, one per update',
              x=0.01, ha='left', fontsize=11, color=INK)
 fig.tight_layout(rect=(0, 0.13, 1, 0.95))
 out = _A.out or os.path.join(ROOT, 'figs', 'lap_budget.png')

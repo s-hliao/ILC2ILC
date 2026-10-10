@@ -27,6 +27,11 @@ ap.add_argument('--lanes', type=int, default=512)
 ap.add_argument('--T', type=int, default=160)
 ap.add_argument('--a-off', type=float, default=0.2)
 ap.add_argument('--lam', type=float, default=0.8)
+ap.add_argument('--dims', type=int, nargs='+', default=list(range(8)), help='the deviation entries the IDM targets (0-4: '
+                'e_y, e_psi, vx, vy, r; 5-7: wheel speed, current, steering -- the actuator states, which make the one-step '
+                'inverse trivial: the IDM then reads the action off them and ignores the path)')
+ap.add_argument('--horizon', type=int, default=1, help='the IDM targets the deviation H control periods ahead (planner '
+                'd* = lam^H d)')
 ap.add_argument('--train-steps', type=int, default=30000)
 ap.add_argument('--iters', type=int, default=4)
 ap.add_argument('--rank', type=int, default=4)
@@ -50,7 +55,10 @@ import bank                                      # noqa: E402
 import real_car as rc                            # noqa: E402
 import sim_jax as sj                             # noqa: E402
 
-ND = 8
+ND = len(a.dims)
+DIMS = np.array(a.dims)
+H = a.horizon
+LAM_EFF = a.lam ** H
 
 
 def idm_in(obs, d_next):
@@ -94,10 +102,10 @@ def main():
         sim_laps += float(np.sum(np.asarray(out['progress']) / np.asarray(P.L)[pid]))
         obs = np.asarray(out['obs'])
         act = np.asarray(out['a'])
-        ok = ~np.asarray(out['failed'])
-        ok = ok[:, :-1] & ok[:, 1:]
-        X.append(np.concatenate([obs[:, :-1], obs[:, 1:, :ND]], -1)[ok])
-        Y.append(act[:, :-1][ok])
+        al = ~np.asarray(out['failed'])
+        ok = al[:, :-H] & al[:, H:]                    # both ends of the (o_t, d_{t+H}) pair on track
+        X.append(np.concatenate([obs[:, :-H], obs[:, H:][..., DIMS]], -1)[ok])
+        Y.append(act[:, :-H][ok])
     X, Y = np.concatenate(X), np.concatenate(Y)
     print(json.dumps(dict(event='data', n=len(X), sim_laps=sim_laps, t=time.time() - t0)), flush=True)
 
@@ -118,7 +126,7 @@ def main():
     print(json.dumps(dict(event='idm', loss=float(l), t=time.time() - t0)), flush=True)
     base = [(np.asarray(W), np.asarray(b)) for W, b in idm]
     np.savez(os.path.join(a.out, 'idm.npz'), **{f'W{i}': W for i, (W, b) in enumerate(base)},
-             **{f'b{i}': b for i, (W, b) in enumerate(base)}, lam=a.lam, sim_laps=sim_laps)
+             **{f'b{i}': b for i, (W, b) in enumerate(base)}, lam=LAM_EFF, dims=DIMS, sim_laps=sim_laps)
 
     # ---- adaptation on each car: LoRA on every layer, hindsight relabelling
     def merged(lora):
@@ -142,7 +150,7 @@ def main():
         return optax.apply_updates(lo, u), st, l
 
     def as_policy(lora):
-        return dict(fada=[(np.asarray(W), np.asarray(b)) for W, b in merged(lora)], lam=a.lam)
+        return dict(fada=[(np.asarray(W), np.asarray(b)) for W, b in merged(lora)], lam=LAM_EFF, dims=DIMS)
 
     summary = dict(args=vars(a), real_laps={}, trials={})
     pols = {}
@@ -161,8 +169,8 @@ def main():
                 m = rc.lap_metrics(r, j['plan'])
                 summary['trials'][c].append(dict(it=it, goal=j['plan']['name'], failed=m.get('failed'), rms_ey=m.get('rms_ey')))
                 if len(r['obs']) > 1:
-                    data_x.append(np.concatenate([r['obs'][:-1], r['obs'][1:, :ND]], -1))
-                    data_y.append(r['a'][:-1])
+                    data_x.append(np.concatenate([r['obs'][:-H], r['obs'][H:][:, DIMS]], -1))
+                    data_y.append(r['a'][:-H])
             Xa, Ya = jnp.array(np.concatenate(data_x)), jnp.array(np.concatenate(data_y))
             for s in range(a.adapt_steps):
                 b = jnp.array(rng.integers(0, Xa.shape[0], min(2048, Xa.shape[0])))
@@ -170,7 +178,7 @@ def main():
             print(json.dumps(dict(car=c, it=it, loss=float(l), fails=int(sum(r['failed'] for r in res)))), flush=True)
         pols[c] = as_policy(lora)
         np.savez(os.path.join(a.out, f'{c}_policy.npz'), **{f'W{i}': W for i, (W, b) in enumerate(pols[c]['fada'])},
-                 **{f'b{i}': b for i, (W, b) in enumerate(pols[c]['fada'])}, lam=a.lam, mode='fada')
+                 **{f'b{i}': b for i, (W, b) in enumerate(pols[c]['fada'])}, lam=LAM_EFF, dims=DIMS, mode='fada')
     summary['sim_laps'] = sim_laps
     summary['seconds'] = time.time() - t0
     json.dump(summary, open(os.path.join(a.out, 'summary.json'), 'w'), indent=1)

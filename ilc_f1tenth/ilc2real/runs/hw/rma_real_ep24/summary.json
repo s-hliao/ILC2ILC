@@ -1,0 +1,73 @@
+{
+ "args": {
+  "init": "runs/rma_s0/policy_final.npz",
+  "arm": "rma_real",
+  "cars": [
+   "real_nom",
+   "real_mass",
+   "real_mu",
+   "real_act",
+   "real_lag"
+  ],
+  "goals": [
+   "mocap_square2fast_b10",
+   "mocap_square2fast_b18",
+   "mocap_square2fast_b25",
+   "mocap_figfast_b10",
+   "mocap_figfast_b18",
+   "mocap_figfast_b25"
+  ],
+  "per_iter": 24,
+  "checkpoints": [
+   24,
+   48,
+   96,
+   192,
+   384,
+   768,
+   1536,
+   2016
+  ],
+  "std": [
+   0.049,
+   0.046
+  ],
+  "epochs": 8,
+  "mb": 1024,
+  "lr": 0.0001,
+  "lr_critic": 0.001,
+  "critic_warmup": 300,
+  "gamma": 0.98,
+  "lam": 0.95,
+  "clip": 0.2,
+  "seed": 4242,
+  "gpu": "0",
+  "policy": "runs/rma_s0/policy_final.npz",
+  "iters": 24,
+  "trial": "ppo_real_car",
+  "episodes_per_car": 24
+ },
+ "real_laps": {
+  "real_nom": 23.894251327075587,
+  "real_mass": 22.826879304109514,
+  "real_mu": 20.820931868039587,
+  "real_act": 24.040407602809598,
+  "real_lag": 23.09713286786688
+ },
+ "crashes": {
+  "real_nom": 1,
+  "real_mass": 4,
+  "real_mu": 3,
+  "real_act": 0,
+  "real_lag": 2
+ },
+ "episodes": {
+  "real_nom": 24,
+  "real_mass": 24,
+  "real_mu": 24,
+  "real_act": 24,
+  "real_lag": 24
+ },
+ "seconds": 24.497248649597168,
+ "safety_ey": 0.3
+}

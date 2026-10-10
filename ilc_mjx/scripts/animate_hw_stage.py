@@ -31,6 +31,9 @@ ap.add_argument("traj", nargs="+")
 ap.add_argument("--robot", required=True)
 ap.add_argument("--labels", nargs="*", default=None, help="compare: a label per file")
 ap.add_argument("--label", help="eval: the method's name")
+ap.add_argument("--goals-label", default="the reserved test goals (never trained on, never flown in the hardware stage)",
+                help="eval: what the goals are, for the title")
+ap.add_argument("--episodes", type=int, default=0, help="eval / compare: at most this many recorded episodes per goal (0: all)")
 ap.add_argument("--out")
 ap.add_argument("--fps", type=int, default=17)
 ap.add_argument("--stride", type=int, default=30, help="ticks (2 ms) per frame: 30 at 17 fps ~ real time")
@@ -73,25 +76,45 @@ if a.mode == "hwstage":
         cond = T["meta"][idx[0]].get("train_cond", "nominal")
         segments.append((f"{a.robot}, hardware stage ({T['name']}, training under: {cond}) -- batch {it + 1} of {len(its)}: "
                          f"the policy after {it} update{'s' if it != 1 else ''}", panels))
-elif a.mode == "eval":
+PERT = dict(blk15="1.5 cm block under the feet", blk2="2 cm block under the feet", crouch="crouched start",
+            tall="tall start", noseup="nose-up start", nosedn="nose-down start", mocapbad="bad mocap (120 Hz, 15 ms)",
+            delay10="10 ms actuation delay")
+condlab = lambda c: "nominal" if "+" not in c else "perturbed: " + PERT.get(c.split("+", 1)[1], c.split("+", 1)[1])
+gtitle = lambda g: f"goal x {g[0]:.3f} m" + (f", box {g[1]:.3f} m" if g[1] > 0.004 else " (flat)")
+
+
+def by_cond_goal(T):
+    """{cond: {goal: [jump indices]}} of this robot's jumps (nominal first)."""
+    out = {}
+    for i in tl.select(T, robot=a.robot):
+        m = T["meta"][i]
+        out.setdefault(m.get("cond", a.robot), {}).setdefault(tuple(round(g, 4) for g in m["goal"]), []).append(i)
+    return dict(sorted(out.items(), key=lambda kv: ("+" in kv[0], kv[0])))
+
+
+if a.mode == "eval":                              # per condition, per episode: every goal at once
     T = Ts[0]
-    idx = tl.select(T, robot=a.robot)
-    goals = sorted({tuple(round(g, 4) for g in T["meta"][i]["goal"]) for i in idx}, key=lambda g: (g[1], g[0]))
-    panels = [(f"goal x {g[0]:.3f} m" + (f", box {g[1]:.3f} m" if g[1] > 0.004 else " (flat)"), T,
-               tl.select(T, robot=a.robot, goal=g)[0], []) for g in goals]
-    segments.append((f"{a.label or T['name'].replace('eval_', '')}, {a.robot}: the reserved test goals "
-                     f"(never trained on, never flown in the hardware stage)", panels))
-else:
+    what = a.label or T["name"].replace("eval_", "")
+    for c, per in by_cond_goal(T).items():
+        goals = sorted(per, key=lambda g: (g[1], g[0]))
+        n_ep = min(max(len(v) for v in per.values()), a.episodes or 99)
+        for e in range(n_ep):
+            panels = [(gtitle(g), T, per[g][e], []) for g in goals if len(per[g]) > e]
+            segments.append((f"{what}, {a.robot}, {condlab(c)}: {a.goals_label}"
+                             + (f" -- episode {e + 1} of {n_ep}" if n_ep > 1 else ""), panels))
+elif a.mode == "compare":                         # per condition, goal by goal, each episode in turn
     labels = a.labels or [T["name"].replace("eval_", "") for T in Ts]
-    goals = sorted({tuple(round(g, 4) for g in m["goal"]) for T in Ts for m in T["meta"] if m["robot"] == a.robot},
-                   key=lambda g: (g[1], g[0]))
-    for g in goals:
-        panels = []
-        for T, lab in zip(Ts, labels):
-            cur = tl.select(T, robot=a.robot, goal=g)
-            if cur:
-                panels.append((lab, T, cur[0], []))
-        segments.append((f"{a.robot}, sim-to-sim transfer, test goal x {g[0]:.3f} m" + (f", box {g[1]:.3f} m" if g[1] > 0.004 else " (flat)"), panels))
+    G = [by_cond_goal(T) for T in Ts]
+    conds = sorted({c for d in G for c in d}, key=lambda c: ("+" in c, c))
+    for c in conds:
+        goals = sorted({g for d in G for g in d.get(c, {})}, key=lambda g: (g[1], g[0]))
+        for g in goals:
+            cur = [d.get(c, {}).get(g, []) for d in G]
+            n_ep = min(max(len(x) for x in cur), a.episodes or 99)
+            for e in range(n_ep):
+                panels = [(lab, T, x[e], []) for T, lab, x in zip(Ts, labels, cur) if len(x) > e]
+                segments.append((f"{a.robot}, {condlab(c)}, {gtitle(g)}" + (f" -- episode {e + 1} of {n_ep}" if n_ep > 1 else ""),
+                                 panels))
 
 npan = max(len(p) for _, p in segments)
 ncol = min(npan, 4 if a.mode == "eval" else 3)

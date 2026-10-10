@@ -398,7 +398,7 @@ def fig8():
             ax.annotate(f'matches at {hit[0]}', (hit[0], tgt[0]), textcoords='offset points', xytext=(4, 8),
                         fontsize=8, color=col)
     ax.set_xscale('symlog', linthresh=24, linscale=0.6)
-    ticks = [0, 24, 48, 96, 192, 384, 768, 1536, 2016]
+    ticks = [0, 24, 48, 96, 192, 384, 768, 2016]
     ax.set_xticks(ticks)
     ax.set_xticklabels([str(t) for t in ticks], fontsize=8)
     ax.set_xlim(-2, 2300)

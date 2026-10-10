@@ -50,13 +50,14 @@ def arm(name, policy, args='', needs=()):
 # sim-stage networks.
 G2 = '--goals mocap_square2fast_b25 mocap_figfast_b25'
 P = lambda n: f'runs/{n}/policy_final.npz'
-for net in ('v3nom_s0', 'v3nom_s1', 'ppo_dr_s0'):
+# CHAINED 2-lap trials, ONE trial per iteration alternating the two b25 plans (--goal-cycle 1; user, 2026-10-09
+# evening: "at most maybe 2-10 laps"): 1..5 iterations = 2 / 4 / 6 / 8 / 10 real laps per car, an update after every
+# trial; 24 laps (hw24: 2 iterations x 6 goals) stays as the reference. lap2 trains on square2fast only and is
+# evaluated on both tracks: the one network's transfer across trajectories.
+for net in ('v3nom_s0', 'v3nom_s1', 'v3drB_s0', 'ppo_dr_s0'):
     tag = 'ppo_dr' if net == 'ppo_dr_s0' else net
     for it in (1, 2, 3, 4, 5):
-        arm(f'{tag}_lap{2 * it}', P(net), f'--iters {it} {G2}')
-arm('v3nom_s0_lap6g6', P('v3nom_s0'), '--iters 1')
-arm('v3nom_s0_lap6big', P('v3nom_s0'), f'--iters 3 {G2} --cap 0.1 --beta 0.7')
-arm('v3nom_s0_lap10big', P('v3nom_s0'), f'--iters 5 {G2} --cap 0.1 --beta 0.7')
+        arm(f'{tag}_lap{2 * it}', P(net), f'--iters {it} {G2} --goal-cycle 1')
 job('trackilc_laps', f'F1T_PROCS={CPU_PROCS} {PY} -u track_ilc.py --out runs/trackilc_laps --plans mocap_square2fast_b25 '
     f'mocap_figfast_b25 mocap_square2fast_b21 mocap_figfast_b21 mocap_square2fast_b14 mocap_figfast_b14 mocap_square2fast_b0 '
     f'mocap_figfast_b0 --budgets 1 2 3 4 5 --eval-runs 12 --eval-seed 1701 --gpu {{gpu}} > logs/trackilc_laps.log 2>&1',

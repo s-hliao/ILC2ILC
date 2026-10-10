@@ -45,7 +45,7 @@ ap.add_argument('--beta', type=float, default=0.5)
 ap.add_argument('--delta', type=float, default=0.02)
 ap.add_argument('--cap', type=float, default=0.08, help='rms cap of a lane step (normalized actions)')
 ap.add_argument('--max-ey', type=float, default=0.3)
-ap.add_argument('--err-scale', type=float, nargs=5, default=None, metavar=('EY', 'EPSI', 'VX', 'VY', 'R'),
+ap.add_argument('--err-scale', type=float, nargs=6, default=None, metavar=('EY', 'EPSI', 'VX', 'VY', 'R', 'V'),
                 help='the ILC error rows\' scales (default sim_jax.ERR_SCALE: 0.05 0.1 0.3 0.3 0.5)')
 ap.add_argument('--no-feedback-jac', action='store_true', help='ablation: open-loop G (K_t = 0)')
 ap.add_argument('--replay', type=int, default=4)

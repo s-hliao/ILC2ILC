@@ -29,7 +29,8 @@ def load(path):
     pol = [(d[f'W{i}'], d[f'b{i}']) for i in range(n)]
     if 'mode' in d.files and str(d['mode']) == 'fada' or 'lam' in d.files:
         orc = {k[len('oracle__'):]: np.asarray(d[k]) for k in d.files if k.startswith('oracle__')}
-        return dict(fada=pol, lam=float(d['lam']), oracle=orc or None)
+        return dict(fada=pol, lam=float(d['lam']), oracle=orc or None,
+                    dims=np.asarray(d['dims']) if 'dims' in d.files else None)
     ad = os.path.join(os.path.dirname(path), 'rma_adapt.npz')
     if 'mode' in d.files and str(d['mode']) == 'rma' and os.path.exists(ad):
         e = np.load(ad)

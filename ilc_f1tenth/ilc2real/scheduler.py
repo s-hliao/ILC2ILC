@@ -86,45 +86,48 @@ arm('lqr_zs', 'lqr', '--iters 0', LQ)
 job('trackilc_big', f'F1T_PROCS={CPU_PROCS} {PY} -u track_ilc.py --out runs/trackilc_big --budgets 3 4 12 --eval-runs 12 '
     f'--eval-seed 1701 --gpu {{gpu}} > logs/trackilc_big.log 2>&1', 'runs/trackilc_big/summary.json', LQ, 'cpu')
 P = lambda n: f'runs/{n}/policy_final.npz'
+# every hardware-stage arm flies CHAINED 2-lap trials (hw_stage.py's default; user, 2026-10-09 evening: "only do
+# 2 lap chaining"): iterations x 6 goals x 2 laps, so --iters 2 / 4 / 8 = 24 / 48 / 96 real laps per car. The 1-lap
+# arms are in runs_1lap/.
 arm('bcB_zs', P('bcB'), '--iters 0')
-arm('bcB_hw24b', P('bcB'), '--iters 4')
-arm('v1narrow_hw24', P('v1nom_s0'), '--iters 4')
+arm('bcB_hw24b', P('bcB'), '--iters 2')
+arm('v1narrow_hw24', P('v1nom_s0'), '--iters 2')
 for s in (0, 1, 2):
     arm(f'v3nom_s{s}_zs', P(f'v3nom_s{s}'), '--iters 0')
-    arm(f'v3nom_s{s}_hw24', P(f'v3nom_s{s}'), '--iters 4')
-arm('v3nom_s0_hw24_s2', P('v3nom_s0'), '--iters 4 --seed 9002')
-arm('v3nom_s0_hw24vs', P('v3nom_s0'), '--iters 4 --train-starts 0.5')
-arm('v3nom_s0_hw48', P('v3nom_s0'), '--iters 8')
-arm('v3nom_s0_hw96', P('v3nom_s0'), '--iters 16')
-arm('v3nom_s0_hw96_cTR', P('v3nom_s0'), '--iters 16 --anchor-n0 1e9')
-arm('v3nom_s0_hw24_openG', P('v3nom_s0'), '--iters 4 --jac open')
-arm('v3nom_s0_hw24_flip', P('v3nom_s0'), '--iters 4 --jac flip')
-arm('v3nom_s0_hw24_noTR', P('v3nom_s0'), '--iters 4 --anchor-w 0')
-arm('v3nom_s0_hw24_noRB', P('v3nom_s0'), '--iters 4 --rollback 0')
-arm('v3nom_s0_hw24_b25only', P('v3nom_s0'), '--iters 12 --goals mocap_square2fast_b25 mocap_figfast_b25')
+    arm(f'v3nom_s{s}_hw24', P(f'v3nom_s{s}'), '--iters 2')
+arm('v3nom_s0_hw24_s2', P('v3nom_s0'), '--iters 2 --seed 9002')
+arm('v3nom_s0_hw24vs', P('v3nom_s0'), '--iters 2 --train-starts 0.5')
+arm('v3nom_s0_hw48', P('v3nom_s0'), '--iters 4')
+arm('v3nom_s0_hw96', P('v3nom_s0'), '--iters 8')
+arm('v3nom_s0_hw96_cTR', P('v3nom_s0'), '--iters 8 --anchor-n0 1e9')
+arm('v3nom_s0_hw24_openG', P('v3nom_s0'), '--iters 2 --jac open')
+arm('v3nom_s0_hw24_flip', P('v3nom_s0'), '--iters 2 --jac flip')
+arm('v3nom_s0_hw24_noTR', P('v3nom_s0'), '--iters 2 --anchor-w 0')
+arm('v3nom_s0_hw24_noRB', P('v3nom_s0'), '--iters 2 --rollback 0')
+arm('v3nom_s0_hw24_b25only', P('v3nom_s0'), '--iters 6 --goals mocap_square2fast_b25 mocap_figfast_b25')
 for n in ('v3olG_s0', 'v3noexp_s0', 'v3drA_s0', 'v3drA_s1', 'v3drB_s0', 'v3drB_s1', 'v5ppoNom_s0', 'v5ppoDR_s0'):
     arm(f'{n}_zs', P(n), '--iters 0')
-    arm(f'{n}_hw24', P(n), '--iters 4')
+    arm(f'{n}_hw24', P(n), '--iters 2')
 arm('ppo_dr_zs', P('ppo_dr_s0'), '--iters 0')
-arm('ppo_dr_hw24', P('ppo_dr_s0'), '--iters 4')
-arm('ppo_dr_hw24_s2', P('ppo_dr_s0'), '--iters 4 --seed 9002')
+arm('ppo_dr_hw24', P('ppo_dr_s0'), '--iters 2')
+arm('ppo_dr_hw24_s2', P('ppo_dr_s0'), '--iters 2 --seed 9002')
 for k, sd in ((1, 9001), (2, 9002), (3, 9003)):
-    arm(f'ppo_dr_hw48' + ('' if k == 1 else f'_s{k}'), P('ppo_dr_s0'), f'--iters 8 --seed {sd}')
-arm('ppo_dr_hw96_cTR', P('ppo_dr_s0'), '--iters 16 --anchor-n0 1e9')
+    arm(f'ppo_dr_hw48' + ('' if k == 1 else f'_s{k}'), P('ppo_dr_s0'), f'--iters 4 --seed {sd}')
+arm('ppo_dr_hw96_cTR', P('ppo_dr_s0'), '--iters 8 --anchor-n0 1e9')
 arm('rma_zs', P('rma_s0'), '--iters 0', ['runs/rma_s0/rma_adapt.npz'])
 for s in (0, 1):
     arm(f'v6nom_s{s}_zs', P(f'v6nom_s{s}'), '--iters 0')
-    arm(f'v6nom_s{s}_hw24', P(f'v6nom_s{s}'), '--iters 4')
-    arm(f'v6nom_s{s}_hw24fb', P(f'v6nom_s{s}'), '--iters 4 --fallback-suffix _mu80')
-    arm(f'v6nom_s{s}_hw24fb3', P(f'v6nom_s{s}'), '--iters 4 --fallback-suffix _mu80 --fallback-after 3')
-arm('v6nom_s0_hw48fb3', P('v6nom_s0'), '--iters 8 --fallback-suffix _mu80 --fallback-after 3')
+    arm(f'v6nom_s{s}_hw24', P(f'v6nom_s{s}'), '--iters 2')
+    arm(f'v6nom_s{s}_hw24fb', P(f'v6nom_s{s}'), '--iters 2 --fallback-suffix _mu80 --fallback-after 1')
+    arm(f'v6nom_s{s}_hw24fb3', P(f'v6nom_s{s}'), '--iters 2 --fallback-suffix _mu80 --fallback-after 2')
+arm('v6nom_s0_hw48fb3', P('v6nom_s0'), '--iters 4 --fallback-suffix _mu80 --fallback-after 2')
 
 # ---- final: x12 re-evaluation of every arm, long chains, table, figures, GIFs (after all arms)
 ARMS = [j['name'][3:] for j in JOBS if j['name'].startswith('hw:')] + ['fada_hw24', 'fada_hw24_zs']
 ALL_DONE = [j['done'] for j in JOBS]
 job('reeval', f'F1T_PROCS=20 {PY} -u reeval.py {" ".join(ARMS)} > logs/reeval.log 2>&1', 'logs/reeval.done', ALL_DONE, 'cpu')
 JOBS[-1]['cmd'] += ' && touch logs/reeval.done'
-job('long', f'for a in v3nom_s0_hw24 ppo_dr_hw48 v6nom_s1_hw24fb v3nom_s0_zs; do F1T_PROCS=12 {PY} -u long_eval.py $a --laps 20 '
+job('long', f'for a in v3drB_s0_hw24 v3nom_s0_hw24 ppo_dr_hw48 v6nom_s1_hw24fb v3nom_s0_zs; do F1T_PROCS=12 {PY} -u long_eval.py $a --laps 20 '
     f'> logs/long_$a.log 2>&1; done && touch logs/long.done', 'logs/long.done', ['logs/reeval.done'], 'cpu')
 job('final', f'{PY} table.py --big > results_table.txt && {PY} figures.py > logs/figures.log 2>&1 && touch logs/final.done',
     'logs/final.done', ['logs/long.done'], 'host')
