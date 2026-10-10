@@ -212,12 +212,33 @@ dynamics).
 - [web] "Robot trains robot: Automatic real-world policy adaptation and learning for humanoids", arXiv 2508.12252.
 - [web] "Learning Deployable Locomotion Control via Differentiable Simulation", arXiv 2404.02887 (SHAC, quadruped).
 
-## 6. Methods and tools we use
+## 6. Ablations we tested (NOT part of DistILC)
 
-- [memory] **Gurumurthy et al.** -- VG-SAC / value-gradient regularization (the critic we audited; find the exact paper).
-- [memory] **Heess et al.**, "Learning Continuous Control Policies by Stochastic Value Gradients", NeurIPS 2015.
-- [memory] **Czarnecki et al.**, "Sobolev Training for Neural Networks", NeurIPS 2017 -- the --k-match Jacobian matching.
-- [memory] Broyden's method (secant update) -- --sens-adapt.
+Ideas we implemented, measured and dropped; the final recipe uses none of them. Cite these only alongside the ablation
+they support -- together they back the claim that the nominal model's Jacobians plus the measured outcome are enough,
+and that learning a critic, the feedback structure or the sensitivity from data does not help.
+
+- [memory] **Gurumurthy et al.** -- VG-SAC / value-gradient regularization (find the exact paper). The critic we started
+  from. Audit against exact closed-loop gradients on the GPU sim: its target (next action held fixed) is the OPEN-loop
+  gradient, uncorrelated with the closed-loop truth for a feedback policy (r = 0.00); teaching it closed-loop co-states
+  diverges (the co-states depend on the actor's gains, which follow the critic). Replaced by regressing onto the ILC's
+  own step (`log/dilc/deploy/NOTES.md`, finding 1).
+- [memory] **Heess et al.**, "Learning Continuous Control Policies by Stochastic Value Gradients", NeurIPS 2015. The
+  learned value gradient, retested in the goal-plane trainer with a fixed critic (vg1; vg2 adds critic-only targets at
+  replayed states): steps ~0.8 cosine to the exact ILC step; zero-shot transfer 32 % (vg1) / 21 % (vg2) vs 34 % for
+  the exact co-states. A learned gradient only adds error when the exact one is available.
+- [memory] **Czarnecki et al.**, "Sobolev Training for Neural Networks", NeurIPS 2017. Our `plane_train.py --k-match`
+  fits the network's feedback (d action / d error along each flown jump) to the iLQR gains of the landing cost
+  (Riccati on the jump's own finite-difference Jacobians) -- derivative matching in Sobolev training's spirit, though
+  only the feedback gains, to a local LQR solution. Motivated by the structure probe (learned feedback 2-4x iLQR's,
+  amplifying late in the push). It aligns the gains (cos 0.2-0.85 -> 0.78-0.86) but not transfer (22 % vs 31 % control
+  at one weight, 36 % = control at another): not adopted.
+- [memory] **Broyden's method** (rank-1 secant update; Broyden 1965). Our `deploy.py --secant` / `--sens-adapt
+  goal|shared`: the nominal sim's landing sensitivity S corrected from consecutive real jumps at a goal,
+  C += w (de - (S + C) da) da' / |da|^2 (per goal, or shared across goals) -- adapting the sensitivity without
+  estimating model parameters. No arm beat the plain model sensitivity (33-34 % vs 33-35 % at 24 jumps); every
+  estimated sensitivity predicted the next landing change poorly (cos 0.31-0.47), since one jump's trial noise is
+  about one step's effect. (Abbeel et al.'s corrected-model direction, Section 3, was tested the same way: a tie.)
 
 ## 7. The car platform
 
