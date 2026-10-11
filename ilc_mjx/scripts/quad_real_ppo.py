@@ -56,6 +56,8 @@ ap.add_argument("--clip", type=float, default=0.2)
 ap.add_argument("--eval-episodes", type=int, default=4)
 ap.add_argument("--seed", type=int, default=6060)
 ap.add_argument("--overlay", default="/ilc_ws/log/dilc/plane/fixbox/overlay")
+ap.add_argument("--land-w", type=float, default=0.01, help="terminal reward weight on the landing cost")
+ap.add_argument("--fall-pen", type=float, default=20.0, help="terminal penalty for a fall")
 ap.add_argument("--eval-only", action="store_true", help="skip training: evaluate the checkpoints in OUT")
 a = ap.parse_args()
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
@@ -296,7 +298,7 @@ def train():
                     rc = np.asarray(ep["rc"], np.float32)
                     fell = float(ep["fell"])
                     rew = -a.c_dense * rc[:NC, 0]
-                    final = 0.01 * float(rc[:, 2].sum()) + 20.0 * fell
+                    final = a.land_w * float(rc[:, 2].sum()) + a.fall_pen * fell
                     rew[-1] -= final
                     scores.append(final)
                     falls[r] += int(fell)
