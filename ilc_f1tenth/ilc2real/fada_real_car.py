@@ -34,6 +34,7 @@ ap.add_argument('--eval-plans', nargs='+', default=[f'mocap_{t}_b{b}' for t in (
 ap.add_argument('--per-iter', type=int, default=24)
 ap.add_argument('--checkpoints', type=int, nargs='+', default=[24, 48, 96, 192, 384, 768, 1536, 2016])
 ap.add_argument('--lam', type=float, default=0.8)
+ap.add_argument('--horizon', type=int, default=1, help='the IDM\'s target H control periods ahead (fada_car.py --horizon; e.g. the v2 IDM fada_v2_h4: 4); the decay target is lam^H d')
 ap.add_argument('--oracle-arm', default='')
 ap.add_argument('--oracle-laps', type=float, default=3.0, help='chained laps per plan the oracle flies on each car')
 ap.add_argument('--privileged', type=int, default=1)
@@ -56,7 +57,11 @@ import bank                                      # noqa: E402
 import real_car as rc                            # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ND = 8                                            # the observation's plan-deviation entries (fada_car.py)
+_IDM = np.load(a.idm)                             # the IDM's target entries (fada_car.py --dims; all 8 by default)
+DIMS = np.asarray(_IDM['dims']) if 'dims' in _IDM.files else np.arange(8)
+ND = len(DIMS)
+H = a.horizon
+LAM_EFF = a.lam ** H
 
 
 def mlp(ps, x):
@@ -82,7 +87,7 @@ def oracle_tables(car, plans):
     for (name, pl), r in zip(plans.items(), res):
         laps += max(float(r['laps']), 0.0)
         M = len(pl['x'])
-        d = np.asarray(r['obs_true'])[:, :ND]
+        d = np.asarray(r['obs_true'])[:, DIMS]
         idx = np.asarray(r['idx']) % M
         s, n = np.zeros((M, ND)), np.zeros(M)
         np.add.at(s, idx, d)
@@ -132,8 +137,8 @@ def main():
     crashes = {c: 0 for c in a.cars}
 
     def policy(c):
-        return dict(fada=[(np.asarray(W), np.asarray(b)) for W, b in merged(lora[c])], lam=a.lam,
-                    oracle=oracle.get(c) or None)
+        return dict(fada=[(np.asarray(W), np.asarray(b)) for W, b in merged(lora[c])], lam=LAM_EFF,
+                    oracle=oracle.get(c) or None, dims=None if ND == 8 and H == 1 else DIMS)
 
     def write_ckpt(k, t):
         d = os.path.join(HERE, 'runs/hw', f'{a.arm}_ep{k}')
@@ -141,7 +146,8 @@ def main():
         for c in a.cars:
             p = policy(c)
             np.savez(os.path.join(d, f'{c}_policy.npz'), **{f'W{i}': W for i, (W, b) in enumerate(p['fada'])},
-                     **{f'b{i}': b for i, (W, b) in enumerate(p['fada'])}, lam=a.lam, mode='fada',
+                     **{f'b{i}': b for i, (W, b) in enumerate(p['fada'])}, lam=LAM_EFF, mode='fada',
+                     **({} if ND == 8 and H == 1 else dict(dims=DIMS)),
                      **{f'oracle__{n}': v for n, v in (oracle.get(c) or {}).items()})
         args = dict(vars(a), policy=a.idm, episodes_per_car=k)
         json.dump(args, open(os.path.join(d, 'args.json'), 'w'), indent=1)
@@ -168,9 +174,9 @@ def main():
                 laps[c] += max(float(r['laps']), 0.0)
                 crashes[c] += int(bool(r['failed']))
                 o = np.asarray(r['obs_true'] if a.privileged else r['obs'])
-                if len(o) > 1:                    # hindsight relabelling: (o_t, d_{t+1} reached) -> a_t as flown
-                    data[c][0].append(np.concatenate([o[:-1], o[1:, :ND]], -1))
-                    data[c][1].append(np.asarray(r['a'])[:-1])
+                if len(o) > H:                    # hindsight relabelling: (o_t, d_{t+H} reached) -> a_t as flown
+                    data[c][0].append(np.concatenate([o[:-H], o[H:][:, DIMS]], -1))
+                    data[c][1].append(np.asarray(r['a'])[:-H])
             eps[c] += len(rr)
             X, Y = jnp.array(np.concatenate(data[c][0]), jnp.float32), jnp.array(np.concatenate(data[c][1]), jnp.float32)
             for s in range(a.adapt_steps):

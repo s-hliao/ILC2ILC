@@ -78,25 +78,33 @@ def arm_crashes(arm):
 
 
 def fig8():
-    series = [('PPO+DR, fine-tuned on the cars (privileged critic)', 'ppo_real', C['pink'], 's'),
-              ('RMA teacher with each car\'s TRUE latent, fine-tuned', 'rma_real', C['red'], 'v'),
-              ('FADA, planner gain 0.95', 'fada_real_l095', C['orange'], 'o'),
-              ('FADA, oracle planner (refit on our real laps)', 'fada_real_oracle', C['yellow'], 'D')]
+    series = [('PPO+DR, fine-tuned on the cars (privileged critic)', 'ppo_real', C['pink'], 's')]
+    BJ = json.load(open(os.path.join(HERE, '..', '..', 'paper', 'baselines.json')))['car']
+    for role, col, mk in (('rma_nonoracle', C['red'], 'v'), ('rma_oracle', C['red'], 'v'), ('fada_nonoracle', C['orange'], 'P'),
+                          ('fada_oracle', C['orange'], 'P')):   # per method the best non-oracle and the best oracle variant
+        b = BJ.get(role, {}).get('best')
+        if b:
+            series.append((f"{role.split('_')[0].upper()} ({'ORACLE' if b['oracle'] else 'non-oracle'}): {b['label']}",
+                           b['source'] if b['kind'] == 'curve' else ('POINT', b['source'], b['best_budget']), col, mk))
     ours = [('ours + DR (B), 24 laps', 'v3drB_s0_hw24', C['green'], '^'),
-            ('ours + DR (B, task objective), 24 laps', 'v3drBt_s0_hw24', C['blue'], '*')]   # + their 0-10-lap arms
+            ('ours + DR (B, task objective, stopping rule), 24 laps', 'v3drBt_stop_hw24', C['blue'], '*')]   # + their 0-10-lap arms
     fig, axs = plt.subplots(1, 3, figsize=(16, 4.4))
     for lab, arm, col, mk in series:
-        pts = [(ep, arm_eval(f'{arm}_ep{ep}')) for ep in EPS]
+        pts = ([(arm[2], arm_eval(arm[1]))] if isinstance(arm, tuple) else      # a picked single-budget variant
+               [(ep, arm_eval(f'{arm}_ep{ep}')) for ep in EPS])
         pts = [(ep, e) for ep, e in pts if e]
         if not pts:
             continue
         x = [max(ep, 0) for ep, _ in pts]
         r = [pooled(e, plans='_b25') for _, e in pts]
         axs[0].errorbar(x, [q[0] for q in r], yerr=[q[1] for q in r], color=col, marker=mk, ms=5, lw=1.6, capsize=2,
-                        label=lab, mec='#333' if col == C['yellow'] else col, mew=0.5)
+                        label=lab, mec='#333' if col == C['yellow'] else col, mew=0.5, ls='--' if 'ORACLE' in lab else '-',
+                        mfc='white' if 'ORACLE' in lab else col)
         axs[1].plot(x, [100 * np.mean([e['real_mu'][p]['success'] for p in e['real_mu'] if p.endswith('_b25')])
                         for _, e in pts], color=col, marker=mk, ms=5, lw=1.6, mec='#333' if col == C['yellow'] else col,
                     mew=0.5)
+        if isinstance(arm, tuple):
+            continue
         axs[2].plot(x[1:], [arm_crashes(f'{arm}_ep{ep}') for ep, _ in pts[1:]], color=col, marker=mk, ms=5, lw=1.6,
                     mec='#333' if col == C['yellow'] else col, mew=0.5)
     for lab, arm, col, mk in ours:                  # our own real-data budget: zero-shot, 2-10 laps, 24 laps
@@ -136,9 +144,9 @@ def fig8():
     axs[2].text(2.2, 0.15, 'ours: 0 crashes at every budget', fontsize=8, color='#333')
     axs[2].set_title('real-world cost', fontsize=10)
     h, l = axs[0].get_legend_handles_labels()
-    fig.legend(h, l, fontsize=8, frameon=False, ncol=3, loc='lower center', bbox_to_anchor=(0.5, -0.1))
-    fig.suptitle('Real-data budget: ours + DR reaches 80 % in 4 laps per car (0 crashes); baselines trained on the '
-                 'cars with privileged data need ~1,500 laps and hundreds of crashes', fontsize=10.5)
+    fig.legend(h, l, fontsize=8, frameon=False, ncol=3, loc='lower center', bbox_to_anchor=(0.5, -0.2))
+    fig.suptitle('Real-data budget: ours (0-10 laps per car, 0 crashes) against baselines trained on the cars with '
+                 'privileged data (up to 2,016 laps per car)', fontsize=10.5)
     fig.savefig(os.path.join(OUT, 'fig8_data_matching.png'))
     plt.close(fig)
 

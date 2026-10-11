@@ -41,15 +41,19 @@ PERT_NAME = dict(blk15="block 1.5 cm", blk2="block 2 cm", crouch="crouched", tal
                  nosedn="nose down", mocapbad="bad mocap", delay10="10 ms delay")
 # method -> (run, nominal tag, perturbed tag); the zero-shot rows read 'start', adapted rows 'final'
 METHODS = [("Ours, zero-shot", "hw6g16_v10s2it20", "start"), ("Ours, 24 real jumps", "gate_loose", "final"),
-           ("Ours, 96 real jumps", "hw6g16_v10s2it20", "final"), ("Our learner + DR (A), zero-shot", "base/eval_dr_plain", "start"),
-           ("PPO + DR", "base/eval_ppo_plain", "start"), ("RMA", "base/eval_rma", "start"),
-           ("RMA, cross-trial", "base/eval_rma_ctx", "final"), ("FADA (adapted)", "base/eval_fada", "final"),
-           ("Our learner + DR (A), 24 real jumps", "drA_hw24", "final"),
-           ("Our learner + DR (B), zero-shot", "drB_hw24", "start"),
-           ("Our learner + DR (B), 24 real jumps", "drB_hw24", "final")]
-# (categorical slot, hatch) per method: the 8 hues in fixed order; the DR family (our learner + DR, fine-tuned A /
-# from scratch B, zero-shot / after our hardware stage) shares slot 3 and is told apart by hatching (no 9th hue)
-STYLE = [(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0), (6, 0), (7, 0), (3, 1), (3, 2), (3, 3)]
+           ("Ours, 96 real jumps", "hw6g16_v10s2it20", "final"), ("PPO + DR", "base/eval_ppo_plain", "start"),
+           ("RMA, best non-oracle", "base/pick_rma_nonoracle", "start"), ("RMA, best oracle", "base/pick_rma_oracle", "start"),
+           ("FADA, best non-oracle", "base/pick_fada_nonoracle", "start"), ("FADA, best oracle", "base/pick_fada_oracle", "start"),
+           ("Our learner + DR (A), zero-shot", "drA_hw24", "start"), ("Our learner + DR (A), 24 real jumps", "drA_hw24", "final"),
+           ("Our learner + DR (A), 96 real jumps", "drA_nogate_hw96", "final"),
+           ("Our learner + DR (B), zero-shot", "drB_hw24", "start"), ("Our learner + DR (B), 24 real jumps", "drB_hw24", "final"),
+           ("Our learner + DR (B), 96 real jumps", "drB_nogate_hw96", "final")]
+# the RMA / FADA rows: per method the best non-oracle and the best oracle variant (src/paper/baselines.json, flown under the
+# perturbations by scripts/eval_picks.py); the oracle ones exist on r1 s1 r5 only, so the method figures pool those 3 robots
+MR = ["real_r1", "real_s1", "real_r5"]
+# (categorical slot, hatch) per method: hues in fixed order; oracle = the method's hue, hatched; the DR family (our learner + DR,
+# fine-tuned A / from scratch B, at 0 / 24 / 96 real jumps) shares slot 3, told apart by hatching
+STYLE = [(0, 0), (1, 0), (2, 0), (4, 0), (7, 0), (7, 1), (6, 0), (6, 1), (3, 0), (3, 1), (3, 5), (3, 2), (3, 3), (3, 4)]
 ok = lambda r: (not r["fell"]) and abs(r["ex"]) <= 0.05 and abs(r["ez"]) <= 0.03
 
 
@@ -65,7 +69,8 @@ def wilson(k, n, z=1.96):
 
 def load(run, tag, rob=False, robots=ROBOTS):
     fn = f"eval_planefinal_{'rob_' if rob else ''}{tag}.json"
-    return [dict(r, robot=rb) for rb in robots for f in glob.glob(os.path.join(P, run, rb, fn)) for r in json.load(open(f))]
+    root = lambda rb: P if os.path.exists(os.path.join(P, run, rb, fn)) else os.path.join(P, "fixbox")   # newer runs: fixbox/ only
+    return [dict(r, robot=rb) for rb in robots for f in glob.glob(os.path.join(root(rb), run, rb, fn)) for r in json.load(open(f))]
 
 
 def kind_of(r):
@@ -94,9 +99,9 @@ def save(fig, name):
 def available():
     out = []
     for i, (lab, run, tag) in enumerate(METHODS):
-        nom = load(run, tag)
+        nom = load(run, tag, robots=MR)
         if nom:
-            out.append((i, lab, run, tag, nom, load(run, tag, rob=True)))
+            out.append((i, lab, run, tag, nom, load(run, tag, rob=True, robots=MR)))
     return out
 
 
@@ -129,7 +134,7 @@ def fig_methods():
     axs[1, 0].set_ylabel("falls (%)")
     handles = [plt.Rectangle((0, 0), 1, 1, color=CAT[STYLE[m[0]][0]], hatch=HATCH[STYLE[m[0]][1]], ec=SURF) for m in ms]
     fig.legend(handles, [m[1] for m in ms], loc="lower center", ncol=4, frameon=False, bbox_to_anchor=(0.5, -0.06))
-    fig.suptitle("Transfer to the 4 CPU robots by perturbation kind (reserved test goals; 95% intervals)", x=0.01, ha="left", fontsize=11)
+    fig.suptitle("Transfer to the CPU robots r1 s1 r5 by perturbation kind (reserved test goals; 95% intervals)", x=0.01, ha="left", fontsize=11)
     fig.tight_layout(rect=(0, 0.1, 1, 1))
     save(fig, "01_methods_by_perturbation_kind.png")
 
@@ -445,7 +450,7 @@ def fig_tolerance():
     import success_metrics as sm
     rows = []
     for lab, run, tag in METHODS:
-        rs = sm.load(run, tag)
+        rs = load(run, tag, robots=MR)               # the method figures' robots (r1 s1 r5)
         if rs:
             rows.append((lab, sm.summary(rs)))
     sm.plot(rows, os.path.join(OUT, "07_success_vs_tolerance.png"))

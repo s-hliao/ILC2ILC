@@ -38,6 +38,7 @@ ap.add_argument("--horizon", type=int, default=1, help="the planner's target and
 ap.add_argument("--load-data", default="", help="skip the collection: OUT/data.npz of an earlier run")
 ap.add_argument("--gpu", default="0")
 ap.add_argument("--plane", action="store_true", help="2D goal plane: goals uniform over the bank's valid region (flat and box jumps), evals on its grid")
+ap.add_argument("--true-robot", default="", help="ORACLE dynamics: collect at this robot's TRUE dynamics (its condition string's dynamics part, jump.JumpEnv.dyn_from_cond -- the latent RMA's oracle teacher gets) instead of nominal / DR")
 ap.add_argument("--est-window", type=float, default=0.0, help="s: the policy observes the robots' estimator (jump.Config)")
 a = ap.parse_args()
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", a.gpu)
@@ -70,6 +71,11 @@ ws = {k: jnp.asarray(v, jnp.float32) for k, v in np.load(a.policy).items() if k 
 OD = 31
 rng = np.random.default_rng(a.seed)
 nominal = lambda B: np.tile([1.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 0.0], (B, 1))
+if a.true_robot:                                 # the robot's condition strings (no ROS at import)
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "ilc_quad", "scripts"))
+    import dilc_execute as dx  # noqa: E402
+    TRUE = np.asarray(JumpEnv.dyn_from_cond(None, dx.NAMED[a.true_robot]), float)
+    nominal = lambda B: np.tile(TRUE, (B, 1))    # every collection / zero-shot "nominal" batch at the TRUE dynamics
 t0 = time.time()
 Po, Pt, Io, It, Ia, Im = [], [], [], [], [], []
 env.priv_dim = NZ if a.priv else 0
@@ -107,7 +113,7 @@ else:
 Po, Pt, Io, It, Ia, Im = map(f32, (Po, Pt, Io, It, Ia, Im))
 assert all(bool(jnp.isfinite(x).all()) for x in (Po, Pt, Io, It, Ia, Im)), "non-finite FADA data"
 t_col = time.time() - t0
-say(f"data: planner {Po.shape[0]}, IDM {Io.shape[0]} samples ({'DR' if a.dr else 'nominal'}, source "
+say(f"data: planner {Po.shape[0]}, IDM {Io.shape[0]} samples ({'DR' if a.dr else ('TRUE ' + a.true_robot) if a.true_robot else 'nominal'}, source "
     f"{'privileged teacher' if a.priv else 'policy'}), collected in {t_col:.0f} s")
 
 key = jax.random.PRNGKey(a.seed)

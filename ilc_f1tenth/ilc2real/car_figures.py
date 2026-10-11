@@ -46,7 +46,9 @@ SURF = '#fcfcfb'
 plt.rcParams.update({'figure.dpi': 130, 'savefig.dpi': 130, 'font.size': 10, 'axes.spines.top': False,
                      'axes.spines.right': False, 'axes.grid': True, 'grid.alpha': 0.25, 'savefig.bbox': 'tight',
                      'figure.facecolor': SURF, 'axes.facecolor': SURF, 'savefig.facecolor': SURF})
-BUDGETS = (0, 2, 10)
+_BJ = json.load(open(os.path.join(HERE, '..', '..', 'paper', 'baselines.json')))     # paper/select_baselines.py
+LOW, ASYM = _BJ.get('budgets', {}).get('car', {}).get('low', 2), _BJ.get('budgets', {}).get('car', {}).get('asym', 10)
+BUDGETS = (0, LOW, ASYM)                         # zero-shot, the LOW budget (most of the stage's value), the ASYMptotic one
 SCORES = (('success', 'success (%)'), ('complete', 'completes all 5 laps (%)'))
 
 
@@ -102,18 +104,24 @@ def at(nets, L):
 
 # (label, colour, marker, sim networks (seeds pooled), hardware-stage seed variants)
 METHODS = [
-    ('ours + DR (task objective)', C['blue'], '*', ['v3drBt_s0'], []),
+    ('ours + DR (task objective, stopping rule)', C['blue'], '*', ['v3drBt_stop'], []),
     ('ours + DR (B)', C['green'], '^', ['v3drB_s0', 'v3drB_s1'], []),
     ('ours + DR (A)', C['sky'], 'v', ['v3drA_s0', 'v3drA_s1'], []),
     ('ours, nominal sim', C['black'], 'o', ['v3nom_s0', 'v3nom_s1', 'v3nom_s2'], []),
     ('PPO+DR + our hardware stage', C['pink'], 's', ['ppo_dr'], ['_s2']),
-    ('RMA (zero-shot)', C['red'], 'D', ['rma'], []),
-    ('FADA (zero-shot)', C['orange'], 'P', ['fada_hw24'], []),
+    # RMA / FADA: per method the best non-oracle and the best oracle variant, each at its own best real budget (a FIXED arm)
+    *[(f"{role.split('_')[0].upper()}, best {'ORACLE' if b['oracle'] else 'non-oracle'}: {b['label']} ({b['best_budget']} laps)",
+       C['red'] if role.startswith('rma') else C['orange'], 'D' if role.startswith('rma') else 'P',
+       ('FIXED', b['source'] if b['kind'] == 'point' else f"{b['source']}_ep{b['best_budget']}"), [])
+      for role in ('rma_nonoracle', 'rma_oracle', 'fada_nonoracle', 'fada_oracle')
+      for b in [_BJ['car'].get(role, {}).get('best')] if b],
     ('plan LQR', C['grey'], 'x', ['lqr'], []),
 ]
 
 
 def method_arms(nets, var, L):
+    if nets and nets[0] == 'FIXED':                  # a picked baseline at its own budget: shown once, in the ASYM slot
+        return have([nets[1]]) if L == ASYM else []
     arms = at(nets, L)
     if L:
         arms += have([f'{n}_lap{L}{v}' for n in nets for v in var])
@@ -149,7 +157,7 @@ def fig1():
                 if arms:
                     rows.append((lab, L, col, rate(arms, key=key)))
         ti = trackilc(key)
-        for L in (2, 10):
+        for L in (LOW, ASYM):
             if L in ti:
                 rows.append(('per-plan ILC (no network)', L, C['grey'], ti[L]))
         labs = list(dict.fromkeys(r[0] for r in rows))
@@ -170,7 +178,8 @@ def fig1():
         ax.grid(axis='x', alpha=0)
     from matplotlib.patches import Patch
     axs[0].legend([Patch(facecolor=SURF, edgecolor='#555', hatch='//'), Patch(facecolor='#555', alpha=0.45),
-                   Patch(facecolor='#555')], ['zero-shot', '+ 2 real laps', '+ 10 real laps'], fontsize=8,
+                   Patch(facecolor='#555')], ['zero-shot', f'+ {LOW} real laps (low)', f'+ {ASYM} real laps (asymptotic; '
+                                              'RMA / FADA: at their own best budget)'], fontsize=8,
                   frameon=False, ncol=3, loc='upper right')
     axs[0].set_title(f'Full-drift (beta 25) plans, 5 cars x 2 tracks x 5-lap chained runs: success (top) and full '
                      f'completion (bottom){TAG}', fontsize=10)
@@ -179,12 +188,12 @@ def fig1():
 
 
 def fig2():
-    sel = [m for m in METHODS if m[0] in ('ours + DR (task objective)', 'ours + DR (B)', 'ours, nominal sim',
-                                         'PPO+DR + our hardware stage', 'RMA (zero-shot)', 'plan LQR')]
+    sel = [m for m in METHODS if m[0] in ('ours + DR (task objective, stopping rule)', 'ours + DR (B)', 'ours, nominal sim',
+                                         'PPO+DR + our hardware stage', 'plan LQR') or m[3][0] == 'FIXED']
     fig, axs = plt.subplots(2, 1, figsize=(12.5, 7.6), sharex=True)
     for ax, (key, yl) in zip(axs, SCORES):
-        rows = [(lab + ('' if L else ', zero-shot') + (f' + {L}' if L else ''), col, L, method_arms(nets, var, L))
-                for lab, col, mk, nets, var in sel for L in (0, 10) if method_arms(nets, var, L)]
+        rows = [(lab + ('' if L else ', zero-shot') + (f' + {L}' if L and lab.startswith(('ours', 'PPO')) else ''), col, L, method_arms(nets, var, L))
+                for lab, col, mk, nets, var in sel for L in (0, ASYM) if method_arms(nets, var, L)]
         w = 0.85 / len(rows)
         for j, (lab, col, L, arms) in enumerate(rows):
             for i, c in enumerate(CARS):
@@ -199,15 +208,21 @@ def fig2():
     axs[1].set_xticks(range(len(CARS)))
     axs[1].set_xticklabels([CAR_LAB[c] for c in CARS])
     axs[1].legend(fontsize=7.5, frameon=False, ncol=4, loc='upper center', bbox_to_anchor=(0.5, -0.1))
-    axs[0].set_title(f'Per car, zero-shot (hatched) and + 10 real laps (beta 25 plans){TAG}', fontsize=10)
+    axs[0].set_title(f'Per car, zero-shot (hatched) and + {ASYM} real laps (beta 25 plans){TAG}', fontsize=10)
     fig.savefig(os.path.join(OUT, 'fig2_per_car.png'))
     plt.close(fig)
 
 
 def fig3():
     fig, axs = plt.subplots(1, 3, figsize=(16, 4.4))
-    Ls = (0, 2, 4, 6, 8, 10)
+    Ls = tuple(L for L in (0, 2, 4, 6, 8, 10, 24, 48, 96) if L <= ASYM)
     for lab, col, mk, nets, var in METHODS:
+        if nets[0] == 'FIXED':                       # a picked baseline: its score at its own budget, as a reference line
+            aa = method_arms(nets, var, ASYM)
+            for ax, (key, _) in zip(axs[:2], SCORES):
+                if aa:
+                    ax.axhline(rate(aa, key=key)[0], color=col, lw=1.3, ls='--' if 'ORACLE' in lab else ':', label=lab)
+            continue
         pts = [(L, method_arms(nets, var, L)) for L in Ls]
         pts = [(L, aa) for L, aa in pts if aa]
         if len(pts) < 2:
@@ -233,14 +248,20 @@ def fig3():
         ax.set_ylim(0, 105)
     h, l = axs[0].get_legend_handles_labels()
     fig.legend(h, l, fontsize=8, frameon=False, ncol=4, loc='lower center', bbox_to_anchor=(0.5, -0.12))
-    fig.suptitle(f'Real-lap budget, 0-10 laps per car (beta 25 plans){TAG}', fontsize=11)
+    for ax in axs:
+        if ASYM > 10:
+            ax.set_xscale('symlog', linthresh=10)
+        ax.axvline(LOW, color=C['grey'], lw=0.8, ls=':')
+        ax.axvline(ASYM, color=C['grey'], lw=0.8, ls=':')
+    fig.suptitle(f'Real-lap budget, 0-{ASYM} laps per car (beta 25 plans; dotted: the low {LOW} / asymptotic {ASYM} budgets; '
+                 f'RMA / FADA: dashed oracle, dotted non-oracle, each at its own best budget){TAG}', fontsize=10)
     fig.savefig(os.path.join(OUT, 'fig3_budget.png'))
     plt.close(fig)
 
 
 def fig5():
-    rows = [(lab + (', zero-shot' if L == 0 else f' + {L}'), col, '//' if L == 0 else None, method_arms(nets, var, L))
-            for lab, col, mk, nets, var in METHODS for L in (0, 10) if method_arms(nets, var, L)]
+    rows = [(lab + (', zero-shot' if L == 0 else (f' + {L}' if lab.startswith(('ours', 'PPO')) else '')), col, '//' if L == 0 else None, method_arms(nets, var, L))
+            for lab, col, mk, nets, var in METHODS for L in (0, ASYM) if method_arms(nets, var, L)]
     fig, axs = plt.subplots(1, 2, figsize=(14, 4.6))
     for ax, key, sc, yl in ((axs[0], 'rms_ey', 100, 'RMS lateral error, completed runs (cm)'),
                             (axs[1], 'mean_abs_beta', 1, 'mean |sideslip| flown (deg)')):
@@ -258,7 +279,7 @@ def fig5():
     axs[0].text(0, 10.3, 'the success band: 10 cm', fontsize=8, color=C['grey'])
     axs[1].axhline(25, color=C['grey'], ls=':', lw=1)
     axs[1].text(0, 25.5, 'the plans ask for 25 deg', fontsize=8, color=C['grey'])
-    fig.suptitle(f'Accuracy and the sideslip actually flown, zero-shot and + 10 real laps (beta 25 plans){TAG}',
+    fig.suptitle(f'Accuracy and the sideslip actually flown, zero-shot and + {ASYM} real laps (beta 25 plans){TAG}',
                  fontsize=10)
     fig.savefig(os.path.join(OUT, 'fig5_accuracy.png'))
     plt.close(fig)
@@ -307,8 +328,8 @@ def fig7():
                                    ('grip', 'grip plans (beta 0)'))):
         for ii, (key, yl) in enumerate(SCORES):
             ax = axs[ii, jj]
-            rows = [(lab + (', 0-shot' if L == 0 else f' + {L}'), col, L, method_arms(nets, var, L))
-                    for lab, col, mk, nets, var in METHODS for L in (0, 10) if method_arms(nets, var, L)]
+            rows = [(lab + (', 0-shot' if L == 0 else (f' + {L}' if lab.startswith(('ours', 'PPO')) else '')), col, L, method_arms(nets, var, L))
+                    for lab, col, mk, nets, var in METHODS for L in (0, ASYM) if method_arms(nets, var, L)]
             for i, (lab, col, L, arms) in enumerate(rows):
                 p, h, n = rate(arms, grp, key=key)
                 ax.bar(i, p, 0.7, color=col if L else SURF, edgecolor=col, hatch=None if L else '//', lw=1.1)
@@ -322,7 +343,7 @@ def fig7():
                 ax.set_ylabel(yl)
             if ii == 0:
                 ax.set_title(t, fontsize=10)
-    fig.suptitle(f'Beyond the training plans: zero-shot (hatched) and + 10 real laps{TAG}', fontsize=11)
+    fig.suptitle(f'Beyond the training plans: zero-shot (hatched) and + {ASYM} real laps{TAG}', fontsize=11)
     fig.savefig(os.path.join(OUT, 'fig7_plans.png'))
     plt.close(fig)
 

@@ -52,6 +52,8 @@ def jumps(src, tag, robots, rob=False):
         if d is None:
             continue
         f = os.path.join(P, d, rb, f"eval_planefinal_{'rob_' if rob else ''}{tag}.json")
+        if not os.path.exists(f):                    # the runs live in fixbox/ (plane/ keeps copies of the older ones)
+            f = os.path.join(P, 'fixbox', d, rb, f"eval_planefinal_{'rob_' if rob else ''}{tag}.json")
         if os.path.exists(f):
             out += json.load(open(f))
     return out
@@ -71,6 +73,47 @@ def three(src, tag, robots):
 
 
 mix = lambda base, r4m: {'real_r1': base, 'real_s1': base, 'real_r5': base, 'real_r4m': r4m}
+LOW, ASYM = 24, 96                               # the quadruped's two real budgets (paper/select_baselines.py: LOW gets >= 80 %
+#                                                  of the gain ASYM gets on the headline curve; ASYM where it plateaus)
+BASE = json.load(open(os.path.join(HERE, '..', '..', 'paper', 'baselines.json')))['quadruped']
+
+
+def at_it(run, k, robots):
+    """Our run's policy after k iterations of 6 real jumps (quad_eval_ckpts.py's it<k>/eval_planefinal.json)."""
+    out = []
+    for rb in robots:
+        f = os.path.join(P, 'fixbox', run, rb, f'it{k}', 'eval_planefinal.json')
+        if os.path.exists(f):
+            out += json.load(open(f))
+    return out
+
+
+# ours at 0 / LOW / ASYM real jumps per robot: one run each, LOW from its iteration-4 snapshot (no gate, as the headline)
+OURS = [('ours (nominal-sim learner)', 'hw6g16_v10s2it20', C['blue']),
+        ('our learner + DR (A: DR fine-tune)', 'drA_nogate_hw96', C['sky']),
+        ('our learner + DR (B: DR from scratch)', 'drB_nogate_hw96', C['green'])]
+
+
+def ours_at(run, budget, robots):
+    if budget == 0:
+        return jumps(run, 'start', robots)
+    return jumps(run, 'final', robots) if budget == ASYM else at_it(run, budget // 6, robots)
+
+
+def baseline_rows():
+    """The picked RMA / FADA baselines (best non-oracle, best oracle each): (label, (p, h, n), colour, budget)."""
+    rows = []
+    for role, col in (('rma_nonoracle', C['red']), ('rma_oracle', C['red']), ('fada_nonoracle', C['orange']),
+                      ('fada_oracle', C['orange'])):
+        b = BASE.get(role, {}).get('best')
+        if not b:
+            continue
+        p, n = b['best_success'] / 100, b['best_n']
+        _, h = wilson(round(p * n), n)
+        tag = 'ORACLE' if b['oracle'] else 'non-oracle'
+        rows.append((f"{role.split('_')[0].upper()} ({tag}): {b['label']}, {b['best_budget']} real jumps", (100 * p, 100 * h, n),
+                     col, b['best_budget']))
+    return rows
 
 
 # ---- fig 1 --------------------------------------------------------------------------------------------------------
@@ -149,20 +192,16 @@ def rate_f(rs):
 
 # ---- fig 2 --------------------------------------------------------------------------------------------------------
 def fig2():
-    rows = [('ours, zero-shot', rate(jumps('hw6g16_v10s2it20', 'start', R3)), C['grey']),
-            ('ours + 24 real jumps', rate(jumps('gate_loose', 'final', R3)), C['blue']),
-            ('ours + 96 real jumps', rate(jumps('hw6g16_v10s2it20', 'final', R3)), C['blue']),
-            ('our learner + DR (A: DR fine-tune), zero-shot', rate(jumps('drA_hw24', 'start', R3)), C['grey']),
-            ('our learner + DR (A) + 24 real jumps', rate(jumps('drA_hw24', 'final', R3)), C['sky']),
-            ('our learner + DR (B: DR from scratch), zero-shot', rate(jumps('drB_hw24', 'start', R3)), C['grey']),
-            ('our learner + DR (B) + 24 real jumps', rate(jumps('drB_hw24', 'final', R3)), C['sky']),
-            ('per-goal ILC, 3 trials / test goal (24)', rate_f(jilc_eval(3, R3)), C['orange']),
-            ('per-goal ILC, 12 trials / test goal (96)', rate_f(jilc_eval(12, R3)), C['orange']),
-            ('PPO + DR, zero-shot', rate(jumps('base/eval_ppo_plain', 'start', R3)), C['pink']),
-            ('RMA, zero-shot', rate(jumps('base/eval_rma', 'start', R3)), C['pink']),
-            ('RMA cross-trial (6 calibration jumps)', rate(jumps('base/eval_rma_ctx', 'final', R3)), C['pink']),
-            ('FADA (48 LoRA jumps)', rate(jumps('base/eval_fada', 'final', R3)), C['pink'])]
-    fig, ax = plt.subplots(figsize=(8.6, 5.6))
+    rows = []
+    for lab, run, col in OURS:
+        rows += [(f'{lab}, zero-shot', rate(ours_at(run, 0, R3)), C['grey']),
+                 (f'{lab} + {LOW} real jumps (low budget)', rate(ours_at(run, LOW, R3)), col),
+                 (f'{lab} + {ASYM} real jumps (asymptotic)', rate(ours_at(run, ASYM, R3)), col)]
+    rows += [(f'per-goal ILC on the test goals, {LOW} jumps (3 / goal)', rate_f(jilc_eval(3, R3)), C['yellow']),
+             (f'per-goal ILC on the test goals, {ASYM} jumps (12 / goal)', rate_f(jilc_eval(12, R3)), C['yellow']),
+             ('PPO + DR, zero-shot', rate(jumps('base/eval_ppo_plain', 'start', R3)), C['pink'])]
+    rows += [(lab, r, col) for lab, r, col, _ in baseline_rows()]
+    fig, ax = plt.subplots(figsize=(9.6, 0.36 * len(rows) + 1.4))
     y = np.arange(len(rows))[::-1]
     for yi, (lab, (p, h, n), col) in zip(y, rows):
         ax.barh(yi, p, 0.7, xerr=h, color=col, capsize=2, error_kw=dict(lw=0.8), edgecolor='white', linewidth=1.5)
@@ -172,10 +211,12 @@ def fig2():
     ax.set_xlabel('success on the reserved test goals, nominal evaluation (%)')
     ax.set_xlim(0, 65)
     ax.grid(axis='y', alpha=0)
-    handles = [plt.Rectangle((0, 0), 1, 1, color=c) for c in (C['grey'], C['blue'], C['sky'], C['orange'], C['pink'])]
-    ax.legend(handles, ['zero-shot (no real jumps)', 'ours + hardware stage', 'our learner + DR + hardware stage',
-                        'per-goal ILC (JumpILC)', 'RL / adaptation baselines'], fontsize=8, frameon=False,
-              loc='upper center', bbox_to_anchor=(0.35, -0.1), ncol=3)
+    handles = [plt.Rectangle((0, 0), 1, 1, color=c) for c in (C['grey'], C['blue'], C['sky'], C['green'], C['yellow'],
+                                                              C['pink'], C['red'], C['orange'])]
+    ax.legend(handles, ['zero-shot (no real jumps)', 'ours + hardware stage', 'our learner + DR (A) + stage',
+                        'our learner + DR (B) + stage', 'per-goal ILC (JumpILC)', 'PPO + DR',
+                        'RMA (best non-oracle / oracle)', 'FADA (best non-oracle / oracle)'], fontsize=8, frameon=False,
+              loc='upper center', bbox_to_anchor=(0.35, -0.06), ncol=3)
     ax.set_title('DistILC vs baselines (robots r1 s1 r5, 95 % Wilson)', fontsize=11)
     fig.savefig(os.path.join(OUT, 'fig2_methods.png'))
     plt.close(fig)
@@ -365,18 +406,41 @@ def match_curve(name):
                 p, h = wilson(round(sum(x['success'] * x['n'] for x in v)), n)
                 out.append((int(k), 100 * p, 100 * h, n))
             return out
-    return []
+    return ckpt_scan(name)
+
+
+PER_ITER = {'fada_real': 24, 'fada_real_oracle': 24, 'fada_real_oracle16': 64, 'fada_real_true': 32}
+
+
+def ckpt_scan(name):
+    """A run still in progress (no summary yet): its scored checkpoints straight from the per-checkpoint evaluations --
+    quad_real_ppo.py's ck<K>/<robot>/ (K real jumps) or fada_adapt.py's <robot>/it<k>/ (k x PER_ITER jumps)."""
+    import glob
+    import re
+    pts = {}
+    for f in glob.glob(os.path.join(M, name, 'ck*', 'real_*', 'eval_planefinal.json')):
+        pts.setdefault(int(re.findall(r'ck(\d+)', f)[0]), []).append(f)
+    for f in glob.glob(os.path.join(M, name, 'real_*', 'it*', 'eval_planefinal.json')) if name in PER_ITER else []:
+        pts.setdefault(int(re.findall(r'/it(\d+)/', f)[0]) * PER_ITER[name], []).append(f)
+    out = []
+    for k, fs in sorted(pts.items()):
+        if len(fs) < 3:
+            continue
+        rows = [r for f in fs for r in json.load(open(f))]
+        p, h = wilson(sum((not r['fell']) and abs(r['ex']) <= 0.05 and abs(r['ez']) <= 0.03 for r in rows), len(rows))
+        out.append((k, 100 * p, 100 * h, len(rows)))
+    return out
 
 
 def fig8():
     """The data-matching study: the baselines trained ON THE ROBOTS with privileged data, from their sim policies --
     how many real jumps until they match our best model after the hardware stage?"""
     fig, ax = plt.subplots(figsize=(8.4, 4.6))
-    tgt = rate(jumps('drB_hw24', 'final', R3))
+    tgt = rate(ours_at('drB_nogate_hw96', LOW, R3))  # the target: ours + DR (B) at the LOW budget
     ax.axhspan(tgt[0] - tgt[1], tgt[0] + tgt[1], color=C['green'], alpha=0.12, lw=0)
     ax.axhline(tgt[0], color=C['green'], lw=1.2, ls='--')
-    ax.errorbar([24], [tgt[0]], yerr=[tgt[1]], color=C['green'], marker='^', ms=8, capsize=3, lw=0,
-                label=f'ours: our learner + DR (B) + 24 real jumps ({tgt[0]:.1f} %)', zorder=5)
+    ax.errorbar([LOW], [tgt[0]], yerr=[tgt[1]], color=C['green'], marker='^', ms=8, capsize=3, lw=0,
+                label=f'ours: our learner + DR (B) + {LOW} real jumps ({tgt[0]:.1f} %)', zorder=5)
     ours = [(0, jumps('hw6g16_v10s2it20', 'start', R3)), (24, jumps('gate_loose', 'final', R3)),
             (48, jumps('hw6g_v10s2it20', 'final', R3)), (96, jumps('hw6g16_v10s2it20', 'final', R3))]
     o = [(b, *rate(rs)) for b, rs in ours if rs]
@@ -384,10 +448,12 @@ def fig8():
         P, 'fixbox', run, rb, f'it{k}', 'eval_planefinal.json')] if os.path.exists(f) for r in json.load(open(f))]]
         if len(rs) >= 32 * len(R3)]                  # our runs every 6 real jumps (quad_eval_ckpts.py snapshots)
     for run, its, col, mk, lab in (('hw6g16_v10s2it20', range(17), C['blue'], 'o',
-                                    'ours, nominal-sim learner: our hardware stage, every 6 jumps'),
-                                   ('drB_hw24', range(5), C['green'], '^',
-                                    'ours: our learner + DR (B): our hardware stage, every 6 jumps')):
+                                    'ours, nominal-sim learner: our hardware stage'),
+                                   ('drB_nogate_hw96', (2, 4, 8), C['green'], '^',
+                                    'ours: our learner + DR (B): our hardware stage')):
         s_ = [(b, *rate(rs)) for b, rs in snap(run, its)]
+        if run.startswith('drB'):                    # + its start and its final (96) evaluations
+            s_ = [(0, *rate(ours_at(run, 0, R3)))] + s_ + [(ASYM, *rate(ours_at(run, ASYM, R3)))]
         if len(s_) > 2:
             ax.errorbar([q[0] for q in s_], [q[1] for q in s_], yerr=[q[2] for q in s_], color=col, marker=mk, ms=4,
                         lw=1.8, capsize=1.5, label=lab, zorder=4)
@@ -396,12 +462,21 @@ def fig8():
     if o:
         ax.plot([q[0] for q in o], [q[1] for q in o], color=C['blue'], marker='o', ms=5, lw=1.5,
                 label='ours, nominal-sim learner + our hardware stage')
-    runs = [('ppo_real', 'PPO+DR, then PPO on the robot (privileged critic)', C['pink'], 's', '-'),
-            ('rma_real', 'RMA teacher with the TRUE dynamics, then PPO on the robot', C['red'], 'D', '-'),
-            ('fada_real', "FADA: LoRA on the robot, its own (sim) planner", C['orange'], 'v', '-'),
-            ('fada_real_oracle', 'FADA with an ORACLE planner (fit to our real jumps)', C['orange'], 'v', '--')]
+    runs = [('ppo_real', 'PPO+DR, then PPO on the robot (privileged critic)', C['pink'], 's', '-')]
+    for role, col, mk in (('rma_nonoracle', C['red'], 'D'), ('rma_oracle', C['red'], 'D'), ('fada_nonoracle', C['orange'], 'v'),
+                          ('fada_oracle', C['orange'], 'v')):       # the picked baselines (paper/baselines.json)
+        b = BASE.get(role, {}).get('best')
+        if b:
+            runs.append((b, f"{role.split('_')[0].upper()} ({'ORACLE' if b['oracle'] else 'non-oracle'}): {b['label']}", col, mk,
+                         '--' if b['oracle'] else '-'))
     for name, lab, col, mk, ls in runs:
-        c = match_curve(name)
+        if isinstance(name, dict):                   # a picked baseline: its curve (or its single point) from baselines.json
+            c = []
+            for k, (sp, n) in sorted(name['curve'].items(), key=lambda kv: int(kv[0])):
+                p_, h_ = wilson(round(sp / 100 * n), n)
+                c.append((int(k), 100 * p_, 100 * h_, n))
+        else:
+            c = match_curve(name)
         if not c:
             continue
         x = [q[0] for q in c]

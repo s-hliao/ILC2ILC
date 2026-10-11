@@ -1,0 +1,411 @@
+{
+ "quadruped": {
+  "rma_nonoracle": {
+   "best": {
+    "label": "RMA, cross-trial (6 calibration jumps)",
+    "kind": "point",
+    "source": [
+     "base/eval_rma_ctx",
+     "final"
+    ],
+    "best_budget": 6,
+    "best_success": 16.7,
+    "best_n": 96,
+    "oracle": false,
+    "curve": {
+     "6": [
+      16.67,
+      96
+     ]
+    }
+   },
+   "candidates": [
+    {
+     "label": "RMA (adaptation module), zero-shot",
+     "best_success": 14.6,
+     "best_budget": 0
+    },
+    {
+     "label": "RMA, cross-trial (6 calibration jumps)",
+     "best_success": 16.7,
+     "best_budget": 6
+    }
+   ]
+  },
+  "rma_oracle": {
+   "best": {
+    "label": "RMA teacher with the TRUE dynamics, PPO on the robot",
+    "kind": "curve",
+    "source": "rma_real",
+    "best_budget": 384,
+    "best_success": 22.9,
+    "best_n": 96,
+    "oracle": true,
+    "curve": {
+     "0": [
+      15.62,
+      96
+     ],
+     "24": [
+      15.62,
+      96
+     ],
+     "48": [
+      21.88,
+      96
+     ],
+     "96": [
+      19.79,
+      96
+     ],
+     "192": [
+      20.83,
+      96
+     ],
+     "384": [
+      22.92,
+      96
+     ],
+     "768": [
+      19.79,
+      96
+     ],
+     "1536": [
+      16.67,
+      96
+     ],
+     "2016": [
+      0.0,
+      96
+     ]
+    }
+   },
+   "candidates": [
+    {
+     "label": "RMA teacher with the TRUE dynamics, PPO on the robot",
+     "best_success": 22.9,
+     "best_budget": 384
+    },
+    {
+     "label": "RMA teacher with the TRUE dynamics, PPO on the robot (reward fixed)",
+     "best_success": 15.6,
+     "best_budget": 0
+    }
+   ]
+  },
+  "fada_nonoracle": {
+   "best": {
+    "label": "FADA, LoRA on the robot, its own planner",
+    "kind": "curve",
+    "source": "fada_real",
+    "best_budget": 24,
+    "best_success": 34.4,
+    "best_n": 96,
+    "oracle": false,
+    "curve": {
+     "0": [
+      21.88,
+      96
+     ],
+     "24": [
+      34.38,
+      96
+     ],
+     "48": [
+      21.88,
+      96
+     ],
+     "96": [
+      23.96,
+      96
+     ],
+     "192": [
+      25.0,
+      96
+     ],
+     "384": [
+      30.21,
+      96
+     ],
+     "768": [
+      21.88,
+      96
+     ],
+     "1536": [
+      23.96,
+      96
+     ],
+     "2016": [
+      27.08,
+      96
+     ]
+    }
+   },
+   "candidates": [
+    {
+     "label": "FADA, LoRA on the robot (48 jumps)",
+     "best_success": 30.2,
+     "best_budget": 48
+    },
+    {
+     "label": "FADA, LoRA on the robot, its own planner",
+     "best_success": 34.4,
+     "best_budget": 24
+    }
+   ]
+  },
+  "fada_oracle": {
+   "best": {
+    "label": "FADA, ORACLE planner (6 goals)",
+    "kind": "curve",
+    "source": "fada_real_oracle",
+    "best_budget": 768,
+    "best_success": 38.5,
+    "best_n": 96,
+    "oracle": true,
+    "curve": {
+     "0": [
+      30.21,
+      96
+     ],
+     "24": [
+      27.08,
+      96
+     ],
+     "48": [
+      29.17,
+      96
+     ],
+     "96": [
+      32.29,
+      96
+     ],
+     "192": [
+      37.5,
+      96
+     ],
+     "384": [
+      33.33,
+      96
+     ],
+     "768": [
+      38.54,
+      96
+     ],
+     "1536": [
+      33.33,
+      96
+     ],
+     "2016": [
+      30.21,
+      96
+     ]
+    }
+   },
+   "candidates": [
+    {
+     "label": "FADA, ORACLE planner (6 goals)",
+     "best_success": 38.5,
+     "best_budget": 768
+    },
+    {
+     "label": "FADA, ORACLE planner (16 goals)",
+     "best_success": 36.5,
+     "best_budget": 256
+    }
+   ]
+  }
+ },
+ "car": {
+  "rma_nonoracle": {
+   "best": {
+    "label": "RMA (adaptation module), zero-shot",
+    "kind": "point",
+    "source": "rma_zs",
+    "best_budget": 0,
+    "best_success": 62.7,
+    "best_n": 480,
+    "oracle": false,
+    "curve": {
+     "0": [
+      62.71,
+      480
+     ]
+    }
+   },
+   "candidates": [
+    {
+     "label": "RMA (adaptation module), zero-shot",
+     "best_success": 62.7,
+     "best_budget": 0
+    }
+   ]
+  },
+  "rma_oracle": {
+   "best": {
+    "label": "RMA teacher with each car's TRUE latent, fine-tuned on the car",
+    "kind": "curve",
+    "source": "rma_real",
+    "best_budget": 1536,
+    "best_success": 82.1,
+    "best_n": 240,
+    "oracle": true,
+    "curve": {
+     "0": [
+      64.17,
+      240
+     ],
+     "24": [
+      64.17,
+      240
+     ],
+     "48": [
+      62.92,
+      240
+     ],
+     "96": [
+      65.0,
+      240
+     ],
+     "192": [
+      63.75,
+      240
+     ],
+     "384": [
+      67.92,
+      240
+     ],
+     "768": [
+      76.67,
+      240
+     ],
+     "1536": [
+      82.08,
+      240
+     ],
+     "2016": [
+      80.42,
+      240
+     ]
+    }
+   },
+   "candidates": [
+    {
+     "label": "RMA teacher with each car's TRUE latent, fine-tuned on the car",
+     "best_success": 82.1,
+     "best_budget": 1536
+    }
+   ]
+  },
+  "fada_nonoracle": {
+   "best": {
+    "label": "FADA (v2 IDM, horizon 4), zero-shot",
+    "kind": "point",
+    "source": "fada_v2_h4_hw24_zs",
+    "best_budget": 0,
+    "best_success": 50.0,
+    "best_n": 240,
+    "oracle": false,
+    "curve": {
+     "0": [
+      50.0,
+      240
+     ]
+    }
+   },
+   "candidates": [
+    {
+     "label": "FADA (IDM with actuator states), zero-shot",
+     "best_success": 8.3,
+     "best_budget": 0
+    },
+    {
+     "label": "FADA (v2 IDM, horizon 4), zero-shot",
+     "best_success": 50.0,
+     "best_budget": 0
+    },
+    {
+     "label": "FADA (v2 IDM, horizon 4), 24 laps of its adaptation",
+     "best_success": 42.9,
+     "best_budget": 24
+    },
+    {
+     "label": "FADA, planner gain 0.5, on the cars",
+     "best_success": 7.5,
+     "best_budget": 0
+    },
+    {
+     "label": "FADA, planner gain 0.8, on the cars",
+     "best_success": 8.3,
+     "best_budget": 0
+    },
+    {
+     "label": "FADA, planner gain 0.95, on the cars",
+     "best_success": 17.9,
+     "best_budget": 0
+    }
+   ]
+  },
+  "fada_oracle": {
+   "best": {
+    "label": "FADA, ORACLE planner (refit on our real laps)",
+    "kind": "curve",
+    "source": "fada_real_oracle",
+    "best_budget": 0,
+    "best_success": 30.8,
+    "best_n": 240,
+    "oracle": true,
+    "curve": {
+     "0": [
+      30.83,
+      240
+     ],
+     "24": [
+      29.17,
+      240
+     ],
+     "48": [
+      21.25,
+      240
+     ],
+     "96": [
+      17.92,
+      240
+     ],
+     "192": [
+      7.92,
+      240
+     ],
+     "384": [
+      9.17,
+      240
+     ],
+     "768": [
+      13.33,
+      240
+     ],
+     "1536": [
+      5.42,
+      240
+     ],
+     "2016": [
+      3.33,
+      240
+     ]
+    }
+   },
+   "candidates": [
+    {
+     "label": "FADA, ORACLE planner (refit on our real laps)",
+     "best_success": 30.8,
+     "best_budget": 0
+    },
+    {
+     "label": "FADA, ORACLE planner (our stopping-rule network), 14 plans",
+     "best_success": 23.8,
+     "best_budget": 0
+    }
+   ]
+  }
+ }
+}
