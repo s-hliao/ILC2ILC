@@ -5,8 +5,8 @@ make_car_videos.py [--root DIR] [--jobs N]: every car video from the recorded tr
 
   00_compare_all_methods/<car>_<plan>   every method side by side on one plan, with the sideslip against the plan's
   <NN>_<method>/hardware_stage_<car>    the method's hardware stage, iteration by iteration (one panel per plan)
-  <NN>_<method>/<when>_eval_<car>       the method on the 8 evaluation plans at once (<when>: zeroshot, after_2laps / after_4laps,
-                                        after_24laps)
+  <NN>_<method>/<when>_eval_<car>       the method on the 8 evaluation plans at once (<when>: zeroshot, after_2laps / after_10laps,
+                                        after_10laps)
 MP4 (H.264, pausable), real time. Plus videos/README.md.
 """
 import argparse
@@ -27,23 +27,23 @@ OUT = (os.path.normpath(os.path.join(HERE, '..', '..', 'paper', 'car', 'videos')
        else os.path.join(os.path.abspath(a.root), 'videos'))   # src/paper
 # folder: (label, hardware-stage recording or None, [(when, eval recording)])
 METHODS = {
-    '01_ours': ('ours', 'hwstage_ours', [('zeroshot', 'eval_ours_zeroshot'), ('after_24laps', 'eval_ours_24laps')]),
+    '01_ours': ('ours', 'hwstage_ours', [('zeroshot', 'eval_ours_zeroshot'), ('after_10laps', 'eval_ours_10laps')]),
     '02_ours_plus_dr_finetune': ('our learner + DR (A)', 'hwstage_ours_dr_a',
-                                 [('zeroshot', 'eval_ours_dr_a_zeroshot'), ('after_24laps', 'eval_ours_dr_a_24laps')]),
+                                 [('zeroshot', 'eval_ours_dr_a_zeroshot'), ('after_10laps', 'eval_ours_dr_a_10laps')]),
     '03_ours_plus_dr_scratch': ('our learner + DR (B)', 'hwstage_ours_dr_b',
-                                [('zeroshot', 'eval_ours_dr_b_zeroshot'), ('after_24laps', 'eval_ours_dr_b_24laps')]),
-    '04_ppo_dr': ('PPO+DR', 'hwstage_ppo_dr', [('zeroshot', 'eval_ppo_dr_zeroshot'), ('after_2laps', 'eval_ppo_dr_2laps'), ('after_4laps', 'eval_ppo_dr_4laps'),
-                                              ('after_24laps', 'eval_ppo_dr_24laps')]),
+                                [('zeroshot', 'eval_ours_dr_b_zeroshot'), ('after_10laps', 'eval_ours_dr_b_10laps')]),
+    '04_ppo_dr': ('PPO+DR', 'hwstage_ppo_dr', [('zeroshot', 'eval_ppo_dr_zeroshot'), ('after_2laps', 'eval_ppo_dr_2laps'),
+                                              ('after_10laps', 'eval_ppo_dr_10laps')]),
     '05_rma': ('RMA', None, [('zeroshot', 'eval_rma_zeroshot')]),
-    '06_fada': ('FADA', None, [('zeroshot', 'eval_fada_zeroshot'), ('after_24laps', 'eval_fada_24laps')]),
+    '06_fada': ('FADA', None, [('zeroshot', 'eval_fada_zeroshot')]),
     '07_plan_lqr': ('plan LQR', None, [('zeroshot', 'eval_plan_lqr')]),
 }
 WHEN = dict(zeroshot='zero-shot', after_2laps='after 2 real laps', after_4laps='after 4 real laps (2 chained 2-lap trials)',
-            after_24laps='after 24 real laps')
-COMPARE = [('eval_ours_24laps', 'ours + 24'), ('eval_ours_dr_a_24laps', 'ours+DR (A) + 24'),
-           ('eval_ours_dr_b_24laps', 'ours+DR (B) + 24'), ('eval_ppo_dr_zeroshot', 'PPO+DR, zero-shot'),
-           ('eval_ppo_dr_2laps', 'PPO+DR + 2 (our stage)'), ('eval_ppo_dr_4laps', 'PPO+DR + 4 (our stage)'), ('eval_rma_zeroshot', 'RMA, zero-shot'),
-           ('eval_fada_24laps', 'FADA + 24'), ('eval_plan_lqr', 'plan LQR')]
+            after_10laps='after 10 real laps')
+COMPARE = [('eval_ours_10laps', 'ours + 10'), ('eval_ours_dr_a_10laps', 'ours+DR (A) + 10'),
+           ('eval_ours_dr_b_10laps', 'ours+DR (B) + 10'), ('eval_ppo_dr_zeroshot', 'PPO+DR, zero-shot'),
+           ('eval_ppo_dr_2laps', 'PPO+DR + 2 (our stage)'), ('eval_ppo_dr_10laps', 'PPO+DR + 10 (our stage)'), ('eval_rma_zeroshot', 'RMA, zero-shot'),
+           ('eval_fada_zeroshot', 'FADA, zero-shot'), ('eval_plan_lqr', 'plan LQR')]
 f = lambda n: os.path.join(TR, n + '.npz')
 anim = [sys.executable, os.path.join(HERE, 'animate_car.py')]
 jobs, missing = [], []
@@ -92,15 +92,15 @@ blue: the car and its heading; red: its velocity (the angle between them is the 
 
 | folder | contents |
 |---|---|
-| `00_compare_all_methods/<car>_<plan>.mp4` | every method side by side on the beta-25 plan of one track, 3 laps without reset, with the sideslip against the plan's |
-| `01_ours/` | ours (nominal-sim learner): the hardware stage (24 laps), the 8 evaluation plans zero-shot and after it |
+| `00_compare_all_methods/<car>_<plan>.mp4` | every method side by side on the beta-25 plan of one track, 5 laps without reset, with the sideslip against the plan's |
+| `01_ours/` | ours (nominal-sim learner): the hardware stage (10 laps), the 8 evaluation plans zero-shot and after it |
 | `02_ours_plus_dr_finetune/`, `03_ours_plus_dr_scratch/` | our learner + DR (A: DR fine-tune, B: DR from scratch): hardware stage, before / after |
-| `04_ppo_dr/` | PPO+DR, then our hardware stage: zero-shot, after 2 and after 24 real laps |
+| `04_ppo_dr/` | PPO+DR, then our hardware stage: zero-shot, after 2 and after 10 real laps |
 | `05_rma/`, `07_plan_lqr/` | zero-shot only |
-| `06_fada/` | FADA zero-shot and after its own 24-lap adaptation |
+| `06_fada/` | FADA zero-shot (its 24-lap adaptation is outside the 10-lap budget) |
 
 Files: `hardware_stage_<car>.mp4` (one panel per training plan, iteration by iteration, earlier iterations faded) and
 `<when>_eval_<car>.mp4` (the 8 evaluation plans at once: beta 25 / 21 / 14 / 0 on both tracks, 21 and 14 never trained
-on; 3 laps without reset). Cars: real_nom, real_mass (+25 % mass), real_mu (friction x0.8), real_act (actuators), real_lag
+on; 5 laps without reset). Cars: real_nom, real_mass (+25 % mass), real_mu (friction x0.8), real_act (actuators), real_lag
 (tire stiffness / steering lag).
 ''')

@@ -176,7 +176,7 @@ def fig2():
     ax.legend(handles, ['zero-shot (no real jumps)', 'ours + hardware stage', 'our learner + DR + hardware stage',
                         'per-goal ILC (JumpILC)', 'RL / adaptation baselines'], fontsize=8, frameon=False,
               loc='upper center', bbox_to_anchor=(0.35, -0.1), ncol=3)
-    ax.set_title('ILC2Real vs baselines (robots r1 s1 r5, 95 % Wilson)', fontsize=11)
+    ax.set_title('DistILC vs baselines (robots r1 s1 r5, 95 % Wilson)', fontsize=11)
     fig.savefig(os.path.join(OUT, 'fig2_methods.png'))
     plt.close(fig)
 
@@ -189,7 +189,7 @@ def fig3():
     fig, ax = plt.subplots(figsize=(7.2, 4.2))
     o = [(b, *rate(rs)) for b, rs in ours if rs]
     ax.errorbar([q[0] for q in o], [q[1] for q in o], yerr=[q[2] for q in o], color=C['blue'], marker='o', ms=6, lw=2,
-                capsize=3, label='ILC2Real: one network, 6 training goals (never the test goals)')
+                capsize=3, label='DistILC: one network, 6 training goals (never the test goals)')
     for lab, run, col, mk in (('our learner + DR (A: DR fine-tune) + our hardware stage', 'drA_hw24', C['sky'], 'v'),
                               ('our learner + DR (B: DR from scratch) + our hardware stage', 'drB_hw24', C['green'], '^')):
         d = [(0, *rate(jumps(run, 'start', R3))), (24, *rate(jumps(run, 'final', R3)))]
@@ -420,7 +420,7 @@ def fig8():
     ax.set_xlabel('real jumps per robot (the baselines: on the robot itself, with privileged information)')
     ax.set_ylabel('success on the reserved test goals (%)')
     ax.legend(fontsize=7.5, frameon=False, loc='upper center', bbox_to_anchor=(0.5, -0.15), ncol=2)
-    ax.set_title('Real data needed to match ILC2Real (robots r1 s1 r5; 95 % intervals)', fontsize=11)
+    ax.set_title('Real data needed to match DistILC (robots r1 s1 r5; 95 % intervals)', fontsize=11)
     fig.savefig(os.path.join(OUT, 'fig8_real_data_match.png'))
     fig.savefig(os.path.join(HERE, '..', '..', 'paper', 'quadruped', 'figures', '13_real_data_matching.png'))   # the browsed set
     plt.close(fig)

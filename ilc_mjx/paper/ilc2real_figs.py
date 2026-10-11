@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ilc2real_figs.py: the ILC2Real figure set (2D goal plane, Go1 jumping, sim-to-sim on the CPU "real" robots).
+"""ilc2real_figs.py: the DistILC figure set (2D goal plane, Go1 jumping, sim-to-sim on the CPU "real" robots).
 Every number is read from the eval files (nothing hard-coded). Success = no fall, |ex| <= 5 cm, |ez| <= 3 cm on the
 reserved test goals (planefinal) unless stated; intervals are 95% Wilson intervals over jumps.
 
