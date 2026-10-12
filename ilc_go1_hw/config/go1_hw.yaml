@@ -1,0 +1,44 @@
+# go1_lowlevel_node (private params). Safety values = the ROS 2 go1_bridge.py's, the controllers were tested against them.
+go1_lowlevel:
+  robot_ip: 192.168.123.10       # the motor control board (low-level UDP)
+  local_port: 8090
+  robot_port: 8007
+  rate_hz: 500.0
+  power_level: 10                # SDK PowerProtect 1..10; a jump needs 10, lower only for first stand tests
+  cmd_timeout: 0.05              # s without joint_cmd -> damping
+  damp_kd: 2.0
+  limit_margin: 0.20             # rad past the MJCF range -> latched damping (rear calves over-extend at takeoff)
+  kp_max: 100.0
+  kd_max: 10.0
+  quat_order: auto               # auto (detected against imu.rpy) | xyzw | wxyz. A recorded Go1 streamed xyzw.
+  contact_on: 60.0               # raw foot force: calibrate (README, "Foot contact")
+  contact_off: 40.0
+  min_contacts: 2                # leg odometry needs this many stance feet
+  leg_odom_sigma: 0.05           # m/s, one foot
+  leg_odom_decimation: 2         # publish every 2nd cycle (250 Hz)
+  zupt_max_dq: 0.05
+  zupt_max_gyro: 0.05
+  zupt_hold_cycles: 50           # 0.1 s still before ZUPT
+  gyro_var: 1.0e-4
+  acc_var: 4.0e-2
+  orientation_var: 1.0e-2
+  imu_frame: imu_link
+  trunk_frame: trunk
+
+mocap_odom:
+  mocap_topic: /vrpn_client_node/go1/pose
+  up_axis: z                     # z: Motive streams Z-up; y: Motive's default Y-up (the car's conversion)
+  yaw_offset: 0.0
+  mocap_offset: [0.0, 0.0, 0.0]  # the rigid body's origin in the trunk frame (m): measure it
+  pose_latency: 0.006            # s, measured (README, "Latency"); the controller's pose_latency must match
+  vel_ema_tau: 0.02
+  vel_spike_pct: 15.0
+  vel_spike_window: 0.3
+  max_gap: 0.1
+  pos_var: 1.0e-6
+  rot_var: 1.0e-4
+  lin_vel_var: 0.04
+  ang_vel_var: 0.09
+  world_frame: world
+  trunk_frame: trunk
+  publish_tf: false              # the EKF publishes world -> trunk

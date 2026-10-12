@@ -22,15 +22,11 @@ reserved test goals (planefinal: 8 goals x --eval-episodes, seed 701, determinis
 Run from src/ilc_mjx with the ilcmjx env; the ilc_quad container must be up.
 """
 import argparse
-import io
 import json
 import os
-import queue
 import shutil
-import struct
 import subprocess
 import sys
-import threading
 import time
 
 import numpy as np
@@ -58,6 +54,15 @@ ap.add_argument("--seed", type=int, default=6060)
 ap.add_argument("--overlay", default="/ilc_ws/log/dilc/plane/fixbox/overlay")
 ap.add_argument("--land-w", type=float, default=0.01, help="terminal reward weight on the landing cost")
 ap.add_argument("--fall-pen", type=float, default=20.0, help="terminal penalty for a fall")
+ap.add_argument("--success-bonus", type=float, default=0.0, help="terminal reward for a landing the evaluation counts as a success (|ex| <= 5 cm, |ez| <= 3 cm, no fall): aligns the RL objective with the score (idealized baselines)")
+ap.add_argument("--goal-box", type=float, nargs=4, default=None, metavar=("X0", "X1", "Y0", "Y1"),
+                help="training goals drawn uniformly from this box each jump (instead of cycling --goals): coverage of the "
+                     "test region without its goals (idealized baselines)")
+ap.add_argument("--kl-stop", type=float, default=0.0, help="stop an update's epochs once the approximate KL exceeds this")
+ap.add_argument("--rollback", type=float, default=0.0, help="a robot whose iteration score exceeds this x its best "
+                "(smoothed) score + 5 reverts to the policy that scored best and halves its step size (PPO collapse guard)")
+ap.add_argument("--log-cost", type=float, default=0.0, metavar="C0", help="terminal reward -10 log(1 + cost / C0) - fall_pen x fall instead of -land_w x cost - fall_pen x fall: compresses the infeasible goals' huge costs so a few cm on a feasible goal still counts after advantage normalization (the score logged stays land_w x cost + fall_pen x fall)")
+ap.add_argument("--ema", type=float, default=0.0, help="Polyak averaging: checkpoints export an exponential moving average of the actor weights (decay per iteration), not the last iterate -- less checkpoint-to-checkpoint noise")
 ap.add_argument("--eval-only", action="store_true", help="skip training: evaluate the checkpoints in OUT")
 a = ap.parse_args()
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
@@ -76,7 +81,7 @@ class _Adam:
         z = jax.tree_util.tree_map(jnp.zeros_like, p)
         return (z, z, jnp.zeros((), jnp.int32))
 
-    def update(self, g, st, p):
+    def update(self, g, st, p, scale=1.0):
         m, v, t = st
         if self.clip:
             n = jnp.sqrt(sum(jnp.sum(x ** 2) for x in jax.tree_util.tree_leaves(g)))
@@ -86,7 +91,7 @@ class _Adam:
         v = jax.tree_util.tree_map(lambda v_, g_: self.b2 * v_ + (1 - self.b2) * g_ ** 2, v, g)
         mh = jax.tree_util.tree_map(lambda m_: m_ / (1 - self.b1 ** t), m)
         vh = jax.tree_util.tree_map(lambda v_: v_ / (1 - self.b2 ** t), v)
-        u = jax.tree_util.tree_map(lambda a_, b_: -self.lr * a_ / (jnp.sqrt(b_) + self.eps), mh, vh)
+        u = jax.tree_util.tree_map(lambda a_, b_: -scale * self.lr * a_ / (jnp.sqrt(b_) + self.eps), mh, vh)
         return u, (m, v, t)
 
 
@@ -98,16 +103,15 @@ sys.path.insert(0, os.path.join(HERE, ".."))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "ilc_quad", "scripts"))
 import dilc_execute as dx                        # noqa: E402  (the robots' condition strings; no ROS at import)
 from ilc_mjx.jump import JumpEnv                 # noqa: E402
+from ilc_mjx.serve_workers import Workers, check_cond, cpath, xc  # noqa: E402
 
-WS, CWS = "/home/henry/ilc_ws", "/ilc_ws"
-cpath = lambda p: CWS + os.path.abspath(p)[len(WS):]
 gvec = lambda g: tuple(float(v) for v in g.split(",")) if "," in g else (float(g), 0.0)
 GOALS = [gvec(g) for g in a.goals]
 TEST = [(0.4875, 0.0), (0.6125, 0.0), (0.52, 0.12), (0.54, 0.14), (0.57, 0.11), (0.51, 0.17), (0.4875, 0.035),
         (0.6375, 0.09)]
-XC = (f"cd /ilc_ws && source install/setup.bash && export ROS_LOCALHOST_ONLY=1 OMP_NUM_THREADS=1 && "
-      f"export PYTHONPATH={a.overlay}:$PYTHONPATH && python3 install/ilc_quad/lib/ilc_quad/dilc_execute.py")
-BANK = json.load(open(os.path.join(a.policy, "bank.json")))
+XC = xc(a.overlay)
+PDIR = lambda robot: a.policy.format(robot=robot)   # --policy may hold {robot}: a per-robot start (a continuation)
+BANK = json.load(open(os.path.join(PDIR(a.robots[0]), "bank.json")))
 NDC, NSC = BANK["phases"][:2]
 NC = NDC + NSC
 OD = 31
@@ -121,7 +125,7 @@ def true_z(robot):
 
 
 def load_actor(robot):
-    d = dict(np.load(os.path.join(a.policy, "policy.npz")))
+    d = dict(np.load(os.path.join(PDIR(robot), "policy.npz")))
     w = {k: np.asarray(d[k], np.float32) for k in ("W0", "b0", "W1", "b1", "W_mu", "b_mu")}
     if w["W0"].shape[1] > OD:                    # an RMA teacher, input [o, z]: fold this robot's true z
         w["b0"] = w["b0"] + w["W0"][:, OD:] @ true_z(robot)
@@ -141,79 +145,12 @@ def export(w, log_sigma, d):
     arr = {k: np.asarray(v, np.float64) for k, v in w.items()}
     arr.update(W_ls=np.zeros_like(arr["W_mu"]), b_ls=np.asarray(log_sigma, np.float64), n_hidden=np.array(2))
     np.savez(os.path.join(d, "policy.npz"), **arr)
-    shutil.copy(os.path.join(a.policy, "bank.json"), d)
+    shutil.copy(os.path.join(PDIR(a.robots[0]), "bank.json"), d)
     json.dump(dict(best="policy", eval_goals=None, dyn_dim=0, members=[dict(name="policy", group=0, variant="policy",
                                                                              tag="policy", episodes=0, updates=0,
                                                                              score=None)]),
               open(os.path.join(d, "manifest.json"), "w"))
     return arr
-
-
-# ---- the serve workers ------------------------------------------------------------------------------------------
-def _msg(header, payload=None):
-    hb = json.dumps(header).encode()
-    pb = b""
-    if payload is not None:
-        buf = io.BytesIO()
-        np.savez(buf, **payload)
-        pb = buf.getvalue()
-    return struct.pack("<I", len(hb)) + hb + struct.pack("<Q", len(pb)) + pb
-
-
-def _read(f):
-    h = f.read(4)
-    if len(h) < 4:
-        return None, None
-    (n,) = struct.unpack("<I", h)
-    header = json.loads(f.read(n))
-    (m,) = struct.unpack("<Q", f.read(8))
-    pb = f.read(m) if m else b""
-    if not pb:
-        return header, None
-    with np.load(io.BytesIO(pb), allow_pickle=False) as d:
-        return header, {k: d[k] for k in d.files}
-
-
-class Workers:
-    def __init__(self, n, bank_path):
-        self.procs = []
-        for i in range(n):
-            cmd = f"{XC} serve --bank {cpath(bank_path)}"
-            p = subprocess.Popen(["sg", "docker", "-c", f"docker exec -i ilc_quad bash -lc '{cmd}'"],
-                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-            self.procs.append(p)
-
-    def run(self, jobs):
-        """jobs: [(header, payload)] -> [(header, episode)] in order, the workers in parallel."""
-        q, out = queue.Queue(), [None] * len(jobs)
-        for i, j in enumerate(jobs):
-            q.put((i, j))
-
-        def loop(p):
-            while True:
-                try:
-                    i, (h, pl) = q.get_nowait()
-                except queue.Empty:
-                    return
-                p.stdin.write(_msg(h, pl))
-                p.stdin.flush()
-                out[i] = _read(p.stdout)
-        th = [threading.Thread(target=loop, args=(p,)) for p in self.procs]
-        for t in th:
-            t.start()
-        for t in th:
-            t.join()
-        return out
-
-    def close(self):
-        for p in self.procs:
-            try:
-                p.stdin.write(_msg(dict(cmd="quit")))
-                p.stdin.close()
-            except Exception:
-                pass
-        for p in self.procs:
-            p.wait(timeout=60)
 
 
 def train():
@@ -257,17 +194,18 @@ def train():
         return jnp.sum(m * (-0.5 * ((u - mu) / jnp.exp(ls)) ** 2 - ls), -1)
 
     @jax.jit
-    def actor_step(q, st, o, u, m, lp_old, adv):
+    def actor_step(q, st, o, u, m, lp_old, adv, scale):
         def loss(q):
             ratio = jnp.exp(logp(q[0], q[1], o, u, m) - lp_old)
             return -jnp.mean(jnp.minimum(ratio * adv, jnp.clip(ratio, 1 - a.clip, 1 + a.clip) * adv))
         l, g = jax.value_and_grad(loss)(q)
-        u_, st = opt_a.update(g, st, q)
+        u_, st = opt_a.update(g, st, q, scale)
         return apply_updates(q, u_), st, l
 
     for r in a.robots:
         export({k: np.asarray(v) for k, v in actors[r].items()}, np.asarray(log_sigma[r]), os.path.join(a.out, "ck0", r, "policy"))
-    wk = Workers(a.workers, os.path.join(a.policy, "bank.json"))
+    wk = Workers(a.workers, os.path.join(PDIR(a.robots[0]), "bank.json"), a.overlay)
+    logged = set()
     jumps = {r: 0 for r in a.robots}
     falls = {r: 0 for r in a.robots}
     hist = []
@@ -275,6 +213,9 @@ def train():
     it = 0
     t0 = time.time()
     logf = open(os.path.join(a.out, "train.log"), "a")
+    lr_scale = {r: 1.0 for r in a.robots}
+    ema_w = {r: actors[r] for r in a.robots}
+    ema, best, snap = {r: None for r in a.robots}, {r: None for r in a.robots}, {}
     try:
         while min(jumps.values()) < max(a.checkpoints):
             jobs, who = [], []
@@ -282,11 +223,20 @@ def train():
                 arr = {k: np.asarray(v, np.float64) for k, v in actors[r].items()}
                 arr.update(W_ls=np.zeros_like(arr["W_mu"]), b_ls=np.asarray(log_sigma[r], np.float64), n_hidden=np.array(2))
                 for k in range(a.per_iter):
-                    g = GOALS[(it * a.per_iter + k) % len(GOALS)]
+                    g = (rng.uniform(a.goal_box[0], a.goal_box[1]), rng.uniform(a.goal_box[2], a.goal_box[3])) \
+                        if a.goal_box else GOALS[(it * a.per_iter + k) % len(GOALS)]
                     jobs.append((dict(goal=list(g), seed=int(rng.integers(1, 1 << 30)), cond=r, stochastic=True,
                                       id=len(jobs)), arr))
                     who.append(r)
             res = wk.run(jobs)
+            if not any(h is not None and h.get("ok") for h, _ in res):
+                raise RuntimeError(f"iteration {it}: every rollout failed (workers dead?)")
+            for (h, ep), w_ in zip(res, who):            # exactness: every rollout ran the robot's own condition string
+                if h is not None and h.get("ok"):
+                    check_cond(h, dx.NAMED[w_])
+                    if w_ not in logged:
+                        logged.add(w_)
+                        logf.write(json.dumps(dict(robot=w_, first_header=h)) + "\n")
             for r in a.robots:
                 eps = [ep for (h, ep), w_ in zip(res, who) if w_ == r and h is not None and h.get("ok") and ep is not None]
                 jumps[r] += sum(1 for w_ in who if w_ == r)
@@ -299,7 +249,10 @@ def train():
                     fell = float(ep["fell"])
                     rew = -a.c_dense * rc[:NC, 0]
                     final = a.land_w * float(rc[:, 2].sum()) + a.fall_pen * fell
-                    rew[-1] -= final
+                    rew[-1] -= (10.0 * np.log1p(float(rc[:, 2].sum()) / a.log_cost) + a.fall_pen * fell) if a.log_cost else final
+                    if a.success_bonus:
+                        ex, ez = float(ep["info"][0]), float(ep["info"][1])
+                        rew[-1] += a.success_bonus * float(not fell and abs(ex) <= 0.05 and abs(ez) <= 0.03)
                     scores.append(final)
                     falls[r] += int(fell)
                     O.append(obs)
@@ -324,7 +277,20 @@ def train():
                 ADV, RET = np.concatenate(advs), np.concatenate(rets)
                 ADVj = jnp.array((ADV - ADV.mean()) / (ADV.std() + 1e-8), jnp.float32)
                 RETj = jnp.array(RET, jnp.float32)
-                if it == 0:
+                s_now = float(np.mean(scores))
+                ema[r] = s_now if ema[r] is None else 0.7 * ema[r] + 0.3 * s_now
+                collapsed = bool(a.rollback and best[r] is not None and s_now > a.rollback * best[r] + 5.0)
+                if collapsed:                            # back to the best policy, half the step size, no update
+                    actors[r], log_sigma[r], st_a[r] = snap[r]
+                    lr_scale[r] *= 0.5
+                    logf.write(json.dumps(dict(it=it, robot=r, rollback=True, score=s_now, best=best[r],
+                                               lr_scale=lr_scale[r])) + "\n")
+                elif best[r] is None or ema[r] < best[r]:
+                    best[r] = ema[r]
+                    snap[r] = (actors[r], log_sigma[r], st_a[r])
+                if collapsed:
+                    pass
+                elif it == 0:
                     for s in range(a.critic_warmup):
                         b = jnp.array(rng.integers(0, len(RET), min(a.mb, len(RET))))
                         critics[r], st_c[r], _ = critic_step(critics[r], st_c[r], Xj[b], RETj[b])
@@ -336,20 +302,30 @@ def train():
                         for s in range(0, n, a.mb):
                             b = jnp.array(perm[s:s + a.mb])
                             (actors[r], log_sigma[r]), st_a[r], _ = actor_step((actors[r], log_sigma[r]), st_a[r], Oj[b],
-                                                                               Uj[b], Mj[b], lp_old[b], ADVj[b])
+                                                                               Uj[b], Mj[b], lp_old[b], ADVj[b],
+                                                                               lr_scale[r])
                             critics[r], st_c[r], _ = critic_step(critics[r], st_c[r], Xj[b], RETj[b])
+                        if a.kl_stop:                    # approximate KL of the whole batch after this epoch
+                            kl = float(jnp.mean(lp_old - logp(actors[r], log_sigma[r], Oj, Uj, Mj)))
+                            if kl > a.kl_stop:
+                                break
                 hist.append(dict(it=it, robot=r, jumps=jumps[r], score=float(np.mean(scores)), falls=int(sum(
                     float(ep["fell"]) for ep in eps)), n=len(eps), sigma=np.exp(np.asarray(log_sigma[r])).round(3).tolist()))
+            if a.ema:
+                for r in a.robots:
+                    ema_w[r] = jax.tree_util.tree_map(lambda e_, w_: a.ema * e_ + (1 - a.ema) * w_, ema_w[r], actors[r])
             it += 1
             line = dict(it=it, t=round(time.time() - t0), jumps=jumps, falls=falls,
-                        score={h["robot"]: round(h["score"], 2) for h in hist if h["it"] == it - 1})
+                        score={h["robot"]: round(h["score"], 2) for h in hist if h["it"] == it - 1},
+                        sigma={r: np.exp(np.asarray(log_sigma[r])).round(3).tolist() for r in a.robots},
+                        lr_scale=lr_scale)
             print(json.dumps(line), flush=True)
             logf.write(json.dumps(line) + "\n")
             logf.flush()
             for k in a.checkpoints:
                 if k not in done and min(jumps.values()) >= k:
                     for r in a.robots:
-                        export({kk: np.asarray(v) for kk, v in actors[r].items()}, np.asarray(log_sigma[r]),
+                        export({kk: np.asarray(v) for kk, v in (ema_w[r] if a.ema else actors[r]).items()}, np.asarray(log_sigma[r]),
                                os.path.join(a.out, f"ck{k}", r, "policy"))
                     done.add(k)
     finally:

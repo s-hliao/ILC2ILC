@@ -29,6 +29,9 @@ ap.add_argument('--init', required=True)
 ap.add_argument('--arm', required=True)
 ap.add_argument('--cars', nargs='+', default=['real_nom', 'real_mass', 'real_mu', 'real_act', 'real_lag'])
 ap.add_argument('--goals', nargs='+', default=[f'mocap_{t}_b{b}' for t in ('square2fast', 'figfast') for b in (10, 18, 25)])
+ap.add_argument('--rungs-from', default='', help='idealized reference (the exact-dynamics oracle): each car flies and '
+                'is scored on the plan variants (_mu80 / _mu60 rungs per track) the given hardware-stage arm settled on for it, '
+                'as our method does after its fallback ladder')
 ap.add_argument('--per-iter', type=int, default=24, help='episodes per car per PPO iteration')
 ap.add_argument('--checkpoints', type=int, nargs='+', default=[24, 48, 96, 192, 384, 768, 1536, 2016])
 ap.add_argument('--std', type=float, nargs=2, default=[0.049, 0.046], help='exploration std (normalized actions): '
@@ -111,20 +114,33 @@ def ckpt_dir(k):
     return d
 
 
+RUNGS = json.load(open(os.path.join(HERE, 'runs/hw', a.rungs_from, 'summary.json')))['rungs'] if a.rungs_from else {}
+track = lambda n: n.split('_b')[0]
+
+
+def goal_for(c, g):
+    """The plan car c flies for goal g: g itself, or its rung variant under --rungs-from."""
+    sfx = RUNGS.get(c, {}).get(track(g), '')
+    return g + sfx if sfx and os.path.exists(os.path.join(bank.PLAN_DIR, g + sfx + '.npz')) else g
+
+
 def write_ckpt(k, actors, laps, crashes, eps, t):
     d = ckpt_dir(k)
     for c in a.cars:
         save_policy(os.path.join(d, f'{c}_policy.npz'), actors[c])
     args = dict(vars(a), policy=a.init, iters=k, trial='ppo_real_car', episodes_per_car=k)
+    if RUNGS:                                     # reeval.py scores each car on its rung's plans (as a ladder arm)
+        args['fallback_suffix'] = '_mu80,_mu60'
     json.dump(args, open(os.path.join(d, 'args.json'), 'w'), indent=1)
     json.dump(dict(args=args, real_laps=dict(laps), crashes={c: crashes[c] for c in a.cars}, episodes=dict(eps),
-                   seconds=t, safety_ey=float(os.environ.get('F1T_SAFETY_EY') or 0.6)),
+                   seconds=t, safety_ey=float(os.environ.get('F1T_SAFETY_EY') or 0.6),
+                   **({'rungs': {c: RUNGS.get(c, {}) for c in a.cars}} if RUNGS else {})),
               open(os.path.join(d, 'summary.json'), 'w'), indent=1)
 
 
 def main():
     rng = np.random.default_rng(a.seed)
-    plans = {p['name']: p for p in bank.load_bank(a.goals)}
+    plans = {p['name']: p for p in bank.load_bank(list(dict.fromkeys(goal_for(c, g) for c in a.cars for g in a.goals)))}
     key = jax.random.PRNGKey(a.seed)
     actors = {c: load_actor(a.init, c) for c in a.cars}
     nobs = actors[a.cars[0]][0][0].shape[0]
@@ -160,6 +176,8 @@ def main():
     eps = {c: 0 for c in a.cars}
     crashes = {c: 0 for c in a.cars}
     zs = {c: true_z(c) for c in a.cars}
+    os.makedirs(os.path.join(HERE, 'runs/hw'), exist_ok=True)
+    rc.exact_check(a.cars, os.path.join(HERE, 'runs/hw', f'{a.arm}_exact_check.json'))   # the cars the evaluation flies
     t0 = time.time()
     write_ckpt(0, actors, laps, crashes, eps, 0.0)
     done_ck = {0}
@@ -170,7 +188,7 @@ def main():
             pol = [(np.asarray(W), np.asarray(b)) for W, b in actors[c]]
             std = np.exp(np.asarray(log_std[c]))
             for k in range(a.per_iter):
-                pl = plans[a.goals[(it * a.per_iter + k) % len(a.goals)]]
+                pl = plans[goal_for(c, a.goals[(it * a.per_iter + k) % len(a.goals)])]
                 T = int(np.ceil(1.05 * pl['lap_time'] / rc.DT))
                 jobs.append(dict(car_name=c, plan=pl, policy=pol, laps=1.05, s0=rng.uniform() * float(pl['length']),
                                  pert=rng.uniform(-0.1, 0.1, 5), seed=int(rng.integers(1 << 30)),

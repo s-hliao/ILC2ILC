@@ -30,7 +30,8 @@ def load(path):
     if 'mode' in d.files and str(d['mode']) == 'fada' or 'lam' in d.files:
         orc = {k[len('oracle__'):]: np.asarray(d[k]) for k in d.files if k.startswith('oracle__')}
         return dict(fada=pol, lam=float(d['lam']), oracle=orc or None,
-                    dims=np.asarray(d['dims']) if 'dims' in d.files else None)
+                    dims=np.asarray(d['dims']) if 'dims' in d.files else None,
+                    horizon=int(d['horizon']) if 'horizon' in d.files else 1)
     ad = os.path.join(os.path.dirname(path), 'rma_adapt.npz')
     if 'mode' in d.files and str(d['mode']) == 'rma' and os.path.exists(ad):
         e = np.load(ad)
@@ -45,6 +46,12 @@ def adaptive(d, summ):
     args = json.load(open(os.path.join(d, 'args.json')))
     sfx = args.get('fallback_suffix') or ''
     if not sfx:
+        return
+    rungs = json.load(open(os.path.join(d, 'summary.json'))).get('rungs')
+    if rungs is not None:                             # a ladder arm: each plan on its track's rung (all sideslips)
+        adap = {c: {n: v.get(n + rungs.get(c, {}).get(n.split('_b')[0], ''), v.get(n)) for n in EVAL if n in v}
+                for c, v in summ.items()}
+        json.dump(adap, open(os.path.join(d, 'eval_big_adaptive.json'), 'w'), indent=1)
         return
     sw = json.load(open(os.path.join(d, 'summary.json'))).get('switched', {})
     beta = lambda n: int(n.split('_b')[-1])
@@ -76,14 +83,25 @@ def main():
         args = json.load(open(os.path.join(d, 'args.json')))
         sfx = args.get('fallback_suffix') or ''
         ev_names = [n for n in EVAL if n in (args.get('eval_plans') or EVAL)]   # a per-track network: its own track's plans
-        names = ev_names + [n + sfx for n in ev_names if sfx and os.path.exists(os.path.join(bank.PLAN_DIR, n + sfx + '.npz'))]
-        plans = {p['name']: p for p in bank.load_bank(names)}
+        rungs = json.load(open(os.path.join(d, 'summary.json'))).get('rungs') if sfx else None
+        ladder = [x for x in sfx.split(',') if x]
+        exists = lambda n: os.path.exists(os.path.join(bank.PLAN_DIR, n + '.npz'))
+        if rungs is not None:                          # a ladder arm: per car, the plans and its own rung's variants
+            per_car = {c: list(dict.fromkeys(ev_names + [n + rungs[c].get(n.split('_b')[0], '') for n in ev_names
+                                                         if exists(n + rungs[c].get(n.split('_b')[0], ''))]))
+                       for c in args['cars']}
+        else:
+            names = ev_names + [n + sfx for n in ev_names if sfx and exists(n + sfx)]
+            per_car = {c: names for c in args['cars']}
+        plans = {p['name']: p for p in bank.load_bank(list(dict.fromkeys(sum(per_car.values(), []))))}
+        base = lambda n: next((n[:-len(x)] for x in ladder if n.endswith(x)), n)
         jobs = []
         for car in args['cars']:
             f = os.path.join(d, f'{car}_policy.npz')
             pol = load(f) if os.path.exists(f) else load(args['policy'])
-            for name, pl in plans.items():
-                rs = np.random.default_rng(a.seed + EVAL.index(name[:len(name) - len(sfx)] if sfx and name.endswith(sfx) else name))
+            for name in per_car[car]:
+                pl = plans[name]
+                rs = np.random.default_rng(a.seed + EVAL.index(base(name)))
                 for k in range(a.runs):
                     jobs.append(dict(car_name=car, plan=pl, policy=pol, laps=a.laps, s0=(k / a.runs) * float(pl['length']),
                                      pert=rs.uniform(-0.5, 0.5, 5), seed=a.seed * 3 + k))

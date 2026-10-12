@@ -15,6 +15,9 @@ read run data); each writes here.
 | `quadruped/plane/` | the goal-plane grid | `ilc_mjx/paper/plane_grid.py` |
 | `quadruped/videos/` | MP4s, one folder per method (see its README) | `ilc_mjx/scripts/make_animations.py` |
 | `car/figures/` | `fig1`-`fig15` at the car's real budget (0 / 2 / 10 laps; success and 5-lap completion), `traj_*` trajectory plots | `ilc_f1tenth/ilc2real/car_figures.py`, `car_study_figs.py`, `stop_analysis.py` (fig13), `car_traj_figs.py` |
+| `car/figures/fig16_ladder_per_car.png` | the low-friction fix: per-car b25 success (5 cars + friction x0.9 / x0.7 / x0.6), ours without the ladder, the reference ladder (10 laps) on sim seeds 0 / 2 / 1, exact-dynamics RL oracles at 5,000 laps | `ilc_f1tenth/ilc2real/ladder_figs.py` |
+| `car/figures/fig17_exact_matching.png` | the car under EXACT dynamics: b25 success and crashes vs real laps per car, RMA (true latent) / PPO+DR on each multi-body car, FADA (exact IDMs, + fixed lookahead, + no walls), ours (9 laps) | `ilc_f1tenth/ilc2real/ladder_figs.py` |
+| `car/figures/fig18_ladder_rungs.png` | the rung (nominal / 0.8x / 0.6x-friction plan) each car settled on per track and seed, with its b25 success; the rungs' speed price (90 % / 78 %) | `ilc_f1tenth/ilc2real/ladder_figs.py` |
 | `car/figures/old_24lap/` | the superseded 24-lap car figures | (archive) |
 | `car/videos/` | MP4s, one folder per method (see its README) | `ilc_f1tenth/ilc2real/make_car_videos.py` |
 

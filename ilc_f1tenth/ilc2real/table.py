@@ -53,7 +53,9 @@ if BIG:
 
 
 def main():
-    arms = sys.argv[1:] or sorted(os.path.basename(os.path.dirname(p)) for p in glob.glob(os.path.join(HERE, 'runs/hw/*/summary.json')))
+    arms = sys.argv[1:] or sorted(n for n in (os.path.basename(os.path.dirname(p)) for p in
+                                              glob.glob(os.path.join(HERE, 'runs/hw/*/summary.json')))
+                                  if not n.startswith(('quick_', 'probe_', 'zz')))   # scratch copies / probes
     hdr = ['arm', 'b25 ok%', 'fail%', 'e_y cm', 'pace%', '|beta|', 'held-out ok%', 'fail%', '|beta|', 'grip ok%', 'fail%',
            '|beta|', 'real laps/car']
     rows = []
@@ -65,10 +67,13 @@ def main():
         laps = np.mean(list(d['real_laps'].values())) if d.get('real_laps') else 0.0
         big = os.path.join(HERE, 'runs/hw', arm, 'eval_big.json')
         ada = os.path.join(HERE, 'runs/hw', arm, 'eval_big_adaptive.json')
+        ncar = lambda ev: '' if len(ev) == 5 else f', {len(ev)} cars'      # the ladder arms add ax:mu=0.9/0.7/0.6
         if BIG and os.path.exists(ada):
-            rows.append(row(arm + ' [x12, adaptive goals]', json.load(open(ada)), laps))
+            ev = json.load(open(ada))
+            rows.append(row(arm + f' [x12, adaptive goals{ncar(ev)}]', ev, laps))
         elif BIG and os.path.exists(big):
-            rows.append(row(arm + ' [x12]', json.load(open(big)), laps))
+            ev = json.load(open(big))
+            rows.append(row(arm + f' [x12{ncar(ev)}]', ev, laps))
         elif 'eval' in d:
             rows.append(row(arm, d['eval'], laps))
     f = os.path.join(HERE, 'runs/trackilc_big/summary.json' if BIG else 'runs/trackilc/summary.json')

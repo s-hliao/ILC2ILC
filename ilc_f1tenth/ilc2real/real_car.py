@@ -99,7 +99,11 @@ def run(car_name, plan, policy=None, laps=1.0, s0=0.0, pert=None, seed=0, noise=
         elif isinstance(policy, dict) and 'fada' in policy:    # FADA: IDM(o, lam d) with d the plan deviation
             orc = policy.get('oracle') or {}
             dims = policy.get('dims')
-            d_next = orc[pname][(idx + 1) % len(orc[pname])] if pname in orc else \
+            # the oracle's deviation where the IDM's target applies: H control periods ahead at the measured speed (the
+            # IDM is trained on (o_t, d_{t+H})); the plan grid is ~5 mm, a period ~7 grid points. (Was idx + 1: one grid
+            # point, i.e. the current deviation -- every FADA-oracle car run before 2026-10-12 04:30 flew that.)
+            ahead = max(1, int(round(int(policy.get('horizon', 1)) * math.hypot(xmeas[3], xmeas[4]) * DT / pl.ds)))
+            d_next = orc[pname][(idx + ahead) % len(orc[pname])] if pname in orc else \
                 policy['lam'] * (obs[:8] if dims is None else obs[np.asarray(dims)])
             mu = mlp_np(policy['fada'], np.r_[obs, d_next])          # oracle planner: the deviation a policy
             #                                                          that works on this car reaches there
@@ -194,3 +198,18 @@ def lap_metrics(r, plan, ey_ok=0.10, pace_ok=0.9):
              crash=r.get('crash', ''), peak_ey=float(r.get('peak_ey', np.max(np.abs(e[:, 0])))))
     m['success'] = bool(not m['failed'] and m['rms_ey'] <= ey_ok and m['pace'] >= pace_ok)
     return m
+
+
+def exact_check(cars, out=None):
+    """The exact-dynamics oracles (log/dilc/plane/match/EXACT_ORACLES_RUNBOOK.md, C0): their episodes run through run() /
+    run_many() on the multi-body cars by name -- the function and cars every evaluation uses -- under the tight-track setup
+    (env_tight.sh). Asserts that setup and records each car's full configuration (OUT, json)."""
+    import json
+    env = {k: os.environ.get(k) for k in ('F1T_MU', 'F1T_PLANS', 'F1T_TRACKS', 'F1T_SAFETY_EY')}
+    nowall = os.environ.get('F1T_TRAIN_NO_WALLS') == '1'   # idealized TRAINING without the room's walls (evaluation keeps them)
+    assert (env['F1T_PLANS'] or '').rstrip('/').endswith('plans_mu02_tight') and (env['F1T_SAFETY_EY'] == '0.3' or nowall) \
+        and env['F1T_MU'] == '0.2', f'not the tight-track setup (source env_tight.sh): {env}'
+    rec = dict(env=env, train_no_walls=nowall, cars={c: mc.car_config(c) for c in cars})
+    if out:
+        json.dump(rec, open(out, 'w'), indent=1, default=lambda x: x.tolist() if hasattr(x, 'tolist') else str(x))
+    return rec

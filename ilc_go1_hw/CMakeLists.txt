@@ -1,0 +1,45 @@
+cmake_minimum_required(VERSION 3.0.2)
+project(ilc_go1_hw)
+# ROS 1 (catkin) package for the Go1's onboard computer. COLCON_IGNORE keeps the ROS 2 workspace from building it.
+set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release)
+endif()
+find_package(catkin REQUIRED COMPONENTS roscpp sensor_msgs std_msgs geometry_msgs std_srvs)
+catkin_package()
+
+# unitree_legged_sdk v3.8 (Go1): -DUNITREE_SDK_DIR=... or the environment variable, default ~/unitree_legged_sdk
+if(NOT UNITREE_SDK_DIR)
+  if(DEFINED ENV{UNITREE_SDK_DIR})
+    set(UNITREE_SDK_DIR $ENV{UNITREE_SDK_DIR})
+  else()
+    set(UNITREE_SDK_DIR $ENV{HOME}/unitree_legged_sdk)
+  endif()
+endif()
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+  set(SDK_ARCH arm64)
+else()
+  set(SDK_ARCH amd64)
+endif()
+find_library(UNITREE_SDK_LIB NAMES unitree_legged_sdk
+             PATHS ${UNITREE_SDK_DIR}/lib/cpp/${SDK_ARCH} ${UNITREE_SDK_DIR}/lib/${SDK_ARCH} ${UNITREE_SDK_DIR}/lib
+                   ${UNITREE_SDK_DIR}/build NO_DEFAULT_PATH)
+if(NOT UNITREE_SDK_LIB)
+  message(FATAL_ERROR "libunitree_legged_sdk not found under ${UNITREE_SDK_DIR} (set UNITREE_SDK_DIR)")
+endif()
+message(STATUS "unitree_legged_sdk: ${UNITREE_SDK_LIB}")
+
+include_directories(include ${UNITREE_SDK_DIR}/include ${catkin_INCLUDE_DIRS})
+add_executable(go1_lowlevel_node src/go1_lowlevel_node.cpp)
+target_link_libraries(go1_lowlevel_node ${catkin_LIBRARIES} ${UNITREE_SDK_LIB} pthread)
+
+# the core's unit test needs neither ROS nor the SDK (catkin_make run_tests, or compile by hand: see README)
+if(CATKIN_ENABLE_TESTING)
+  add_executable(test_go1_core test/test_go1_core.cpp)
+  target_include_directories(test_go1_core PRIVATE include test)
+endif()
+
+catkin_install_python(PROGRAMS scripts/mocap_odom_node.py DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
+install(TARGETS go1_lowlevel_node RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
+install(DIRECTORY launch config DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})

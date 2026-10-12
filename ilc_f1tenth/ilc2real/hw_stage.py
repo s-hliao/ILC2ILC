@@ -54,6 +54,10 @@ ap.add_argument('--err-scale', type=float, nargs=6, default=None, metavar=('EY',
 ap.add_argument('--train-starts', type=float, default=0.0)
 ap.add_argument('--goal-cycle', type=int, default=0, help='1: each iteration flies ONE trial, cycling through --goals '
                 '(budget = iters x trial laps; an update after every trial: the small-budget lap ablation, 2..10 laps)')
+ap.add_argument('--goal-order', choices=('cycle', 'worst'), default='cycle', help='with --goal-cycle 1: cycle '
+                'through --goals, or per car fly the goal doing WORST (untried first -- a goal that just switched rung counts as '
+                'untried --, then a crash, then the largest RMS e_y; cycling once every goal is in band): the budget goes '
+                'where the car fails')
 ap.add_argument('--pace-local', type=float, default=0.0, help='a LOCAL pace target: 1 - slack x (the plan\'s lateral '
                 'acceleration V^2 |kappa| / its maximum): slower only where the plan corners hardest (the friction-limited '
                 'sections), full pace on the straights; slack 0.1 = 90 %% at the peak')
@@ -71,13 +75,29 @@ ap.add_argument('--lr', type=float, default=1e-4)
 ap.add_argument('--fallback-suffix', default='', help='goal fallback (the quadruped\'s stall guard for unreachable goals): '
                 'a goal whose laps spin out --fallback-after times in a row switches, for that car, to its variant with '
                 'this suffix (e.g. _mu80: the same drift planned for 0.8x friction) -- triggered by outcomes only, no '
-                'parameter estimation; the evaluation then also uses the variants on that car (summary eval_adaptive)')
+                'parameter estimation; the evaluation then also uses the variants on that car (summary eval_adaptive). A LADDER: '
+                'comma-separated suffixes (e.g. _mu80,_mu60), one rung further on each new trigger')
 ap.add_argument('--fallback-after', type=int, default=2)
+ap.add_argument('--fallback-on', choices=('fail', 'band'), default='fail', help='fail: spin-outs / crashes trigger the fallback; '
+                'band: any trial outside the success band (a failure or RMS e_y > --fallback-ey) -- a stable but off-path '
+                'trajectory (the low-friction car on a plan it cannot hold) triggers too')
+ap.add_argument('--fallback-ey', type=float, default=0.10)
+ap.add_argument('--fallback-revert', type=int, default=0, help='1: a rung whose real trial does WORSE than the rung above '
+                'it did (a crash, or a larger RMS e_y) sends the goal back up and locks it there: the failure was not grip '
+                '(e.g. the lag car), so the remaining budget trains on the best rung seen')
 ap.add_argument('--eval-runs', type=int, default=4)
 ap.add_argument('--eval-laps', type=float, default=5.0)
 ap.add_argument('--eval-seed', type=int, default=701)
 ap.add_argument('--seed', type=int, default=9001)
 ap.add_argument('--gpu', default=None)
+ap.add_argument('--backend', choices=('sim', 'manual'), default='sim', help='sim: the trials fly the simulated "real" cars '
+                '(real_car.run_many); manual: the REAL car -- each trial is a request in --session-dir that '
+                'ilc_f1tenth_hw/scripts/net_runner.py flies (the operator starts it); its recorded trial comes back in '
+                "real_car.run's format (use --cars real)")
+ap.add_argument('--session-dir', default='', help='--backend manual: the directory the car\'s net_runner watches')
+ap.add_argument('--launch', type=float, nargs=2, default=[1.0, 8.0], metavar=('V_HAND', 'CURRENT'),
+                help='--backend manual: the slow-start launch (the car starts at rest): fixed current (A) until |V| >= '
+                'V_HAND m/s, then the network; the launch phase is cut from the data the ILC learns from')
 a = ap.parse_args()
 if a.gpu is not None:
     os.environ['CUDA_VISIBLE_DEVICES'] = a.gpu
@@ -93,6 +113,47 @@ import bank                                      # noqa: E402
 import ilc_core                                  # noqa: E402
 import real_car as rc                            # noqa: E402
 import sim_jax as sj                             # noqa: E402
+
+PER_STEP = ('x', 'x_true', 'obs', 'obs_true', 'mu', 'a', 'err', 'err_true', 'idx', 'applied')
+
+
+def run_manual(jobs):
+    """--backend manual: each job a request for the real car's net_runner (req_<k>.json + the policy as an npz), waited
+    for (res_<k>.npz: real_car.run's dict); the launch phase (the fixed launch controller, not the network) is cut."""
+    sd = a.session_dir
+    os.makedirs(sd, exist_ok=True)
+    k0 = len([f for f in os.listdir(sd) if f.startswith('req_') and f.endswith('.json')])
+    keys = []
+    for i, j in enumerate(jobs):
+        k = f'{k0 + i:05d}'
+        pol = j['policy']
+        pf = os.path.join(sd, f'policy_{k}.npz')
+        np.savez(pf, **{f'W{n}': np.asarray(W) for n, (W, b) in enumerate(pol)}, **{f'b{n}': np.asarray(b) for n, (W, b) in enumerate(pol)})
+        tmp = os.path.join(sd, f'.req_{k}.json')
+        json.dump(dict(plan=j['plan']['name'], policy=os.path.abspath(pf), laps=float(j['laps']),
+                       launch=dict(v_hand=float(a.launch[0]), current=float(a.launch[1])), car=j['car_name']),
+                  open(tmp, 'w'), indent=1)
+        os.replace(tmp, os.path.join(sd, f'req_{k}.json'))
+        keys.append(k)
+    print(json.dumps(dict(manual=len(jobs), requests=[keys[0], keys[-1]], session=sd)), flush=True)
+    out = []
+    for k in keys:
+        rf = os.path.join(sd, f'res_{k}.json')
+        while not os.path.exists(rf):
+            time.sleep(1.0)
+        time.sleep(0.2)
+        d = np.load(os.path.join(sd, f'res_{k}.npz'), allow_pickle=True)
+        r = {n: (d[n].item() if d[n].ndim == 0 else d[n]) for n in d.files}
+        h = max(int(r.get('handover', 0)), 0)
+        for n in PER_STEP:                        # the network's part of the trial only
+            if n in r:
+                r[n] = r[n][h:]
+        out.append(r)
+    return out
+
+
+def run_jobs(jobs):
+    return run_manual(jobs) if a.backend == 'manual' else rc.run_many(jobs)
 
 DEFAULT_EVAL = [f'mocap_{t}_b{b}' for t in ('square2fast', 'figfast') for b in (25, 21, 14, 0)]
 
@@ -123,7 +184,7 @@ def evaluate(policies, plans_by_name, eval_names, seed, laps, runs):
                 jobs.append(dict(car_name=car, plan=pl, policy=pol, laps=laps, s0=s0, pert=pert,
                                  seed=seed * 7 + k))
                 keys.append((car, name))
-    res = rc.run_many(jobs)
+    res = run_jobs(jobs)
     out = {}
     for (car, name), r, j in zip(keys, res, jobs):
         m = rc.lap_metrics(r, j['plan'])
@@ -154,15 +215,15 @@ def main():
     os.makedirs(a.out, exist_ok=True)
     json.dump(vars(a), open(os.path.join(a.out, 'args.json'), 'w'), indent=1)
     eval_names = a.eval_plans or DEFAULT_EVAL
-    fb = lambda n: n + a.fallback_suffix
+    ladder = [x for x in a.fallback_suffix.split(',') if x]
+    fb = lambda n, k=1: n + (ladder[k - 1] if k > 0 else '')          # rung k of the ladder (0: the plan itself)
     have = lambda n: os.path.exists(os.path.join(bank.PLAN_DIR, n + '.npz'))
-    extra = [fb(n) for n in a.goals + eval_names + a.anchor_plans] if a.fallback_suffix else []
+    extra = [fb(n, k) for n in a.goals + eval_names + a.anchor_plans for k in range(1, len(ladder) + 1)]
     extra = [n for n in extra if have(n)]
     names = list(dict.fromkeys(a.goals + eval_names + a.anchor_plans + extra))
     plans = bank.load_bank([n for n in names if os.path.exists(os.path.join(bank.PLAN_DIR, n + '.npz'))])
     by_name = {p['name']: p for p in plans}
     eval_names = [n for n in eval_names if n in by_name]
-    eval_all = list(dict.fromkeys(eval_names + [fb(n) for n in eval_names if a.fallback_suffix and fb(n) in by_name]))
     t0 = time.time()
     summary = dict(args=vars(a), cars={})
     if a.policy == 'lqr':
@@ -175,7 +236,7 @@ def main():
         summary['eval'] = evaluate({c: base for c in a.cars}, by_name, eval_names, a.eval_seed, a.eval_laps, a.eval_runs)
         json.dump(summary, open(os.path.join(a.out, 'summary.json'), 'w'), indent=1)
         return
-    gn_names = list(dict.fromkeys(a.goals + [fb(g) for g in a.goals if a.fallback_suffix and fb(g) in by_name]))
+    gn_names = list(dict.fromkeys(a.goals + [fb(g, k) for g in a.goals for k in range(1, len(ladder) + 1) if fb(g, k) in by_name]))
     goal_plans = [by_name[g] for g in gn_names]
     P = sj.Plans(goal_plans, gn_names)
     T1 = int(np.ceil(1.05 * max(P.lap_time) / sj.DT))                 # one lap (the trust-region pool)
@@ -189,8 +250,8 @@ def main():
         return gns[cap]
 
     # trust-region pool: nominal-sim states of the bank's plans flown by the starting network
-    anc = [by_name[n] for n in list(dict.fromkeys(a.anchor_plans + [fb(n) for n in a.anchor_plans if a.fallback_suffix]))
-           if n in by_name]
+    anc = [by_name[n] for n in list(dict.fromkeys(a.anchor_plans + [fb(n, k) for n in a.anchor_plans
+                                                                    for k in range(1, len(ladder) + 1)])) if n in by_name]
     PA = sj.Plans(anc, [p['name'] for p in anc])
     n_pool = 8 * len(anc)
     pid = np.repeat(np.arange(len(anc)), 8)
@@ -222,6 +283,7 @@ def main():
     last_prog = {c: None for c in a.cars}
     rollbacks = {c: [] for c in a.cars}
     goal_now = {c: {g: g for g in a.goals} for c in a.cars}
+    rung = {c: {g: 0 for g in a.goals} for c in a.cars}
     fails_row = {c: {g: 0 for g in a.goals} for c in a.cars}
     switched = {c: {} for c in a.cars}
     data = {c: [] for c in a.cars}
@@ -231,11 +293,29 @@ def main():
     crashes = {c: [] for c in a.cars}                 # every crashed training trial: it, goal, reason, peak |e_y|
     last_crashed = {c: set() for c in a.cars}         # goals that crashed in the last kept iteration
     frozen = {c: False for c in a.cars}               # crash budget used up: no more trials, last kept network
+    prio = {c: {g: None for g in a.goals} for c in a.cars}     # --goal-order worst: the last outcome per goal (None: untried)
+    seen = {c: {g: {} for g in a.goals} for c in a.cars}       # --fallback-revert: the last outcome per rung
+    locked = {c: {g: False for g in a.goals} for c in a.cars}
+
+    def pick(c, it):
+        if not a.goal_cycle:
+            return a.goals
+        if a.goal_order == 'worst':
+            order = a.goals[it % len(a.goals):] + a.goals[:it % len(a.goals)]
+            untried = [g for g in order if prio[c][g] is None]
+            if untried:
+                return [untried[0]]
+            worst = max(order, key=lambda g: prio[c][g])
+            if prio[c][worst] > a.fallback_ey:
+                return [worst]
+        return [a.goals[it % len(a.goals)]]
+
     for it in range(a.iters):
-        goals_it = [a.goals[it % len(a.goals)]] if a.goal_cycle else a.goals
+        goals_c = {c: pick(c, it) for c in a.cars}
         jobs = []
         for c in [c for c in a.cars if not frozen[c]]:
             pol = [(np.asarray(W), np.asarray(b)) for W, b in params[c]]
+            goals_it = goals_c[c]
             for gi, g in enumerate(goals_it):
                 pl = by_name[goal_now[c][g]]
                 if a.train_starts > 0:
@@ -245,9 +325,10 @@ def main():
                     s0, pert = 0.0, rs.uniform(-0.1, 0.1, 5)
                 jobs.append(dict(car_name=c, plan=pl, policy=pol, laps=a.trial_laps + 0.05, s0=s0, pert=pert,
                                  seed=a.seed + 100 * it + gi))
-        res = rc.run_many(jobs)
+        res = run_jobs(jobs)
         for c in [c for c in a.cars if not frozen[c]]:
             rr = [r for r, j in zip(res, jobs) if j['car_name'] == c]
+            goals_it = goals_c[c]
             crashed = {g for g, r in zip(goals_it, rr) if r['failed']}
             if a.record:
                 for g, r in zip(goals_it, rr):
@@ -258,13 +339,29 @@ def main():
                     crashes[c].append(dict(it=it, goal=goal_now[c][g], reason=r.get('crash', ''),
                                            peak_ey=r.get('peak_ey'), laps=r['laps']))
             pid_c = np.array([gn_names.index(j['plan']['name']) for j in jobs if j['car_name'] == c])
-            for gi, (g, r) in enumerate(zip(goals_it, rr)):          # goal fallback on repeated spin-outs
-                fails_row[c][g] = fails_row[c][g] + 1 if r['failed'] else 0
-                if (a.fallback_suffix and goal_now[c][g] == g and fails_row[c][g] >= a.fallback_after
-                        and fb(g) in by_name):
-                    goal_now[c][g] = fb(g)
-                    switched[c][g] = dict(it=it, to=fb(g))
-                    print(json.dumps(dict(it=it, car=c, fallback=g, to=fb(g))), flush=True)
+            for gi, (g, r) in enumerate(zip(goals_it, rr)):          # goal fallback on repeated out-of-band trials
+                out = bool(r['failed'])
+                if a.fallback_on == 'band' and not out:
+                    ey = rc.lap_metrics(r, by_name[goal_now[c][g]]).get('rms_ey')
+                    out = ey is None or ey > a.fallback_ey
+                fails_row[c][g] = fails_row[c][g] + 1 if out else 0
+                ey_now = None if r['failed'] else rc.lap_metrics(r, by_name[goal_now[c][g]]).get('rms_ey')
+                prio[c][g] = 1e3 if ey_now is None else float(ey_now)
+                seen[c][g][rung[c][g]] = prio[c][g]
+                k0 = rung[c][g]
+                if (a.fallback_revert and ladder and not locked[c][g] and k0 > 0 and k0 - 1 in seen[c][g]
+                        and seen[c][g][k0] > seen[c][g][k0 - 1]):
+                    rung[c][g], goal_now[c][g], fails_row[c][g], locked[c][g] = k0 - 1, fb(g, k0 - 1), 0, True
+                    prio[c][g] = seen[c][g][k0 - 1]
+                    switched[c][g] = dict(it=it, to=fb(g, k0 - 1), rung=k0 - 1, reverted=True)
+                    print(json.dumps(dict(it=it, car=c, revert=g, to=fb(g, k0 - 1))), flush=True)
+                    continue
+                k = rung[c][g] + 1
+                if ladder and not locked[c][g] and k <= len(ladder) and fails_row[c][g] >= a.fallback_after and fb(g, k) in by_name:
+                    rung[c][g], goal_now[c][g], fails_row[c][g] = k, fb(g, k), 0
+                    prio[c][g] = None                  # the new rung is untried
+                    switched[c][g] = dict(it=it, to=fb(g, k), rung=k)
+                    print(json.dumps(dict(it=it, car=c, fallback=g, to=fb(g, k))), flush=True)
             prog = float(np.mean([max(r['laps'], 0.0) for r in rr]))
             for r in rr:
                 real_laps[c] += max(r['laps'], 0.0)
@@ -336,11 +433,22 @@ def main():
     for c in a.cars:
         np.savez(os.path.join(a.out, f'{c}_policy.npz'), **{f'W{i}': W for i, (W, b) in enumerate(pols[c])},
                  **{f'b{i}': b for i, (W, b) in enumerate(pols[c])})
-    summary['eval'] = evaluate(pols, by_name, eval_all, a.eval_seed, a.eval_laps, a.eval_runs)
+    # each eval plan on the rung the car settled on for the trained goals of the same track (the deepest one)
+    track = lambda n: n.split('_b')[0]
+    lvl = {c: {track(g): 0 for g in a.goals} for c in a.cars}
+    for c in a.cars:
+        for g in a.goals:
+            lvl[c][track(g)] = max(lvl[c][track(g)], rung[c][g])
+    use = {c: {n: (fb(n, lvl[c].get(track(n), 0)) if fb(n, lvl[c].get(track(n), 0)) in by_name else n) for n in eval_names}
+           for c in a.cars}
+    summary['eval'] = {}
+    for c in a.cars:                                  # the plans themselves and, on a car that switched, its rungs too
+        names_c = list(dict.fromkeys(eval_names + list(use[c].values())))
+        summary['eval'].update(evaluate({c: pols[c]}, by_name, names_c, a.eval_seed, a.eval_laps, a.eval_runs))
     summary['switched'] = switched
-    if a.fallback_suffix:
-        summary['eval_adaptive'] = {c: {n: summary['eval'][c][fb(n) if switched[c] and fb(n) in summary['eval'][c] else n]
-                                        for n in eval_names} for c in a.cars}
+    summary['rungs'] = {c: {t: (ladder[k - 1] if k else '') for t, k in lvl[c].items()} for c in a.cars}
+    if ladder:
+        summary['eval_adaptive'] = {c: {n: summary['eval'][c][use[c][n]] for n in eval_names} for c in a.cars}
     summary['trials'] = trials
     summary['real_laps'] = real_laps
     summary['rollbacks'] = rollbacks

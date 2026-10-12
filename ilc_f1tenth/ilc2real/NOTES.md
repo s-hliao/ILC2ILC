@@ -1,5 +1,130 @@
 # ILC2Real on the F1TENTH: continuous drift on the LLA-MPC car
 
+## Exact-dynamics oracles: RL matches ours under idealized conditions (2026-10-12)
+
+User: show that RL can transfer under idealized conditions, so the baselines cannot be dismissed as implemented wrong
+(`log/dilc/plane/match/EXACT_ORACLES_RUNBOOK.md`).
+
+**Setup** (`car_exact_oracles.sh`):
+- PPO with a privileged critic (true state + z) on each multi-body car itself, with the exact code path and cars of the
+  evaluation (`real_car.exact_check`; C0 reproduces `rma_real_ep0`: 52.5 vs 53.3 %);
+- the idealized reference: `--rungs-from v3drBtL_s0_lad1_lap10`, i.e. each car flies and is scored on the plan rungs our
+  method settled on;
+- the RMA teacher with its true latent, up to 10k laps per car.
+
+| arm (12 runs; the 5 cars) | b25 | all plans | crashes | b25 e_y | laps / car |
+|---|---|---|---|---|---|
+| **ours** `v3drBtL_s0_lad1_lap10` | 100 % | 100 % | 0 % | 4.8 cm | 9 |
+| RMA exact, 0 / 384 laps | 60.8 / 62.5 % | 77.7 / 78.8 % | 8.8 / 8.5 % | 8.1 / 7.9 cm | 0 / 382 |
+| RMA exact, 1,536 | 81.7 % | 92.1 % | 3.5 % | 7.1 cm | 1,533 |
+| RMA exact, 3,072 | 100 % | 97.5 % | 0 % | 4.2 cm | 3,095 |
+| **RMA exact, 5,000** | **100 %** | **100 %** | **0 %** | 2.4 cm | 5,159 |
+| RMA exact, 10,000 | 100 % | 100 % | 0 % | 1.4 cm | 10,293 |
+
+RL with exact dynamics matches our success at ~5,000 laps per car (b25 at ~3,000), about 550x our 9 laps, and tracks
+tighter with more data.
+
+**PPO+DR exact** (`ppo_exact`; the non-privileged actor, privileged critic, same rungs):
+
+| laps / car | 0 | 1,536 | 3,072 | 5,000 | 10,000 |
+|---|---|---|---|---|---|
+| b25 / all / crash | 39.2 / 61.5 / 26.7 | 47.5 / 73.1 / 20.2 | 84.2 / 94.6 / 4.0 | **100 / 100 / 0** | 100 / 100 / 0 |
+
+It also matches at ~5,000 laps.
+
+**FADA exact fails** (`fada_exact`, `fada_exact2`). Setup: per-car IDMs from each car's own 6,000 episodes (`fada_collect_car.py`,
+privileged relabelling, trunk target dims 0-4, H = 4), the oracle planner from our best arm, the same rungs.
+
+Result: 7-8 % b25 zero-shot, and adaptation makes it worse (0-7 % at 2,016 laps, ~80 % crashes). Its own crash-heavy flights
+are its adaptation data.
+
+**Bug found and fixed** (`real_car.py`): the oracle planner looked its target deviation up 1 plan index (5 mm) ahead instead of
+H control periods ahead (~7 indices per period at the measured speed). Every car FADA-oracle run before 2026-10-12 04:30 flew
+that bug. The fix (`fada_exact2`) does not rescue FADA: 8.3 % -> 0 %.
+
+**Without walls** (`fada_nowall`, `car_fada_nowall.sh`; the user's "what if you disable crashes?"): adapted with the room's walls off (`F1T_SAFETY_EY=10`: whole laps instead of crash-truncated ones; spin-outs still end a trial), evaluated with them (0.3 m). b25 success / b25 crashes at 0 / 24 / 96 / 384 / 1,536 / 2,016 laps: 8.3 / 85.8, 5.0 / 92.5, 1.7 / 98.3, 0.0 / 100.0, 0.0 / 91.7, 0.0 / 97.5. The walls are not what stops FADA.
+
+On the car the inverse-dynamics route fails even with exact dynamics and an oracle planner; RL does not. PPO+DR (`ppo_exact`) and FADA (`fada_exact`, per-car IDMs from each car's own transitions,
+`fada_collect_car.py`) follow in `car_exact_oracles.sh` / `car_exact_more.sh`.
+
+## Low-friction fix: the reference ladder (2026-10-11 night / 10-12)
+
+User: "fix our method for the car on low-grip scenarios, keep going until it is fixed". Criterion: a STABLE trajectory, grip
+or drift, whichever the car settles into; slower is fine. Success as before: on track over 5 chained laps, RMS e_y ≤ 10 cm,
+pace ≥ 90 % of the plan flown.
+
+**Diagnosis**
+- **Not the network.** The headline network (`v3drBt_s0`) failed the friction ×0.8 car (0 % on every drift plan, e_y 13-17 cm,
+  no crashes) because the nominal plans ask for more grip than that car has. Zero-shot on plans re-solved for 0.8×
+  friction (`_mu80`), the same network flies all six at 100 % (e_y 0.7-7.6 cm; a 4-run probe, `runs/hw/probe_v3drBt_mu80`).
+- **Not the speed.** Slowing the nominal plans to 0.9 / 0.8 / 0.7× (`trajopt_drift --vscale`, `scheduler_slow.py`) changes
+  nothing: the friction car stays at 0 % on b25 (e_y 13.6-17.0 cm), retrained on the slow bank or not. The reference has to be re-planned for less grip,
+  not just slowed.
+
+**Method: the hardware stage picks the reference by outcome** (`hw_stage --fallback-suffix _mu80,_mu60 --fallback-on band
+--fallback-after 1`). The fallback ladder:
+- a goal whose real trial misses the success band (a crash, or RMS e_y > 10 cm) steps one rung down: the same track and
+  sideslip re-planned for 0.8×, then 0.6× friction;
+- it uses outcomes only, with no parameter estimation;
+- the evaluation flies each car on the rung it settled on, per track (`summary['rungs']`, `reeval.py`).
+
+The network has to know the rungs' plans: `v3drBtL_s0` = the headline recipe (DR (B) sim stage, task objective) with the bank
+PL8 plus its `_mu80` / `_mu60` variants. The sim stays nominal.
+
+**Result (12 runs, `reeval.py`; b25 success / crash, all plans)**
+- `v3drBtL_s0_lad1_lap10` (10 real laps):
+  - **b25: 100 % / 0 % on all 8 cars**: the 5, plus ax:mu=0.9 / 0.7 / 0.6;
+  - all plans: 100 % on the 5 and ×0.9; 99 % on ×0.7 and ×0.6 (figfast b0 at `_mu60`: 11 / 12);
+  - friction ×0.8 (real_mu): `_mu80` on both tracks, b25 e_y 1.2 cm (square) / 5.2 cm (figfast).
+- Rungs settled on: real_mu `_mu80` (both tracks), real_lag figfast `_mu80`, ×0.9 figfast `_mu80`, ×0.7 and ×0.6 `_mu60`.
+  The other cars stay on the nominal plans.
+- **The rungs' price in speed:** `_mu80` plans run at 90 % of the nominal plan's speed, `_mu60` at 78 % (mean |V|, b0 and
+  b25, both tracks).
+- **The budget matters.** At 4 laps, or with `--fallback-after 2`, the ×0.7 / ×0.6 cars cannot descend two rungs: b25 0 %,
+  and the lag car's b25 58-62 %.
+- The first version, on `v3drBt_s0` (whose bank has no `_mu60` plans), got 100 % except figfast b0 `_mu60` on ×0.7 / ×0.6
+  (0 %: the plan LQR flies it, the network never saw a `_mu60` plan). That is what the bank extension fixes.
+- Zero-shot, the bigger bank costs the nominal cars (b25 50-88 %). The hardware stage recovers them fully.
+- **Seed spread (12 runs, 8 cars; b25 success / all-plans success / crashes over all plans; friction x0.8 b25)**
+
+  | sim seed, hardware stage | b25 | all plans | crashes | real_mu b25 |
+  |---|---|---|---|---|
+  | s0, ladder (10 laps) | 100 % | 99.7 % | 0.3 % | 100 % |
+  | s0, + revert + worst-goal order | 100 % | 99.7 % | 0.1 % | 100 % |
+  | s0, sim-only stopping rule pick (it20) + revert | 100 % | 99.3 % | 0.4 % | 100 % |
+  | **s2, + revert + worst-goal order** | **99.5 %** | **99.5 %** | **0.4 %** | **100 %** |
+  | s1, ladder | 65.6 % | 80.6 % | 11.8 % | 50 % |
+  | s1, + revert + worst-goal order | 70.8 % | 85.0 % | 4.0 % | 50 % |
+  | s1, same at 16 laps | 71.9 % | 85.7 % | 6.1 % | 79 % |
+  | s1, + stronger steps (cap .10, beta .8), 10 laps | 74.0 % | 88.9 % | 3.8 % | 54 % |
+  | s1, stronger steps, 16 laps | 72.9 % | 84.4 % | 9.4 % | 96 % (but mass / act cars b25 4 / 50 %, crashes 79 / 50 %) |
+
+  - **2 of 3 sim seeds** give the fully working low-friction car with the 10-lap recipe.
+  - **Seed 1 is the outlier.** Its sim network crashes figfast `_mu80` on real_mu zero-shot (s0: 83 % success), settles on
+    `_mu60`, and misses there by 0.3-1.8 cm.
+  - **The sim-only stopping rule cannot tell s1 apart** (sim score 83.3 vs s0's 82.9).
+  - `--fallback-revert 1` (a rung worse than the one above -> back up, locked) fixes the lag car's over-descent
+    (crashes 50 -> 4 %) and costs nothing on s0. `--goal-order worst`: neutral.
+
+**What to claim.**
+- The reference ladder fixes the low-friction car. With the 10-lap hardware stage it reaches 99.5-100 % b25, 0-0.4 %
+  crashes, on all 8 cars (frictions ×0.9 / 0.8 / 0.7 / 0.6) for 2 of 3 sim-stage seeds (s0, s2), at a speed price of
+  10 % (`_mu80`) or 22 % (`_mu60`).
+- Seed 1 is the outlier, 65.6-74 % b25: a weaker sim network crashes figfast `_mu80` on real_mu and settles one rung
+  lower, with 0.3-1.8 cm near-misses. The sim-only stopping rule does not flag it.
+- Slowing the plans alone does nothing for the friction car; re-planning for less grip does.
+- Exact-dynamics RL matches ours on the car: privileged PPO on each exact multi-body car with our rungs, RMA (true latent)
+  and PPO+DR alike, reach 100 % b25 / 100 % all plans / 0 crashes at ~5,000 laps per car vs our 9 (~550×).
+- FADA fails even with exact dynamics, per-car exact IDMs and an oracle planner (≤ 8 % b25, ~80-100 % b25 crashes), and also when adapted without walls.
+
+Code:
+- `hw_stage.py`: `--fallback-suffix` ladder (comma-separated), `--fallback-on band`, `--fallback-ey`, per-car per-track
+  rungs in the summary;
+- `reeval.py`: ladder arms;
+- `trajopt_drift.py --vscale`;
+- plans `plans_mu02_tight/*_mu60` and b14 / b21 `_mu80`;
+- `car_ladder.sh`.
+
 ## Tight tracks + 0.3 m envelope (the room), 2026-10-09 15:00 – 2026-10-10 00:16
 
 This is the current result (μ 0.2). The μ 0.2 wide-track results below are archived in `archive_mu02_wide/`.

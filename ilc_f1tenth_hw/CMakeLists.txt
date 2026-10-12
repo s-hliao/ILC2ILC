@@ -8,6 +8,8 @@ install(PROGRAMS
   scripts/optitrack_node.py
   scripts/imu_zupt_prep.py
   scripts/drive_relay.py
+  scripts/net_runner.py
+  scripts/car_sim_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})

@@ -26,7 +26,10 @@ import sys
 import time
 
 ap = argparse.ArgumentParser()
-ap.add_argument('--idm', required=True)
+ap.add_argument('--idm', required=True, help='the IDM (fada_car.py), or one per car: a path with {car} '
+                '(fada_collect_car.py, the exact-dynamics oracle)')
+ap.add_argument('--rungs-from', default='', help='idealized reference: each car flies / is scored on the plan rungs the '
+                'given hardware-stage arm settled on for it (as ppo_real_car.py)')
 ap.add_argument('--arm', required=True)
 ap.add_argument('--cars', nargs='+', default=['real_nom', 'real_mass', 'real_mu', 'real_act', 'real_lag'])
 ap.add_argument('--goals', nargs='+', default=[f'mocap_{t}_b{b}' for t in ('square2fast', 'figfast') for b in (10, 18, 25)])
@@ -57,7 +60,7 @@ import bank                                      # noqa: E402
 import real_car as rc                            # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-_IDM = np.load(a.idm)                             # the IDM's target entries (fada_car.py --dims; all 8 by default)
+_IDM = np.load(a.idm.format(car=a.cars[0]))                             # the IDM's target entries (fada_car.py --dims; all 8 by default)
 DIMS = np.asarray(_IDM['dims']) if 'dims' in _IDM.files else np.arange(8)
 ND = len(DIMS)
 H = a.horizon
@@ -75,6 +78,15 @@ def load_mlp(path):
     d = np.load(path)
     n = len([k for k in d.files if k.startswith('W')])
     return [(np.asarray(d[f'W{i}'], np.float32), np.asarray(d[f'b{i}'], np.float32)) for i in range(n)]
+
+
+RUNGS = json.load(open(os.path.join(HERE, 'runs/hw', a.rungs_from, 'summary.json')))['rungs'] if a.rungs_from else {}
+track = lambda n: n.split('_b')[0]
+
+
+def goal_for(c, g):
+    sfx = RUNGS.get(c, {}).get(track(g), '')
+    return g + sfx if sfx and os.path.exists(os.path.join(bank.PLAN_DIR, g + sfx + '.npz')) else g
 
 
 def oracle_tables(car, plans):
@@ -104,31 +116,34 @@ def oracle_tables(car, plans):
 
 def main():
     rng = np.random.default_rng(a.seed)
-    names = list(dict.fromkeys(a.goals + a.eval_plans))
+    names = list(dict.fromkeys(a.goals + a.eval_plans + [goal_for(c, n) for c in a.cars for n in a.goals + a.eval_plans]))
     plans = {p['name']: p for p in bank.load_bank(names)}
-    base = [(jnp.array(W), jnp.array(b)) for W, b in load_mlp(a.idm)]
+    if '{car}' in a.idm:
+        rc.exact_check(a.cars, os.path.join(HERE, 'runs/hw', f'{a.arm}_exact_check.json'))
+    base = {c: [(jnp.array(W), jnp.array(b)) for W, b in load_mlp(a.idm.format(car=c))] for c in a.cars}
     opt = optax.adam(1e-3)
 
-    def merged(lo):
-        return [(W + A @ B, b) for (W, b), (A, B) in zip(base, lo)]
+    def merged(c, lo):
+        return [(W + A @ B, b) for (W, b), (A, B) in zip(base[c], lo)]
 
     def lora_init(k):
         out = []
-        for W, b in base:
+        for W, b in base[a.cars[0]]:
             k, kk = jax.random.split(k)
             out.append((jax.random.normal(kk, (W.shape[0], a.rank)) * 0.01, jnp.zeros((a.rank, W.shape[1]))))
         return out
 
     @jax.jit
-    def astep(lo, st, x, y):
-        l, g = jax.value_and_grad(lambda q: jnp.mean((mlp(merged(q), x) - y) ** 2))(lo)
+    def astep(bs, lo, st, x, y):
+        l, g = jax.value_and_grad(lambda q: jnp.mean((mlp([(W + A @ B, b) for (W, b), (A, B) in zip(bs, q)], x) - y) ** 2))(lo)
         u, st = opt.update(g, st, lo)
         return optax.apply_updates(lo, u), st, l
 
     oracle, oracle_laps = {}, {}
     if a.oracle_arm:
-        for c in a.cars:
-            oracle[c], oracle_laps[c] = oracle_tables(c, plans)
+        for c in a.cars:                        # the tables of the plans this car flies (its rungs under --rungs-from)
+            mine = {n: p for n, p in plans.items() if n in {goal_for(c, m) for m in a.goals + a.eval_plans}}
+            oracle[c], oracle_laps[c] = oracle_tables(c, mine)
     lora = {c: lora_init(jax.random.PRNGKey(7)) for c in a.cars}
     st = {c: opt.init(lora[c]) for c in a.cars}
     data = {c: ([], []) for c in a.cars}
@@ -137,8 +152,8 @@ def main():
     crashes = {c: 0 for c in a.cars}
 
     def policy(c):
-        return dict(fada=[(np.asarray(W), np.asarray(b)) for W, b in merged(lora[c])], lam=LAM_EFF,
-                    oracle=oracle.get(c) or None, dims=None if ND == 8 and H == 1 else DIMS)
+        return dict(fada=[(np.asarray(W), np.asarray(b)) for W, b in merged(c, lora[c])], lam=LAM_EFF,
+                    oracle=oracle.get(c) or None, dims=None if ND == 8 and H == 1 else DIMS, horizon=H)
 
     def write_ckpt(k, t):
         d = os.path.join(HERE, 'runs/hw', f'{a.arm}_ep{k}')
@@ -146,13 +161,16 @@ def main():
         for c in a.cars:
             p = policy(c)
             np.savez(os.path.join(d, f'{c}_policy.npz'), **{f'W{i}': W for i, (W, b) in enumerate(p['fada'])},
-                     **{f'b{i}': b for i, (W, b) in enumerate(p['fada'])}, lam=LAM_EFF, mode='fada',
+                     **{f'b{i}': b for i, (W, b) in enumerate(p['fada'])}, lam=LAM_EFF, mode='fada', horizon=H,
                      **({} if ND == 8 and H == 1 else dict(dims=DIMS)),
                      **{f'oracle__{n}': v for n, v in (oracle.get(c) or {}).items()})
         args = dict(vars(a), policy=a.idm, episodes_per_car=k)
+        if RUNGS:                               # reeval.py scores each car on its rung's plans
+            args['fallback_suffix'] = '_mu80,_mu60'
         json.dump(args, open(os.path.join(d, 'args.json'), 'w'), indent=1)
         json.dump(dict(args=args, real_laps=dict(laps), oracle_laps=oracle_laps, crashes=crashes, episodes=eps,
-                       seconds=t, safety_ey=float(os.environ.get('F1T_SAFETY_EY') or 0.6)),
+                       seconds=t, safety_ey=float(os.environ.get('F1T_SAFETY_EY') or 0.6),
+                       **({'rungs': {c: RUNGS.get(c, {}) for c in a.cars}} if RUNGS else {})),
                   open(os.path.join(d, 'summary.json'), 'w'), indent=1)
 
     t0 = time.time()
@@ -164,7 +182,7 @@ def main():
         for c in a.cars:
             pol = policy(c)
             for k in range(a.per_iter):
-                pl = plans[a.goals[(it * a.per_iter + k) % len(a.goals)]]
+                pl = plans[goal_for(c, a.goals[(it * a.per_iter + k) % len(a.goals)])]
                 jobs.append(dict(car_name=c, plan=pl, policy=pol, laps=1.05, s0=rng.uniform() * float(pl['length']),
                                  pert=rng.uniform(-0.1, 0.1, 5), seed=int(rng.integers(1 << 30))))
         res = rc.run_many(jobs)
@@ -181,7 +199,7 @@ def main():
             X, Y = jnp.array(np.concatenate(data[c][0]), jnp.float32), jnp.array(np.concatenate(data[c][1]), jnp.float32)
             for s in range(a.adapt_steps):
                 b = jnp.array(rng.integers(0, X.shape[0], min(2048, X.shape[0])))
-                lora[c], st[c], l = astep(lora[c], st[c], X[b], Y[b])
+                lora[c], st[c], l = astep(base[c], lora[c], st[c], X[b], Y[b])
         it += 1
         print(json.dumps(dict(it=it, eps=eps, laps={c: round(v, 1) for c, v in laps.items()}, crashes=crashes,
                               t=round(time.time() - t0, 1))), flush=True)
