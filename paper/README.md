@@ -7,6 +7,7 @@ read run data); each writes here.
 | path | contents | made by |
 |---|---|---|
 | `abstract.txt` | the abstract draft | |
+| `baselines.json` | the RMA / FADA rows every figure shows: per robot, of each method, the best non-oracle and the best oracle variant (best success at any real-data budget), and the low / asymptotic real-data budgets (quadruped 24 / 96 jumps per robot) | `select_baselines.py` (rerun when a candidate run finishes; then `ilc_mjx/scripts/eval_picks.py` flies the quadruped picks under the perturbations, `ilc_f1tenth/ilc2real/car_stop_axes.sh` the car's) |
 | `REFERENCES.md` | related work, grouped by relation to DistILC, read-status tags, contrasts, open items | by hand |
 | `quadruped/figures/` | `01`-`13`: methods by perturbation kind, per perturbation / robot, sim sweeps, goal-plane maps, real-jump budget, tolerance, sim training, per axis, what the stage absorbs, trained x tested, axis interactions, real-data matching | `ilc_mjx/paper/ilc2real_figs.py` (13: `quad_figures.py`) |
 | `quadruped/figures_summary/` | `fig1`-`fig8`: factorial, methods, budget, hardware-stage arms, sim variants, efficiency, goal maps, real-data matching | `ilc_mjx/paper/quad_figures.py` |
@@ -20,6 +21,7 @@ read run data); each writes here.
 Regenerate (from `src/`):
 
 ```bash
+python3 paper/select_baselines.py            # first: the picked baselines and the budgets
 # quadruped (the ilcmjx env; reads ~/ilc_ws/log/dilc/plane, outside the repo)
 ~/miniconda3/envs/ilcmjx/bin/python ilc_mjx/paper/ilc2real_figs.py
 ~/miniconda3/envs/ilcmjx/bin/python ilc_mjx/paper/quad_figures.py

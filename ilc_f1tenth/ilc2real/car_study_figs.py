@@ -102,11 +102,12 @@ def fig8():
                         mfc='white' if 'ORACLE' in lab else col)
         axs[1].plot(x, [100 * np.mean([e['real_mu'][p]['success'] for p in e['real_mu'] if p.endswith('_b25')])
                         for _, e in pts], color=col, marker=mk, ms=5, lw=1.6, mec='#333' if col == C['yellow'] else col,
-                    mew=0.5)
+                    mew=0.5, ls='--' if 'ORACLE' in lab else '-', mfc='white' if 'ORACLE' in lab else col)
         if isinstance(arm, tuple):
             continue
         axs[2].plot(x[1:], [arm_crashes(f'{arm}_ep{ep}') for ep, _ in pts[1:]], color=col, marker=mk, ms=5, lw=1.6,
-                    mec='#333' if col == C['yellow'] else col, mew=0.5)
+                    mec='#333' if col == C['yellow'] else col, mew=0.5, ls='--' if 'ORACLE' in lab else '-',
+                    mfc='white' if 'ORACLE' in lab else col)
     for lab, arm, col, mk in ours:                  # our own real-data budget: zero-shot, 2-10 laps, 24 laps
         net = arm.replace('_hw24', '')
         pts = [(L, arm_eval(f'{net}_{"zs" if L == 0 else f"lap{L}"}')) for L in (0, 2, 4, 6, 8, 10)]
@@ -199,20 +200,46 @@ def fig9():
 
 L10 = os.path.exists(os.path.join(HERE, 'runs/axes/sweep_l10.json'))     # the 10-lap suite (scheduler_lap10.py)
 SFX, BUD = ('_l10', '10 real laps') if L10 else ('', '24 real laps')
-NETS = [('ours_drBt', 'ours + DR (task objective), adapted on each car (no perturbation)', C['blue'], '-', '*'),
-        ('ours_drBt_zs', 'ours + DR (task objective), zero-shot', C['blue'], ':', '*'),
+_BJ = json.load(open(os.path.join(HERE, '..', '..', 'paper', 'baselines.json')))['car']
+
+
+def _pick(role):
+    """The picked baseline's legend text: method, oracle or not, and the real laps it took."""
+    b = _BJ[role]['best']
+    own = 'its own' if role.startswith('fada_oracle') else ''        # the oracle FADA's planner: fit to OUR real laps
+    return (f"{role.split('_')[0].upper()}, best {'oracle' if b['oracle'] else 'non-oracle'} "
+            f"({b['best_budget']} {own + ' ' if own else ''}real laps{'' if b['best_budget'] or own else ', zero-shot'}"
+            f"{'; planner fit to our real laps' if own else ''})")
+
+
+# the paper's rows (2026-10-11): our headline = the stopping-rule network (ours_stop*; car_stop_axes.sh -> *_l10s), the
+# RMA / FADA rows = only the best non-oracle and best oracle of each (pick_nets.py); the other rows: scheduler_lap10.py's suite
+NETS = [('ours_stop', 'ours + DR (task objective, stopping rule), adapted on each car (no perturbation)', C['blue'], '-', '*'),
+        ('ours_stop_zs', 'ours + DR (task objective, stopping rule), zero-shot', C['blue'], ':', '*'),
         ('ours_drB', 'ours + DR (B), adapted on the nominal car', C['green'], '-', 'o'),
         ('ours_drB_zs', 'ours + DR (B), zero-shot', C['green'], ':', 'o'),
-        ('ours_nom', 'ours, adapted on the nominal car', C['blue'], '-', 's'),
+        ('ours_nom', 'ours, adapted on the nominal car', C['black'], '-', 's'),
         ('ppo_dr_hw', 'PPO+DR + our stage', C['pink'], '-', 'D'),
         ('ppo_dr_zs', 'PPO+DR, zero-shot', C['pink'], ':', 'D'),
-        ('rma_zs', 'RMA', C['red'], ':', 'v'),
+        ('rma_nonoracle', _pick('rma_nonoracle'), C['red'], ':', 'v'),
+        ('rma_oracle', _pick('rma_oracle'), C['red'], '--', 'v'),
+        ('fada_nonoracle', _pick('fada_nonoracle'), C['orange'], ':', 'P'),
+        ('fada_oracle', _pick('fada_oracle'), C['orange'], '--', 'P'),
         ('lqr', 'plan LQR', C['grey'], ':', 'x')]
+_OLD = ('ours_drBt', 'ours_drBt_zs', 'rma_zs')     # superseded rows of the *_l10 suites (rma_zs = rma_nonoracle's network)
+
+
+def suite(t):
+    """runs/axes/<t>_l10 merged with <t>_l10s (the stop network + the picks): {net: {car: {plan: metrics}}}."""
+    e = {k: v for k, v in json.load(open(os.path.join(HERE, 'runs/axes', f'{t}{SFX}.json')))['eval'].items() if k not in _OLD}
+    f = os.path.join(HERE, 'runs/axes', f'{t}{SFX}s.json')
+    if os.path.exists(f):
+        e.update(json.load(open(f))['eval'])
+    return e
 
 
 def fig10():
-    S = json.load(open(os.path.join(HERE, f'runs/axes/sweep{SFX}.json')))['eval']
-    nom = json.load(open(os.path.join(HERE, f'runs/axes/sense{SFX}.json')))['eval']    # no plain real_nom there
+    S = suite('sweep')
     axes = {}
     for car in next(iter(S.values())):
         k, v = car[3:].split('=')
@@ -228,8 +255,7 @@ def fig10():
     adapted = {}                      # the hardware stage run ON the axis car (ax_<k><v>_drB_hw24)
     for k in ks:
         for v in axes[k]:
-            tag = f'ax_{k}{v:g}_drBt_lap10' if L10 else f'ax_{k}{v:g}_drB_hw24'
-            e = arm_eval(tag)
+            e = arm_eval(f'ax_{k}{v:g}_drBtS_lap10')     # car_stop_axes.sh: the stop network adapted on the axis car
             if e:
                 adapted[(k, v)] = pooled(e, plans='_b25')[0]
     for i, k in enumerate(ks):
@@ -242,8 +268,8 @@ def fig10():
             ax.plot(vs, y, color=col, ls=ls, marker=mk, ms=4, lw=1.5, label=nl)
         av = [(v, adapted[(k, v)]) for v in vs if (k, v) in adapted]
         if av:
-            ax.plot([q[0] for q in av], [q[1] for q in av], color=C['green'], marker='*', ms=11, ls='none', mec='#333',
-                    mew=0.5, label=f'ours + DR, adapted ON that car ({BUD})')
+            ax.plot([q[0] for q in av], [q[1] for q in av], color=C['sky'], marker='*', ms=11, ls='none', mec='#333',
+                    mew=0.5, label=f'ours (stopping rule), adapted ON that car ({BUD})')
         if NOMV.get(k) is not None:
             ax.axvline(NOMV[k], color=C['grey'], lw=0.8, ls='--')
         ax.set_xlabel(lab.get(k, k), fontsize=9)
@@ -259,7 +285,7 @@ def fig10():
             if y not in l:
                 h.append(x)
                 l.append(y)
-    fig.legend(h, l, fontsize=8, frameon=False, ncol=4, loc='lower center', bbox_to_anchor=(0.5, -0.06))
+    fig.legend(h, l, fontsize=8, frameon=False, ncol=4, loc='upper center', bbox_to_anchor=(0.5, 0.0))
     fig.suptitle(f'Single-axis perturbations of the nominal car (beta 25 plans; adapted networks: {BUD}; dashed = '
                  f'nominal value; not adapted to the axis unless starred)', fontsize=10.5)
     fig.tight_layout()
@@ -268,15 +294,14 @@ def fig10():
 
 
 def fig11():
-    T = {t: json.load(open(os.path.join(HERE, 'runs/axes', f'{t}{SFX}.json')))['eval']
-         for t in ('sense', 'start_direct', 'start_launch', 'heldout')}
+    T = {t: suite(t) for t in ('sense', 'start_direct', 'start_launch', 'heldout')}
     groups = [('bad mocap', 'sense', '+mocapbad', None), ('latency x2', 'sense', '+latency2', None),
               ('low rate', 'sense', '+lowrate', None), ('EKF lag', 'sense', '+ekflag', None),
               ('noise x3', 'sense', '+noisy3', None),
               ('rolling start\n0.6 m/s', 'start_direct', None, None), ('launch to\n1 m/s', 'start_launch', None, None),
               ('held-out track\nbeta 25', 'heldout', None, '_b25'), ('held-out track\nbeta 21 / 14', 'heldout', None, ('_b21', '_b14')),
               ('held-out track\ngrip', 'heldout', None, '_b0')]
-    nets = [q for q in NETS if q[0] != 'ours_nom'] + [NETS[2]]
+    nets = [q for q in NETS if q[0] != 'ours_nom']
     fig, ax = plt.subplots(figsize=(16, 4.6))
     w = 0.85 / len(nets)
     for gi, (gl, t, suf, plans) in enumerate(groups):
@@ -287,7 +312,7 @@ def fig11():
             ee = {c: v for c, v in e.items() if suf is None or c.endswith(suf)}
             p, h, _ = pooled(ee, plans=plans or '_b25')
             x = gi + (j - (len(nets) - 1) / 2) * w
-            ax.bar(x, p, w * 0.9, color=col if ls == '-' else SURF, edgecolor=col, hatch=None if ls == '-' else '//',
+            ax.bar(x, p, w * 0.9, color=col if ls != ':' else SURF, edgecolor=col, hatch=None if ls != ':' else '//',
                    lw=1.0, label=nl if gi == 0 else None)
             ax.errorbar(x, p, yerr=h, color='#333', capsize=1.5, lw=0.7)
     ax.set_xticks(range(len(groups)))
@@ -302,14 +327,15 @@ def fig11():
     ax.text(5.5, 107, 'starting conditions', ha='center', fontsize=9)
     ax.text(8, 107, 'held-out track (never trained / adapted on)', ha='center', fontsize=9)
     ax.legend(fontsize=7.5, frameon=False, ncol=4, loc='upper center', bbox_to_anchor=(0.5, -0.14))
-    fig.suptitle(f'Sensing, starting conditions and a held-out track ({BUD}; hatched = zero-shot; adapted networks were adapted '
+    fig.suptitle(f'Sensing, starting conditions and a held-out track ({BUD}; hatched = no real data; adapted networks were adapted '
                  'on each car without the perturbation; 80 % = all cars but friction x0.8)', fontsize=10.5)
     fig.savefig(os.path.join(OUT, 'fig11_conditions.png'))
     plt.close(fig)
 
 
 def fig12():
-    d = json.load(open(os.path.join(HERE, f'runs/axes/tp_matrix{SFX}.json')))
+    f = os.path.join(HERE, f'runs/axes/tp_matrix{SFX}s.json')            # the stop network's (car_stop_axes.sh)
+    d = json.load(open(f if os.path.exists(f) else os.path.join(HERE, f'runs/axes/tp_matrix{SFX}.json')))
     E, cars = d['eval'], d['args']['cars']
     rows = [n.split('=')[0] for n in d['args']['net']]
     M = np.array([[pooled({c: E[r][c]}, plans='_b25')[0] for c in cars] for r in rows])
@@ -339,11 +365,15 @@ def fig12():
 def fig14():
     """Full completion of the 5-lap chained test (no wall crash, no spin-out) on the low-friction car (friction x0.8:
     mu 0.16) against the real laps spent: ours vs PPO+DR, both through our hardware stage at 2-10 laps."""
-    series = [('ours + DR (B, task objective)', 'v3drBt_s0', C['blue'], '*'),
+    series = [('ours + DR (B, task objective, stopping rule)', 'v3drBt_stop', C['blue'], '*'),
               ('ours + DR (B)', 'v3drB_s0', C['green'], '^'),
               ('PPO+DR (+ our hardware stage)', 'ppo_dr', C['pink'], 's'),
-              ('PPO+DR, zero-shot (its on-car fine-tuning start)', 'ppo_real', C['pink'], 'D'),
-              ('RMA teacher with the TRUE latent, zero-shot', 'rma_real', C['red'], 'v')]
+              ('PPO+DR, zero-shot (its on-car fine-tuning start)', 'ppo_real', C['pink'], 'D')]
+    picks = []                                   # the RMA / FADA picks at their own budgets: horizontal lines
+    for role, col, ls in (('rma_nonoracle', C['red'], ':'), ('rma_oracle', C['red'], '--'), ('fada_nonoracle', C['orange'], ':'),
+                          ('fada_oracle', C['orange'], '--')):
+        b = _BJ[role]['best']
+        picks.append((_pick(role), b['source'] if b['kind'] == 'point' else f"{b['source']}_ep{b['best_budget']}", col, ls))
     fig, axs = plt.subplots(1, 2, figsize=(12.5, 4.3), sharey=True)
     for ax, plans, title in ((axs[0], None, 'all 8 plans (drift + grip, both tracks)'),
                              (axs[1], '_b25', 'full-drift plans (beta 25)')):
@@ -370,14 +400,21 @@ def fig14():
             ax.errorbar(x, y, yerr=h, color=col, marker=mk, ms=9 if mk == '*' else 6, lw=2.0 if 'ours' in lab else 1.4,
                         ls='-' if 'ours' in lab or net == 'ppo_dr' else '--', capsize=2, label=lab,
                         mec='#333', mew=0.5, zorder=5 if 'ours' in lab else 3)
+        for lab, arm, col, ls in picks:
+            e = arm_eval(arm)
+            if not e:
+                continue
+            ms = [m for p, m in e['real_mu'].items() if not plans or p.endswith(plans)]
+            n = sum(m.get('n', 6) for m in ms)
+            ax.axhline(100 * sum((1 - m['fail']) * m.get('n', 6) for m in ms) / n, color=col, ls=ls, lw=1.4, label=lab)
         ax.set_xticks([0, 2, 4, 6, 8, 10])
         ax.set_xlim(-0.8, 10.8)
-        ax.set_xlabel('real laps on the low-friction car')
+        ax.set_xlabel('real laps on the low-friction car (RMA / FADA lines: their best, at the budget in the legend)', fontsize=8.5)
         ax.set_title(title, fontsize=10)
         ax.set_ylim(0, 105)
     axs[0].set_ylabel('runs completing all 5 chained laps (%)')
     h_, l_ = axs[0].get_legend_handles_labels()
-    fig.legend(h_, l_, fontsize=8, frameon=False, ncol=3, loc='lower center', bbox_to_anchor=(0.5, -0.1))
+    fig.legend(h_, l_, fontsize=8, frameon=False, ncol=3, loc='upper center', bbox_to_anchor=(0.5, 0.0))
     fig.suptitle('Low-friction car (mu 0.16): full completion of the 5-lap chained test (0.3 m envelope; 95 % '
                  'intervals)', fontsize=10.5)
     fig.savefig(os.path.join(OUT, 'fig14_lowmu_completion.png'))

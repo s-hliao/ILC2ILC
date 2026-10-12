@@ -34,11 +34,11 @@
   },
   "rma_oracle": {
    "best": {
-    "label": "RMA teacher with the TRUE dynamics, PPO on the robot",
+    "label": "RMA teacher with the TRUE dynamics, PPO on the robot (reward fixed)",
     "kind": "curve",
-    "source": "rma_real",
-    "best_budget": 384,
-    "best_success": 22.9,
+    "source": "rma_real_v2",
+    "best_budget": 2016,
+    "best_success": 34.4,
     "best_n": 96,
     "oracle": true,
     "curve": {
@@ -55,27 +55,27 @@
       96
      ],
      "96": [
-      19.79,
+      21.88,
       96
      ],
      "192": [
-      20.83,
-      96
-     ],
-     "384": [
       22.92,
       96
      ],
+     "384": [
+      26.04,
+      96
+     ],
      "768": [
-      19.79,
+      28.12,
       96
      ],
      "1536": [
-      16.67,
+      31.25,
       96
      ],
      "2016": [
-      0.0,
+      34.38,
       96
      ]
     }
@@ -88,8 +88,8 @@
     },
     {
      "label": "RMA teacher with the TRUE dynamics, PPO on the robot (reward fixed)",
-     "best_success": 15.6,
-     "best_budget": 0
+     "best_success": 34.4,
+     "best_budget": 2016
     }
    ]
   },
@@ -343,53 +343,58 @@
      "label": "FADA, planner gain 0.95, on the cars",
      "best_success": 17.9,
      "best_budget": 0
+    },
+    {
+     "label": "FADA (v2 IDM), its own planner, on the cars",
+     "best_success": 50.0,
+     "best_budget": 0
     }
    ]
   },
   "fada_oracle": {
    "best": {
-    "label": "FADA, ORACLE planner (refit on our real laps)",
+    "label": "FADA (v2 IDM), ORACLE planner (our stopping-rule network), 14 plans",
     "kind": "curve",
-    "source": "fada_real_oracle",
+    "source": "fada_real_v2h4_oracle14",
     "best_budget": 0,
-    "best_success": 30.8,
+    "best_success": 75.4,
     "best_n": 240,
     "oracle": true,
     "curve": {
      "0": [
-      30.83,
+      75.42,
       240
      ],
      "24": [
-      29.17,
+      71.67,
       240
      ],
      "48": [
-      21.25,
+      61.67,
       240
      ],
      "96": [
-      17.92,
+      45.83,
       240
      ],
      "192": [
-      7.92,
+      27.08,
       240
      ],
      "384": [
-      9.17,
+      17.5,
       240
      ],
      "768": [
-      13.33,
+      14.58,
       240
      ],
      "1536": [
-      5.42,
+      14.58,
       240
      ],
      "2016": [
-      3.33,
+      15.83,
       240
      ]
     }
@@ -404,8 +409,25 @@
      "label": "FADA, ORACLE planner (our stopping-rule network), 14 plans",
      "best_success": 23.8,
      "best_budget": 0
+    },
+    {
+     "label": "FADA (v2 IDM), ORACLE planner (our stopping-rule network), 14 plans",
+     "best_success": 75.4,
+     "best_budget": 0
     }
    ]
+  }
+ },
+ "budgets": {
+  "quadruped": {
+   "low": 24,
+   "asym": 96,
+   "unit": "jumps per robot"
+  },
+  "car": {
+   "low": 10,
+   "asym": 48,
+   "unit": "laps per car"
   }
  }
 }

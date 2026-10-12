@@ -335,3 +335,18 @@ Grip-only conclusions are not affected. `figs/` holds the summary plots of this 
 - `scheduler.py`, `cache_lqr.py`.
 - The rest of the pipeline was ported to the 9-state layout and offset-centred actions. `check_real_vs_sim.py`
   still matches (observation 6e-6).
+
+## 2026-10-11 evening: budgets, final rows, perturbation suite on the stopping-rule network
+- Real-lap budgets (src/paper/baselines.json 'budgets', select_baselines.py): LOW = 10 laps (the user's cap on our method),
+  ASYM = 48 (car_budget.sh on v3drBt_stop: success 82.5 % at 0-24 laps, 84.2 / 84.4 % at 48 / 96; mean RMS e_y of the four
+  non-friction cars 4.41 -> 4.11 (10) -> 3.82 (24) -> 3.53 (48) -> 3.54 cm (96): plateau at 48; 10 laps = ~1/3 of that gain).
+- 48-lap arms for the other rows (car_asym.sh): more laps HURT every non-stopping-rule network -- DR (B) v3drB_s0 64 -> 50 %
+  success (fails 2 -> 15 %), s1 61 -> 46; DR (A), nominal, PPO+DR flat within noise. The stopping-rule network holds (82.5 ->
+  84.2, 0 fails).
+- RMA / FADA rows = only the best non-oracle / best oracle of each (baselines.json): RMA zs 62.7 %, RMA true latent 82.1 % at
+  1,536 laps, FADA v2-IDM zs 50.0 %, FADA v2-IDM + oracle planner (our 10-lap arm) 75.4 % at 0 laps (it DECLINES with its own
+  adaptation: 71.7 @24, 45.8 @96, ~15 @2,016).
+- Perturbation suite redone on the stopping-rule network + the picks (car_stop_axes.sh -> runs/axes/*_l10s.json; per-car
+  adapted arms ax_*_drBtS_lap10; tp_matrix_l10s). Single-axis sweep (22 cars, beta 25): ours + 10 laps 91.7 %, zs 88.7, RMA
+  oracle 83.8, FADA oracle 68.2, RMA 42.2, FADA 41.7. Friction x0.7: 0 % for everyone. Bad mocap / EKF lag: ours 32-40 %.
+- Recordings / videos / traj figures re-made for these rows (record_final.sh; old videos in ~/ilc_ws/archive/car_videos_v3drBt_s0).

@@ -6,7 +6,7 @@ src/paper/car/figures/traj_*.png (another --root: DIR/figs/).
   traj_paths_<plan>     every car x the key methods: the path flown (3 laps, no reset) against the plan, coloured by
                         |sideslip|, with the RMS lateral error and the outcome
   traj_sideslip_<plan>  per car: the sideslip flown over time against the plan's (the first two laps)
-  traj_hwstage_<car>    the hardware stage on that car (ours + DR (B)): each training plan's lap, iteration by iteration
+  traj_hwstage_<car>    the hardware stage on that car (the headline: the stopping-rule network): each training plan's lap, iteration by iteration
 """
 import argparse
 import os
@@ -36,10 +36,11 @@ SEQ = ['#9ec5f4', '#5598e7', '#2a78d6', '#1c5cab', '#0d366b']
 CARS = ['real_nom', 'real_mass', 'real_mu', 'real_act', 'real_lag']
 CAR_LAB = {'real_nom': 'nominal', 'real_mass': 'mass +25 %', 'real_mu': 'friction x0.8', 'real_act': 'actuators',
            'real_lag': 'tire / steering lag'}
-KEY = [('eval_ours_24laps', 'ours + 24', C['blue']), ('eval_ours_dr_b_24laps', 'ours+DR (B) + 24', C['green']),
-       ('eval_ppo_dr_zeroshot', 'PPO+DR, zero-shot', C['pink']), ('eval_ppo_dr_2laps', 'PPO+DR + 2 (our stage)', C['pink']),
-       ('eval_ppo_dr_4laps', 'PPO+DR + 4 (our stage)', C['pink']),
-       ('eval_rma_zeroshot', 'RMA, zero-shot', C['red']), ('eval_fada_24laps', 'FADA + 24', C['orange'])]
+KEY = [('eval_ours_stop_10laps', 'ours (stopping rule) + 10', C['blue']),
+       ('eval_ours_stop_48laps', 'ours (stopping rule) + 48', C['sky']),
+       ('eval_ours_dr_b_10laps', 'ours+DR (B) + 10', C['green']), ('eval_ppo_dr_10laps', 'PPO+DR + 10 (our stage)', C['pink']),
+       ('eval_rma_nonoracle', 'RMA, best non-oracle', C['red']), ('eval_rma_oracle', 'RMA, best oracle', C['red']),
+       ('eval_fada_nonoracle', 'FADA, best non-oracle', C['orange']), ('eval_fada_oracle', 'FADA, best oracle', C['orange'])]
 plt.rcParams.update({'figure.facecolor': SURF, 'axes.facecolor': SURF, 'savefig.facecolor': SURF, 'savefig.dpi': 110,
                      'savefig.bbox': 'tight', 'font.size': 9})
 L = {n: record_car.load(os.path.join(TR, n + '.npz')) for n, _, _ in KEY if os.path.exists(os.path.join(TR, n + '.npz'))}
@@ -107,7 +108,7 @@ def sideslip(plan):
     plt.close(fig)
 
 
-def hwstage(car, name='hwstage_ours_dr_b'):
+def hwstage(car, name='hwstage_ours_stop'):
     fp = os.path.join(TR, name + '.npz')
     if not os.path.exists(fp):
         return
@@ -129,7 +130,7 @@ def hwstage(car, name='hwstage_ours_dr_b'):
             sp.set_visible(False)
     h, l = axs[0][0].get_legend_handles_labels()
     fig.legend(h, l, fontsize=8, frameon=False, ncol=len(its), loc='lower center', bbox_to_anchor=(0.5, -0.04))
-    fig.suptitle(f"our learner + DR (B): the hardware stage's laps on the {CAR_LAB[car]} car (light = earliest){TAG}",
+    fig.suptitle(f"the headline (stopping-rule network): the hardware stage's laps on the {CAR_LAB[car]} car (light = earliest){TAG}",
                  fontsize=10)
     fig.savefig(os.path.join(OUT, f'traj_hwstage_{car}.png'))
     plt.close(fig)

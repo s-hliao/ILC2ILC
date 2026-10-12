@@ -154,6 +154,15 @@ dynamics).
     transfers between quadrotors. Assumes SISO, minimum-phase, PI-stabilizable plants. CONTRAST: transfer by MAKING the
     dynamics equal vs CORRECTING a policy with grounded updates; per trajectory vs a goal-conditioned network; their
     assumptions fail through contact / flight phases.
+- [memory, NOT READ -- verify before citing] **Kolter & Ng**, "Policy Search via the Signed Derivative", RSS 2009.
+  - Policy search on the real system where the derivative of future states w.r.t. the controls is replaced by its SIGN
+    pattern (hand-specified from domain knowledge) -- the update is a descent direction as long as the approximation
+    keeps a positive inner product with the true gradient. The extreme of Abbeel 2006's "inaccurate model" line.
+  - CONTRAST: the same question as our hardware stage (how little model does a real-trial update direction need?) and
+    the same kind of answer as our positivity analysis (an approximate Jacobian works while J_true^T J_approx stays
+    positive). Ours: the nominal simulator's full time-varying Jacobian (no hand-specified signs), a Gauss-Newton
+    root-find on a measured residual, a goal-conditioned network that a sim stage trains first. Possible ablation arm:
+    our stage with sign(J) in place of J.
 - [web] **Kolter**, "Learning and Control with Inaccurate Models", PhD thesis, Stanford, 2010.
   https://zicokolter.com/publications/kolter2010thesis.pdf
 - [web] **Chatzilygeroudis et al.**, "A survey on policy search algorithms for learning robot controllers in a handful of

@@ -367,21 +367,26 @@ def jilc_eval(k, robots=ROBOTS):
 
 
 def fig_budget():
+    """Real-jump budget on the method figures' robots (r1 s1 r5): ours, the goal-selection ablations, our learner + DR (A / B)
+    to the asymptotic 96 jumps, per-goal ILC, and the baselines (PPO + DR, the best non-oracle / oracle RMA and FADA, each at
+    its own best real-data budget, src/paper/baselines.json). Dotted verticals: the low (24) and asymptotic (96) budgets."""
+    BJ = json.load(open(os.path.join(_REPO, "paper", "baselines.json")))
+    LOW, ASYM = BJ["budgets"]["quadruped"]["low"], BJ["budgets"]["quadruped"]["asym"]
     pts = [("fixed 6 goals", [(0, "hw6g16_v10s2it20", "start"), (12, "igfix_b12", "final"), (24, "igfix_b24", "final"),
                               (24, "sens_none", "final"), (24, "gate_loose", "final"), (48, "hw6g_v10s2it20", "final"),
                               (96, "hw6g16_v10s2it20", "final")]),
            ("information-gain goals", [(12, "ig_b12", "final"), (24, "ig_b24", "final")]),
            ("random goals", [(12, "igrnd_b12", "final"), (24, "igrnd_b24", "final")]),
            ("Abbeel-style direction", [(24, "hw_abbeel", "final")]),
-           ("our learner + DR (A), our hardware stage", [(0, "drA_hw24", "start"), (24, "drA_hw24", "final")]),
-           ("our learner + DR (B), our hardware stage", [(0, "drB_hw24", "start"), (24, "drB_hw24", "final")])]
-    SLOT = [0, 6, 7, 2, 3, 3]                      # categorical slot per series (the DR pair shares slot 3)
-    fig, ax = plt.subplots(figsize=(7.5, 4.3))
+           ("our learner + DR (A), our hardware stage", [(0, "drA_nogate_hw96", "start"), (96, "drA_nogate_hw96", "final")]),
+           ("our learner + DR (B), our hardware stage", [(0, "drB_nogate_hw96", "start"), (96, "drB_nogate_hw96", "final")])]
+    SLOT = [0, 6, 7, 2, 3, 5]                      # categorical slot per series
+    fig, ax = plt.subplots(figsize=(8.5, 4.6))
     for k, (lab, ps) in enumerate(pts):
         xs, ys, los, his = [], [], [], []
         pooled = {}
         for (n, run, tag) in ps:                     # runs at the same budget pooled (the 24-jump stage ran 3 times)
-            pooled.setdefault(n, []).extend(load(run, tag))
+            pooled.setdefault(n, []).extend(load(run, tag, robots=MR))
         for n, rs in sorted(pooled.items()):
             if not rs:
                 continue
@@ -392,68 +397,98 @@ def fig_budget():
             his.append(100 * (hi - p))
         ax.errorbar(xs, ys, yerr=[los, his], color=CAT[SLOT[k]], marker=MARK[k], ms=6, mec=SURF, lw=0, elinewidth=1,
                     capsize=2, label=lab, zorder=3)
-        if k == 0 or k >= 4:
-            order = np.argsort(xs)
-            ax.plot(np.array(xs)[order], np.array(ys)[order], color=CAT[SLOT[k]], lw=1.5 if k == 0 else 1.0,
-                    ls="-" if k != 5 else ":", zorder=2)
-    # every 6 real jumps along the same runs: the stage's per-iteration policies <run>/<robot>/it<k>/policy, flown on
-    # the reserved test goals (quad_eval_ckpts.py; it0 / the last one reproduce the runs' start / final evaluations)
-    for run, k, its in (("hw6g16_v10s2it20", 0, range(17)), ("drA_hw24", 4, range(5)), ("drB_hw24", 5, range(5))):
-        xs, ys, los, his = [], [], [], []
-        for it in its:
-            fs = [os.path.join(P, "fixbox", run, rb, f"it{it}", "eval_planefinal.json") for rb in ROBOTS]
-            rs = [r for f in fs if os.path.exists(f) for r in json.load(open(f))]
-            if len(rs) < 8 * 4 * len(ROBOTS):             # every robot's 8 goals x 4 jumps, or the point is left out
-                continue
-            p, lo, hi = wilson(sum(ok(r) for r in rs), len(rs))
-            xs.append(6 * it + (k - 1) * 0.9)
-            ys.append(100 * p)
-            los.append(100 * (p - lo))
-            his.append(100 * (hi - p))
+    # along the same runs: the stage's per-iteration policies <run>/<robot>/it<k>/policy (6 real jumps an iteration), flown
+    # on the reserved test goals (quad_eval_ckpts.py), joined to the run's start / final evaluations
+    for run, k in (("hw6g16_v10s2it20", 0), ("drA_nogate_hw96", 4), ("drB_nogate_hw96", 5)):
+        pts_ = {0: load(run, "start", robots=MR), 96: load(run, "final", robots=MR)}
+        for it in range(1, 17):
+            fs = [os.path.join(P, "fixbox", run, rb, f"it{it}", "eval_planefinal.json") for rb in MR]
+            if all(map(os.path.exists, fs)):
+                pts_[6 * it] = [r for f in fs for r in json.load(open(f))]
+        xs = sorted(n for n, rs in pts_.items() if rs)
         if len(xs) > 2:
-            ax.fill_between(xs, np.array(ys) - los, np.array(ys) + his, color=CAT[SLOT[k]], alpha=0.08, lw=0, zorder=1)
-            ax.plot(xs, ys, color=CAT[SLOT[k]], lw=1.0, ls="-", marker=".", ms=5, zorder=2,
-                    label=f"{pts[k][0].split(',')[0]}: every 6 jumps of one run")
+            ws = [wilson(sum(ok(r) for r in pts_[n]), len(pts_[n])) for n in xs]
+            xo = np.array(xs) + (k - 1) * 0.9
+            ax.fill_between(xo, [100 * w[1] for w in ws], [100 * w[2] for w in ws], color=CAT[SLOT[k]], alpha=0.05, lw=0,
+                            zorder=1)
+            ax.plot(xo, [100 * w[0] for w in ws], color=CAT[SLOT[k]], lw=1.2, ls="-", marker=".", ms=5, zorder=2,
+                    label=f"{pts[k][0].split(',')[0]}: along one run")
     # per-goal ILC (JumpILC) trained on the test goals themselves: trial k+1 per goal, and re-flown with our protocol
-    jt = [(8 * kk, jilc_at(kk)) for kk in range(13)]
+    jt = [(8 * kk, jilc_at(kk, robots=MR)) for kk in range(13)]
     jt = [(n, rs) for n, rs in jt if rs]
     if jt:
         ax.plot([n for n, _ in jt], [100 * np.mean([ok(r) for r in rs]) for _, rs in jt], color=CAT[1], lw=1.2, ls="--",
                 label="per-goal ILC on the test goals (trial k+1)", zorder=2)
-    je = [(8 * kk, jilc_eval(kk)) for kk in (3, 12)]
+    je = [(8 * kk, jilc_eval(kk, robots=MR)) for kk in (3, 12)]
     je = [(n, rs) for n, rs in je if rs]
     if je:
         ps_ = [wilson(sum(ok(r) for r in rs), len(rs)) for _, rs in je]
         ax.errorbar([n for n, _ in je], [100 * q[0] for q in ps_], yerr=[[100 * (q[0] - q[1]) for q in ps_],
                     [100 * (q[2] - q[0]) for q in ps_]], color=CAT[1], marker="s", ms=6, mec=SURF, lw=0, elinewidth=1,
                     capsize=2, label="per-goal ILC, re-flown with our protocol", zorder=3)
-    for lab, run, tag, c in (("PPO + DR", "base/eval_ppo_plain", "start", 4), ("RMA", "base/eval_rma", "start", 5)):
-        rs = load(run, tag)
+    # the baselines: horizontal lines at their best success (at whatever real-data budget that took, given in the label)
+    base = [("PPO + DR, zero-shot", "base/eval_ppo_plain", 4, "-", None)]
+    for role, c, ls in (("rma_nonoracle", 7, "-"), ("rma_oracle", 7, "--"), ("fada_nonoracle", 6, "-"), ("fada_oracle", 6, "--")):
+        bb = BJ["quadruped"].get(role, {}).get("best")
+        if bb:
+            base.append((f"{role.split('_')[0].upper()} best {'oracle' if bb['oracle'] else 'non-oracle'}, "
+                         f"{bb['best_budget']} real jumps", f"base/pick_{role}", c, ls, bb))
+    placed = []
+    for lab, run, c, ls, bb in base:
+        rs = load(run, "start", robots=MR)
         if rs:
             v = 100 * np.mean([ok(r) for r in rs])
-            ax.axhline(v, color=CAT[c], lw=1, ls="--")
-            ax.text(97, v + 0.6, f"{lab} (zero-shot, 77-102k DR sim jumps)", ha="right", fontsize=7, color=INK2)
-    ax.set_xlabel("real jumps per robot")
+            ax.axhline(v, color=CAT[c], lw=1.3, ls=ls, alpha=0.9, label=lab, zorder=1)
+            yt = v + 0.4
+            while any(abs(yt - q) < 1.6 for q in placed):   # equal lines (e.g. two at 34.4 %): stack their tags
+                yt -= 1.8
+            placed.append(yt)
+            ax.text(101, yt, f"{lab.split(',')[0].replace(' best', '')} {v:.0f}%", fontsize=6.8, color=CAT[c],
+                    va="center", ha="left", clip_on=False)
+    for n, t in ((LOW, "low"), (ASYM, "asymptotic")):
+        ax.axvline(n, color=INK2, lw=0.8, ls=":", zorder=1)
+        ax.text(n + 0.8, 53, t, fontsize=7.5, color=INK2, va="top")
+    ax.set_xlabel("real jumps per robot (ours); the RMA / FADA lines: their best, at the budget in the legend")
     ax.set_ylabel("success on the reserved test goals (%)")
     ax.set_xlim(-4, 100)
     ax.set_ylim(0, 55)
     style(ax)
-    ax.legend(frameon=False, fontsize=7.5, loc="upper center", bbox_to_anchor=(0.5, -0.14), ncol=2)
-    ax.set_title("Hardware-stage budget (4 CPU robots; ours from 1,920 nominal sim jumps; 24 = 3 runs pooled)")
+    ax.legend(frameon=False, fontsize=7.2, loc="upper center", bbox_to_anchor=(0.5, -0.14), ncol=2)
+    ax.set_title("Hardware-stage budget (CPU robots r1 s1 r5; ours from 1,920 nominal sim jumps; 24 = 3 runs pooled)")
     save(fig, "06_real_jump_budget.png")
 
 
 # -- 7. success vs tolerance -----------------------------------------------------------------------------------------
 def fig_tolerance():
+    """Success vs the x tolerance, one line per method: colour = the method family, line style = the real-data budget
+    (dotted zero-shot, dashed 24 jumps, solid 96) / for RMA and FADA solid best non-oracle, dashed best oracle."""
     import sys
     sys.path.insert(0, P)
     import success_metrics as sm
-    rows = []
+    fam = {"Ours": CAT[0], "PPO": CAT[4], "RMA": CAT[7], "FADA": CAT[6], "Our learner + DR (A)": CAT[3],
+           "Our learner + DR (B)": CAT[5]}
+    fig, axs = plt.subplots(1, 2, figsize=(11, 4.6), sharey=True)
     for lab, run, tag in METHODS:
         rs = load(run, tag, robots=MR)               # the method figures' robots (r1 s1 r5)
-        if rs:
-            rows.append((lab, sm.summary(rs)))
-    sm.plot(rows, os.path.join(OUT, "07_success_vs_tolerance.png"))
+        if not rs:
+            continue
+        sm_ = sm.summary(rs)
+        col = next(c for k, c in sorted(fam.items(), key=lambda kv: -len(kv[0])) if lab.startswith(k))
+        ls = (":" if "zero-shot" in lab else "--" if ("24 real" in lab or "best oracle" in lab) else "-")
+        for ax, key in ((axs[0], "sweep_z3"), (axs[1], "sweep_zany")):
+            ax.plot(100 * sm.XT, 100 * np.array(sm_[key]), color=col, ls=ls, lw=1.8, label=lab, zorder=3)
+    for ax, title in ((axs[0], "z tolerance 3 cm"), (axs[1], "z ignored")):
+        ax.axvline(5, color=INK2, lw=1, ls=":", zorder=1)
+        ax.text(5.2, 2, "primary (5 cm)", color=INK2, fontsize=8)
+        ax.set_title(title, fontsize=11, loc="left")
+        ax.set_xlabel("x tolerance (cm)")
+        ax.set_xlim(1, 15)
+        ax.set_ylim(0, 100)
+        style(ax)
+    axs[0].set_ylabel("success on the reserved test goals (%)")
+    axs[1].legend(frameon=False, fontsize=8, loc="upper left", bbox_to_anchor=(1.01, 1))
+    fig.suptitle("Success vs landing tolerance (no fall; reserved test goals, CPU robots r1 s1 r5)", x=0.01, ha="left")
+    save(fig, "07_success_vs_tolerance.png")
 
 
 # -- 8. sim training -------------------------------------------------------------------------------------------------

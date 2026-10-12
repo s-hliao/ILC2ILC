@@ -98,6 +98,15 @@ CANDIDATES = {
 }
 
 
+# The real-data budgets every figure reads (user, 2026-10-11: a "low amount" where most of the ILC's value is already got, and
+# an "asymptotic amount" where it plateaus). Quadruped: 24 jumps per robot carry 81 % of the 96-jump gain (nominal headline
+# 18.8 -> 32.3 -> 35.4 %). Car: LOW = 10 laps, the user's cap on our method's real laps (it carries ~1/3 of the tracking-error
+# gain: mean RMS e_y of the 4 non-friction cars 4.41 -> 4.11 cm, vs 3.53 at 48); ASYM = 48, where the stopping-rule network
+# plateaus (car_budget.sh, runs/hw/v3drBt_stop_lap*: 48 vs 96 laps 3.53 vs 3.54 cm, success 84.2 vs 84.4 %).
+BUDGETS = {'quadruped': {'low': 24, 'asym': 96, 'unit': 'jumps per robot'},
+           'car': {'low': 10, 'asym': 48, 'unit': 'laps per car'}}
+
+
 def score(robot, kind, src, budget):
     """-> (curve {budget: (success, n)}, best budget, best success) or None."""
     if robot == 'quadruped':
@@ -130,6 +139,7 @@ def main():
                                                                 best_budget=c['best_budget']) for c in scored])
             print(f"{robot:9s} {role:15s} -> {best['label']}: {best['best_success']:.1f} % at {best['best_budget']} "
                   f"(of {len(scored)} variants)")
+    out['budgets'] = BUDGETS
     json.dump(out, open(os.path.join(HERE, 'baselines.json'), 'w'), indent=1)
     print('->', os.path.join(HERE, 'baselines.json'))
 

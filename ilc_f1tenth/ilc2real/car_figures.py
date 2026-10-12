@@ -110,9 +110,10 @@ METHODS = [
     ('ours, nominal sim', C['black'], 'o', ['v3nom_s0', 'v3nom_s1', 'v3nom_s2'], []),
     ('PPO+DR + our hardware stage', C['pink'], 's', ['ppo_dr'], ['_s2']),
     # RMA / FADA: per method the best non-oracle and the best oracle variant, each at its own best real budget (a FIXED arm)
-    *[(f"{role.split('_')[0].upper()}, best {'ORACLE' if b['oracle'] else 'non-oracle'}: {b['label']} ({b['best_budget']} laps)",
+    *[(f"{role.split('_')[0].upper()}, best {'ORACLE' if b['oracle'] else 'non-oracle'} "
+       f"({'zero-shot' if not b['best_budget'] else str(b['best_budget']) + ' laps'})",
        C['red'] if role.startswith('rma') else C['orange'], 'D' if role.startswith('rma') else 'P',
-       ('FIXED', b['source'] if b['kind'] == 'point' else f"{b['source']}_ep{b['best_budget']}"), [])
+       ('FIXED', b['source'] if b['kind'] == 'point' else f"{b['source']}_ep{b['best_budget']}"), [b['best_budget']])
       for role in ('rma_nonoracle', 'rma_oracle', 'fada_nonoracle', 'fada_oracle')
       for b in [_BJ['car'].get(role, {}).get('best')] if b],
     ('plan LQR', C['grey'], 'x', ['lqr'], []),
@@ -165,14 +166,17 @@ def fig1():
         for r_lab, L, col, (p, h, n) in rows:
             i = labs.index(r_lab)
             j = BUDGETS.index(L)
-            x = i + (j - 1) * w
-            hatch, alpha = ('//', 1.0) if L == 0 else (None, 0.45 if L == 2 else 1.0)
+            fixed = next((m[4][0] for m in METHODS if m[0] == r_lab and m[3][0] == 'FIXED'), None)
+            x = i if fixed is not None else i + (j - 1) * w     # a picked baseline: one bar, at its own budget
+            if fixed == 0:
+                L = 0                                # its best budget is zero-shot: drawn as one
+            hatch, alpha = ('//', 1.0) if L == 0 else (None, 0.45 if L == LOW else 1.0)
             ax.bar(x, p, w * 0.92, color=SURF if L == 0 else col, alpha=alpha if L else 1, edgecolor=col, hatch=hatch,
                    lw=1.1)
             ax.errorbar(x, p, yerr=h, color='#333', capsize=1.5, lw=0.7)
             ax.text(x, min(p + h + 1.5, 103), f'{p:.0f}', ha='center', fontsize=6.5, color='#333')
         ax.set_xticks(range(len(labs)))
-        ax.set_xticklabels(labs, rotation=15, ha='right', fontsize=8.5)
+        ax.set_xticklabels(labs, rotation=20, ha='right', fontsize=8.5)
         ax.set_ylabel(yl)
         ax.set_ylim(0, 110)
         ax.grid(axis='x', alpha=0)
@@ -199,7 +203,8 @@ def fig2():
             for i, c in enumerate(CARS):
                 p, h, n = rate(arms, cars=[c], key=key)
                 x = i + (j - (len(rows) - 1) / 2) * w
-                ax.bar(x, p, w * 0.92, color=col if L else SURF, edgecolor=col, hatch=None if L else '//', lw=1.0,
+                zs = L == 0 or '(zero-shot)' in lab          # a picked baseline whose best budget is zero-shot: hatched too
+                ax.bar(x, p, w * 0.92, color=SURF if zs else col, edgecolor=col, hatch='//' if zs else None, lw=1.0,
                        label=lab if i == 0 else None)
                 ax.errorbar(x, p, yerr=h, color='#333', capsize=1.2, lw=0.6)
         ax.set_ylabel(yl)
@@ -249,8 +254,11 @@ def fig3():
     h, l = axs[0].get_legend_handles_labels()
     fig.legend(h, l, fontsize=8, frameon=False, ncol=4, loc='lower center', bbox_to_anchor=(0.5, -0.12))
     for ax in axs:
-        if ASYM > 10:
-            ax.set_xscale('symlog', linthresh=10)
+        if ASYM > 10:                                # linear to 10 laps, logarithmic beyond (the ticks: every budget run)
+            ax.set_xscale('symlog', linthresh=10, linscale=2.0)
+        ax.set_xticks(Ls)
+        ax.set_xticklabels([str(L) for L in Ls])
+        ax.set_xlim(-1, ASYM * 1.12)
         ax.axvline(LOW, color=C['grey'], lw=0.8, ls=':')
         ax.axvline(ASYM, color=C['grey'], lw=0.8, ls=':')
     fig.suptitle(f'Real-lap budget, 0-{ASYM} laps per car (beta 25 plans; dotted: the low {LOW} / asymptotic {ASYM} budgets; '
@@ -260,7 +268,8 @@ def fig3():
 
 
 def fig5():
-    rows = [(lab + (', zero-shot' if L == 0 else (f' + {L}' if lab.startswith(('ours', 'PPO')) else '')), col, '//' if L == 0 else None, method_arms(nets, var, L))
+    rows = [(lab + (', zero-shot' if L == 0 else (f' + {L}' if lab.startswith(('ours', 'PPO')) else '')), col, '//' if L == 0 or '(zero-shot)' in lab else None,
+             method_arms(nets, var, L))
             for lab, col, mk, nets, var in METHODS for L in (0, ASYM) if method_arms(nets, var, L)]
     fig, axs = plt.subplots(1, 2, figsize=(14, 4.6))
     for ax, key, sc, yl in ((axs[0], 'rms_ey', 100, 'RMS lateral error, completed runs (cm)'),
@@ -286,8 +295,9 @@ def fig5():
 
 
 def fig6():
-    arms = [('ours + DR (task objective), zero-shot', 'v3drBt_s0_zs', C['blue'], '//'),
-            ('ours + DR (task objective) + 10', 'v3drBt_s0_lap10', C['blue'], None),
+    arms = [('ours + DR (task objective, stopping rule), zero-shot', 'v3drBt_stop_zs', C['blue'], '//'),
+            ('ours + DR (task objective, stopping rule) + 10', 'v3drBt_stop_lap10', C['blue'], None),
+            (f'ours + DR (task objective, stopping rule) + {ASYM}', f'v3drBt_stop_lap{ASYM}', C['sky'], None),
             ('ours + DR (B) + 10', 'v3drB_s0_lap10', C['green'], None),
             ('ours, nominal sim + 10', 'v3nom_s0_lap10', C['black'], None),
             ('PPO+DR + 10 (our stage)', 'ppo_dr_lap10', C['pink'], None)]
@@ -316,7 +326,7 @@ def fig6():
     axs[0].set_ylabel('laps completed of 20 (no reset)')
     axs[1].set_ylabel('RMS e_y of the first / middle / last lap (cm)')
     axs[0].legend(fontsize=8, frameon=False, ncol=3, loc='upper center', bbox_to_anchor=(1.1, -0.1))
-    fig.suptitle(f'Continuous driving: 20-lap chains on the beta-25 plans after 10 real laps (a flat line = no drift-off)'
+    fig.suptitle(f'Continuous driving: 20-lap chains on the beta-25 plans (zero-shot, + {LOW} and + {ASYM} real laps; a flat line = no drift-off)'
                  f'{TAG}', fontsize=10)
     fig.savefig(os.path.join(OUT, 'fig6_multilap.png'))
     plt.close(fig)
@@ -332,7 +342,8 @@ def fig7():
                     for lab, col, mk, nets, var in METHODS for L in (0, ASYM) if method_arms(nets, var, L)]
             for i, (lab, col, L, arms) in enumerate(rows):
                 p, h, n = rate(arms, grp, key=key)
-                ax.bar(i, p, 0.7, color=col if L else SURF, edgecolor=col, hatch=None if L else '//', lw=1.1)
+                zs = L == 0 or '(zero-shot)' in lab
+                ax.bar(i, p, 0.7, color=SURF if zs else col, edgecolor=col, hatch='//' if zs else None, lw=1.1)
                 ax.errorbar(i, p, yerr=h, color='#333', capsize=1.5, lw=0.7)
             ax.set_xticks(range(len(rows)))
             ax.set_xticklabels([r[0] for r in rows] if ii == 1 else [''] * len(rows), rotation=45, ha='right',
