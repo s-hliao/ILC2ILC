@@ -51,7 +51,10 @@ ap.add_argument('--lr-final', type=float, default=1e-4)
 ap.add_argument('--anchor-w', type=float, default=1.0)
 ap.add_argument('--accept', type=int, default=0, help='1: the measured-improvement check (the hardware stage\'s rollback, '
                 'in sim): after each fit the SAME lanes (starts, models, noise) are re-flown; if their task cost did not fall '
-                'the update is discarded and the step (beta, cap) halved; an accepted step grows it back (x1.25, to the set value)')
+                'the update is discarded and the step (beta, cap) halved; an accepted step grows it back (x1.25, to the set value). '
+                '2: a backtracking line search on that measured cost along the regression direction, theta + alpha (theta_fit - '
+                'theta), alpha = 1, 1/2, 1/4, 1/8; the best alpha that lowers the cost is kept, else the update is discarded '
+                '(the GN gain is not cut)')
 ap.add_argument('--hidden', type=int, default=128)
 ap.add_argument('--dr', type=float, default=0.0)
 ap.add_argument('--eval-every', type=int, default=5)
@@ -256,7 +259,24 @@ for it in range(a.iters):
     if not np.isfinite(l) or not all(np.isfinite(np.asarray(W)).all() for W, b in params):
         params = prev
     acc = None
-    if a.accept:
+    if a.accept == 2:
+        c0 = np.sum(lane_cost(out))
+        best, best_c = None, c0
+        for alpha in (1.0, 0.5, 0.25, 0.125):
+            cand = jax.tree_util.tree_map(lambda new, old: old + alpha * (new - old), params, prev)
+            c1 = np.sum(lane_cost(fly_policy(cand, x0, G, p, noise)))
+            SIM_SECONDS += a.lanes * a.T * C.DT
+            if c1 < best_c:
+                best, best_c = (alpha, cand), c1
+            if best is not None and alpha < 1.0:
+                break
+        acc = best[0] if best is not None else False
+        if best is None:
+            params = prev
+            pool = pool[:-1]
+        else:
+            params = best[1]
+    elif a.accept:
         c0 = lane_cost(out)
         out1 = fly_policy(params, x0, G, p, noise)
         SIM_SECONDS += a.lanes * a.T * C.DT
