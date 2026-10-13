@@ -35,3 +35,7 @@ cd ilc_f1tenth/ilc2real && source env_tight.sh
 ```
 
 Results notes stay with the code: `ilc_f1tenth/ilc2real/NOTES.md` (car), `~/ilc_ws/log/dilc/plane/NOTES.md` (quadruped).
+
+## pogo/ (toy 2-D SLIP pogo stick, 2026-10-13)
+- figures/fig1..fig8 (methods, budget, coverage, positivity, controls, cost, goal plane, data matching) -- src/ilc_pogo/figures.py
+- videos/*.gif (matplotlib animations) -- src/ilc_pogo/animate_pogo.py; results in src/ilc_pogo/NOTES.md

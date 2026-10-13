@@ -1,0 +1,577 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm,mathtools,bm}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage[hidelinks]{hyperref}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{assumption}{Assumption}
+\renewcommand{\theassumption}{\Alph{assumption}}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\N}{\mathbb{N}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\cU}{\mathcal{U}}
+\newcommand{\cV}{\mathcal{V}}
+\newcommand{\cE}{\mathcal{E}}
+\newcommand{\cG}{\mathcal{G}}
+\newcommand{\cX}{\mathcal{X}}
+\newcommand{\cO}{\mathcal{O}}
+\newcommand{\cN}{\mathcal{N}}
+\newcommand{\cF}{\mathcal{F}}
+\newcommand{\ip}[2]{\langle #1,#2\rangle_W}
+\newcommand{\nW}[1]{\lVert #1\rVert_W}
+\newcommand{\n}[1]{\lVert #1\rVert}
+\newcommand{\symW}{\operatorname{sym}_W}
+\newcommand{\Ghat}{\widehat G}
+\newcommand{\Lhat}{\widehat L}
+\newcommand{\fhat}{\widehat f}
+\newcommand{\Ehat}{\widehat E}
+
+\title{Why regressing a policy onto measured-residual ILC steps converges\\ on the real system where model-based guided policy search does not}
+\author{DistILC: formal analysis (draft, 2026-10-13)}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We analyse the update at the core of DistILC: a goal-conditioned policy network is regressed, trial after trial, onto
+one damped Gauss--Newton (Levenberg--Marquardt) iterative-learning-control (ILC) correction whose \emph{error} is
+measured on the real system and whose \emph{Jacobian} comes from an approximate (nominal) model, evaluated along the
+measured trajectory with the network's own feedback. We make every space and regularity assumption explicit and prove:
+(i) every fixed point of the update is a zero of the \emph{real} error, whatever the size of the model error
+(Proposition~\ref{prop:fixedpoints}); (ii) local linear convergence to such a zero, and almost-sure convergence under
+zero-mean trial noise with Robbins--Monro steps, under a single \emph{positivity} condition coupling the true
+sensitivity, the network's tangent kernel and the model's damped pseudo-inverse (Theorems~\ref{thm:local}
+and~\ref{thm:stoch}); (iii) checkable sufficient conditions for positivity, including a small-gain bound and arbitrary
+multiplicative mismatch (Lemma~\ref{lem:suff}). We contrast this with guided policy search (GPS): with the nominal
+model, GPS's fixed points carry the model's zeroth-order residual as an irreducible real error
+(Proposition~\ref{prop:gpsnominal}); with dynamics fitted from real samples, GPS is unbiased only once the local fits are
+identifiable, which needs at least $n+m+1$ rollouts per condition and iteration (Proposition~\ref{prop:ident}); and with
+a nominal prior in place of identifiable fits, any \emph{cost-side} regularization (control cost, entropy) turns the
+approximate-gradient fixed point into a biased one, whereas \emph{step-side} damping does not
+(Proposition~\ref{prop:regbias}). A first-order statement of cross-goal transfer answers when correcting the flown goals
+corrects unflown ones (Proposition~\ref{prop:transfer}). Section~\ref{sec:critique} lists the criticisms we expect and
+what the analysis does and does not answer.
+\end{abstract}
+
+\tableofcontents
+
+%=====================================================================================================================
+\section{Setting, spaces and standing assumptions}\label{sec:setting}
+
+Throughout, all vector spaces are finite-dimensional real vector spaces; ``norm'' means the norm induced by the stated
+inner product; linear maps between such spaces are identified with matrices in fixed bases; $\n{\cdot}$ on linear maps
+is the induced operator norm. For a linear map $M$ on an inner-product space $(\cE,\ip{\cdot}{\cdot})$ we write
+$\symW(M) := \tfrac12(M + M^{\star})$, with $M^\star = W^{-1}M^\top W$ the $W$-adjoint, and $\symW(M)\succeq \mu I$
+means $\ip{e}{Me} \ge \mu\nW{e}^2$ for all $e\in\cE$.
+
+\subsection{Spaces}
+\begin{enumerate}[label=(S\arabic*),leftmargin=3em]
+\item \textbf{Time.} A trial has a fixed finite horizon of $T\in\N$ control periods, $t=0,\dots,T-1$.
+\item \textbf{State, action, observation, goal.} The state space $\cX\subseteq\R^{n}$ is open; the action space is
+  $U=[-1,1]^m\subset\R^m$ (normalized, compact, convex); the observation space is $\cO\subseteq\R^{n_o}$ with a
+  measurable observation map $h:\cX\times\cG\to\cO$, $C^1$ in $x$; the goal space $\cG\subset\R^{d}$ is compact. The
+  method updates the policy at a finite set of \emph{trained goals} $\cG_{\rm tr}=\{g_1,\dots,g_N\}\subset\cG$.
+\item \textbf{Trial input space.} $\cV:=\R^{Tm}$, sequences $v=(v_0,\dots,v_{T-1})$ of additive action perturbations,
+  with the Euclidean inner product. Stacked over trained goals: $\cV^N$ with the product inner product.
+\item \textbf{Error space.} Each period produces $q$ error rows $c(x_t,g)\in\R^q$ (\emph{task errors}: in the
+  pogo-stick instance the ballistic apex predictor minus $h^\star$ and the speed minus $v^\star$, active in flight);
+  $\cE:=\R^{Tq}$ with the weighted inner product $\ip{a}{b}=a^\top W b$, $W\succ 0$ (the inverse squared error scales).
+  Stacked: $\cE^N$, block-diagonal weight. We let $\cE_g\subseteq\cE$ denote the subspace of rows that are active along
+  the trial (masked rows are identically zero and are removed); all statements about $\cE$ refer to $\cE_g$.
+\item \textbf{Parameter space.} $\Theta=\R^p$ with the Euclidean inner product; the policy is a map
+  $\pi:\Theta\times\cO\times\cG\to\R^m$, $(\theta,o,g)\mapsto\pi_\theta(o,g)$, followed by the clip onto $U$.
+\item \textbf{Probability.} A probability space $(\Omega,\cF,P)$ with a filtration $(\cF_k)_{k\ge0}$, $\cF_k$ the
+  $\sigma$-algebra generated by all trials up to iteration $k$; per-trial noise $\xi_k$ takes values in a measurable
+  space $(\Xi,\mathcal B)$; all maps composed with noise below are jointly measurable.
+\end{enumerate}
+
+\subsection{Systems}
+\begin{enumerate}[label=(D\arabic*),leftmargin=3em]
+\item \textbf{Real system.} $x_{t+1}=f(x_t,u_t)$ with $f:\cX\times U\to\cX$ (noise enters through measurement and initial
+  state, see (N1)). It may be \emph{hybrid}: $f$ is the period map of a piecewise-smooth flow with guards
+  (touchdown/liftoff).
+\item \textbf{Nominal model.} $\fhat:\cX\times U\to\cX$, differentiable along the trajectories used (in the pogo
+  instance: the same SLIP equations without leg damping, at a coarser step).
+\item \textbf{Closed loop and the additive input.} For policy $\theta$, goal $g$ and $v\in\cV$, the trial from
+  $x_0^g$ is $u_t=\operatorname{clip}_U(\pi_\theta(h(x_t,g),g)+v_t)$, $x_{t+1}=f(x_t,u_t)$. The trial map is
+  \[E_g:\Theta\times\cV\to\cE,\qquad E_g(\theta,v)=(c(x_t,g))_{t=0}^{T-1},\qquad e_g(\theta):=E_g(\theta,0).\]
+  $\Ehat_g$ is defined in the same way with $\fhat$.
+\end{enumerate}
+
+\subsection{Regularity}
+\begin{assumption}[Smoothness in a neighbourhood]\label{as:smooth}
+There is an open set $\cN\subseteq\Theta$ such that for every $g\in\cG_{\rm tr}$ and $\theta\in\cN$:
+\begin{enumerate}[label=(\alph*)]
+\item \emph{(interior actions)} the clip is inactive along the trial (actions in the interior of $U$);
+\item \emph{(fixed, transversal mode sequence)} the hybrid trial visits the same sequence of modes for all
+  $\theta\in\cN$, and every guard crossing is transversal (the guard's normal derivative along the flow is non-zero), so
+  that event times are $C^1$ functions of the state by the implicit function theorem and the trial map is $C^1$
+  (saltation matrices included in its derivative);
+\item \emph{(Lipschitz derivative)} $\theta\mapsto D_\theta e_g(\theta)$ is Lipschitz on $\cN$ with constant $L_2$, and
+  $\pi$ is $C^2$ in $(\theta,o)$ with bounded second derivatives on $\cN\times h(\cX,\cG)$.
+\end{enumerate}
+\end{assumption}
+Assumption~\ref{as:smooth}(b) is the hybrid-systems price: across a change of the mode sequence (a missed touchdown, a
+grazing contact) the trial map is not differentiable and no first-order argument applies; $\cN$ must lie inside one
+mode-sequence cell. Saturation (a) is similar: on an active clip the sensitivity to that action is zero.
+
+\subsection{Sensitivities}
+\begin{definition}[True and nominal closed-loop sensitivities]\label{def:G}
+Along the trial of $(\theta,g)$ with states $x_t$, actions $u_t$, let $A_t=\partial_x f$, $B_t=\partial_u f$ (with
+saltation at events), $C_t=\partial_x c(x_t,g)$, and the policy feedback $K_t=\partial_o\pi_\theta\,\partial_x h$.
+The true closed-loop sensitivity $G_g(\theta)=\partial_v E_g(\theta,0)\in L(\cV,\cE)$ has blocks
+\[G[t,j]=C_t\,\Phi^{\rm cl}(t,j+1)\,B_j\ (j<t),\qquad G[t,j]=0\ (j\ge t),\qquad
+\Phi^{\rm cl}(t,s)=\prod_{r=s}^{t-1}(A_r+B_rK_r).\]
+The \emph{nominal} sensitivity $\Ghat_g(\theta)$ is the same formula with $\widehat A_t=\partial_x\fhat$,
+$\widehat B_t=\partial_u\fhat$ evaluated \textbf{at the measured real states and actions} $(x_t,u_t)$, the same $C_t$ and
+the same $K_t$.
+\end{definition}
+\begin{remark}
+Because $\Ghat$ is evaluated along the measured trajectory with the network's own measured feedback, $G-\Ghat$ contains
+\emph{only} the derivative mismatch $(\partial f-\partial\fhat)$ at the same points (and, for hybrid systems, the
+approximation of saltation terms); it contains no state-mismatch term. The zeroth-order mismatch $f-\fhat$ never enters
+the update: the error is measured.
+\end{remark}
+
+\begin{lemma}[Chain rule through the closed loop]\label{lem:chain}
+Under Assumption~\ref{as:smooth}, define $J_g(\theta)\in L(\Theta,\cV)$ by $(J_g\delta\theta)_t=\partial_\theta
+\pi_\theta(o_t,g)\,\delta\theta$ along the trial. Then $D_\theta e_g(\theta)=G_g(\theta)J_g(\theta)$.
+\end{lemma}
+\begin{proof}
+A parameter change $\delta\theta$ changes the action at period $t$ by $\partial_\theta\pi\,\delta\theta+K_t\delta x_t$;
+the first term is exactly an additive input $v_t=(J_g\delta\theta)_t$ applied to the closed loop with feedback $K_t$,
+and the second is the closed loop's own response. Linearizing the recursion $\delta x_{t+1}=(A_t+B_tK_t)\delta
+x_t+B_t v_t$, $\delta x_0=0$, and $\delta e_t=C_t\delta x_t$ gives $\delta e=G_gJ_g\delta\theta$.
+Differentiability of each map is Assumption~\ref{as:smooth}.
+\end{proof}
+
+%=====================================================================================================================
+\section{The DistILC update}\label{sec:update}
+
+\paragraph{ILC step (per trained goal).} With damping $\lambda>0$, gain $\beta\in(0,1]$:
+\begin{equation}\label{eq:ilc}
+\Delta v_g=-\beta\,\Lhat_g\,e_g,\qquad \Lhat_g:=(\Ghat_g^\top W\Ghat_g+\lambda I)^{-1}\Ghat_g^\top W\ \in L(\cE,\cV).
+\end{equation}
+The damping is on the \emph{step} (Levenberg--Marquardt), not in the objective.
+
+\paragraph{Regression (one network for all goals).} The targets are $y_{g,t}=\pi_{\theta_k}(o_{g,t},g)+\Delta
+v_{g,t}$ at the measured observations. The network is refit, $\theta_{k+1}\approx\arg\min_\theta\sum_{g,t}\n{\pi_\theta
+(o_{g,t},g)-y_{g,t}}^2+\rho\n{\theta-\theta_k}^2$, with $\rho\ge0$ a proximal weight (trust region, finite fitting).
+Stacking $J=(J_{g_1};\dots;J_{g_N})\in L(\Theta,\cV^N)$ and $\Delta v=(\Delta v_{g_i})_i$, the first-order solution of
+this fit is the kernel (minimum-norm, ridge) step
+\begin{equation}\label{eq:reg}
+\theta_{k+1}-\theta_k=J^\top(JJ^\top+\rho I)^{-1}\Delta v+r_k,
+\end{equation}
+where $r_k$ collects the inexactness of the actual optimizer (finite Adam steps, nonlinearity of $\pi$ in $\theta$,
+replayed targets) and $\Theta_k:=JJ^\top\in L(\cV^N,\cV^N)$ is the empirical neural tangent kernel on the visited
+(observation, goal) pairs. Define the \emph{realized-correction operator}
+\[S_k:=\Theta_k(\Theta_k+\rho I)^{-1}\in L(\cV^N,\cV^N),\qquad 0\preceq S_k\preceq I,\]
+whose off-diagonal blocks $S_{g_ig_j}$ couple goals: the correction asked at $g_j$ moves the policy at $g_i$.
+
+\paragraph{Closed-loop error recursion.} By Lemma~\ref{lem:chain} and Taylor's theorem,
+\begin{equation}\label{eq:recursion}
+e_{k+1}=e_k-\beta\,M_k\,e_k+G_kJ_kr_k+R_k,\qquad M_k:=G_kS_k\Lhat_k\in L(\cE^N,\cE^N),
+\end{equation}
+with $G_k=\operatorname{blkdiag}(G_{g_i}(\theta_k))$, $\Lhat_k=\operatorname{blkdiag}(\Lhat_{g_i})$ and the Taylor
+remainder $\nW{R_k}\le \tfrac{L_2}2\n{\theta_{k+1}-\theta_k}^2$.
+
+\paragraph{From the implementation to the analysed update.} The implementation (\texttt{hw\_stage.py}) differs from
+\eqref{eq:ilc}--\eqref{eq:reg} in four ways, each mapped onto a term of the analysis.
+(i) \emph{rms cap}: the step is scaled down when its rms exceeds a cap, i.e.\ a state-dependent gain
+$\beta_k\in(0,\beta]$; every statement below holds for any gain sequence in $(0,\mu/\Gamma^2]$.
+(ii) \emph{replayed targets}: the network is fit to the targets of all trials so far with weights halving per iteration
+of age; the difference from fitting the current targets only is part of the regression error $r_k$ (the analysed
+update is the no-replay limit, \texttt{--age-decay 0}, which performed the same in the pogo sweep).
+(iii) \emph{finite Adam fitting} instead of the kernel step: also $r_k$.
+(iv) \emph{rollback}: a trial worse than the last kept one restores the previous parameters and halves the cap; this
+is a safeguard outside the analysis (a projection onto a sublevel set of the measured cost), used in
+Theorem~\ref{thm:stoch}'s localization remark.
+The sim stage (Section~\ref{sec:sim}) uses the same update with $f=\fhat$ and many lanes per iteration.
+
+%=====================================================================================================================
+\section{Fixed points are zeros of the real error}
+
+\begin{assumption}[Realizability and rank]\label{as:rank}
+For $\theta\in\cN$: (a) $J(\theta)$ is surjective onto $\cV^N$ (the network can realize any correction at the visited
+inputs; $\Theta_k\succ0$); (b) each $\Ghat_g$ has full row rank on $\cE_g$, i.e.\ $\dim\cE_g\le\dim\cV$ and the
+model can, to first order, move every active error row.
+\end{assumption}
+
+\begin{proposition}[No model bias at fixed points]\label{prop:fixedpoints}
+Under Assumptions~\ref{as:smooth}--\ref{as:rank}, with exact regression ($r_k=0$): $\theta$ is a fixed point of
+\eqref{eq:ilc}--\eqref{eq:reg} if and only if $e_g(\theta)=0$ for every trained goal $g$. This holds for every nominal
+model $\fhat$ satisfying Assumption~\ref{as:rank}(b), regardless of $\n{f-\fhat}$ or $\n{G-\Ghat}$.
+\end{proposition}
+\begin{proof}
+$\theta_{k+1}=\theta_k$ iff $J^\top(\Theta+\rho I)^{-1}\Delta v=0$. Since $J$ is surjective, $J^\top$ is injective,
+and $(\Theta+\rho I)^{-1}$ is invertible, so this holds iff $\Delta v=0$, i.e.\ $\Lhat_ge_g=0$ for all $g$. $\Lhat_g=
+(\Ghat_g^\top W\Ghat_g+\lambda I)^{-1}\Ghat_g^\top W$ is injective on $\cE_g$ because $W\succ0$ and $\Ghat_g^\top$ is
+injective (full row rank of $\Ghat_g$). Hence $e_g=0$. Conversely $e_g=0$ gives $\Delta v=0$.
+\end{proof}
+\begin{remark}
+The statement is about the location of fixed points, not about reaching them; Section~\ref{sec:conv} gives the
+convergence condition. The essential mechanism: the update is linear in a \emph{measured} residual, so the residual,
+not a model prediction of it, must vanish at rest. Step-side damping $\lambda$ changes the path, not the fixed points.
+\end{remark}
+
+%=====================================================================================================================
+\section{Convergence}\label{sec:conv}
+
+\begin{assumption}[Positivity]\label{as:pos}
+There are $\mu>0$ and $\Gamma<\infty$ such that for all $\theta\in\cN$: $\symW(M(\theta))\succeq\mu I$ on $\cE^N$ and
+$\n{M(\theta)}_W\le\Gamma$, where $M=GS\Lhat$ as in \eqref{eq:recursion}.
+\end{assumption}
+Positivity says that the correction the nominal model asks for, after passing through the network's realization
+operator $S$ and the \emph{true} closed loop $G$, reduces the measured error to first order, uniformly, and including the
+interference between goals (the off-diagonal blocks of $S$).
+
+\begin{lemma}[Sufficient conditions for positivity]\label{lem:suff}
+Let $\Ghat_g^+:=\Ghat_g^\top(\Ghat_g\Ghat_g^\top)^{-1}$ be the right pseudo-inverse (full row rank,
+Assumption~\ref{as:rank}(b)). With $A:=W^{1/2}\Ghat_g$, the push-through identity gives
+$\Lhat_g=A^\top(AA^\top+\lambda I)^{-1}W^{1/2}$, hence $\Lhat_g\to A^\top(AA^\top)^{-1}W^{1/2}=\Ghat_g^+$ as
+$\lambda\to0$ (the weight cancels in the limit) and $\Ghat_g\Ghat_g^+=I$ on $\cE_g$. Write $\Delta_g:=G_g-\Ghat_g$.
+\begin{enumerate}[label=(\roman*)]
+\item \emph{(Small gain.)} If $S=I$ (exact realization without cross-goal interference), $\lambda\to0$, and
+  $\n{\Delta_g\Ghat_g^+}_W\le1-\mu'$ for all $g$, then $\symW(M)\succeq\mu' I$.
+\item \emph{(Multiplicative mismatch.)} If $S=I$, $\lambda\to0$ and $G_g=P_g\Ghat_g$ with $\symW(P_g)\succeq\mu I$
+  ($P_g$ any linear map on $\cE_g$ with positive-definite symmetric part, e.g.\ gain, mass or actuator-scale errors of
+  any size), then $\symW(M)\succeq\mu I$.
+\item \emph{(Interference.)} For general $S$, write $M=D+O$ with $D$ the block-diagonal and $O$ the off-diagonal part.
+  If $\symW(D)\succeq\mu_D I$ and $\n{O}_W\le\omega<\mu_D$, then $\symW(M)\succeq(\mu_D-\omega)I$.
+\item \emph{(Continuity in $\lambda$.)} If (i) or (ii) holds with margin $\mu'$, it holds with margin
+  $\mu'-O(\lambda/\sigma_{\min}(\Ghat)^2)$ for $\lambda>0$.
+\end{enumerate}
+\end{lemma}
+\begin{proof}
+(i) $G\Ghat^+=(\Ghat+\Delta)\Ghat^+=I+\Delta\Ghat^+$ because $\Ghat\Ghat^+=I$ on $\cE_g$ (full row rank); then
+$\ip{e}{(I+\Delta\Ghat^+)e}\ge\nW{e}^2-\n{\Delta\Ghat^+}_W\nW{e}^2\ge\mu'\nW{e}^2$.
+(ii) $G\Ghat^+=P\Ghat\Ghat^+=P$. (iii) $\ip{e}{Me}\ge\ip{e}{De}-|\ip{e}{Oe}|\ge(\mu_D-\omega)\nW{e}^2$.
+(iv) $\Lhat_g-\Ghat_g^+=-\lambda A^\top(AA^\top+\lambda I)^{-1}(AA^\top)^{-1}W^{1/2}$, whose norm is at most
+$\lambda\n{A}\n{W^{1/2}}/\sigma_{\min}(A)^{4}$; compose with $\n{GS}$ bounded.
+\end{proof}
+\begin{remark}[Positivity is checkable]
+Positivity concerns the map from the measured error to the realized error change; its Rayleigh quotients are observable
+from consecutive trials: $\cos\angle(\Ghat\Delta v,\,e_{k+1}-e_k)$ (predicted vs measured change). The pogo-stick study
+logs this: positive in 97\% of trial pairs for the nominal-sim network, median 0.88; across 125 robot runs the median
+cosine predicts the hardware stage's gain (Spearman 0.63); the 180-degree control ($\Ghat\to-\Ghat$) gives 0\% success.
+A sign-wrong model is exactly the case where Assumption~\ref{as:pos} fails, and the method fails, as predicted.
+\end{remark}
+
+\begin{theorem}[Local linear convergence]\label{thm:local}
+Let Assumptions~\ref{as:smooth}--\ref{as:pos} hold; let $c_J:=\sup_{\cN}\n{J^\top(\Theta+\rho I)^{-1}}$,
+$c_L:=\sup_\cN\n{\Lhat}$, $c_G:=\sup_{\cN}\n{GJ}$; suppose the regression error satisfies $\n{r_k}\le\varepsilon_k$.
+Let $0<\beta\le\mu/\Gamma^2$ and $\delta>0$ with $L_2\,c_J^2c_L^2\,\beta\,\delta\le\mu/4$; let
+$\bar\varepsilon:=\sup_k\varepsilon_k$ and $\varepsilon_\Sigma:=\sum_k\varepsilon_k<\infty$ with
+$c_G\bar\varepsilon+L_2\bar\varepsilon^2\le\beta\mu\delta/4$. If $\theta_0\in\cN$, $\nW{e_0}\le\delta$, and the closed
+ball of radius $R:=\tfrac{4c_Jc_L}{\mu}\big(\delta+c_G\varepsilon_\Sigma+L_2\bar\varepsilon\varepsilon_\Sigma\big)+
+\varepsilon_\Sigma$ around $\theta_0$ lies in $\cN$, then
+\[\nW{e_{k+1}}\le\Big(1-\frac{\beta\mu}{4}\Big)\nW{e_k}+c_G\varepsilon_k+L_2\varepsilon_k^2,\]
+so $\nW{e_k}\to0$ linearly if $\varepsilon_k\equiv0$, and $\limsup_k\nW{e_k}\le\frac{4}{\beta\mu}\limsup_k
+(c_G\varepsilon_k+L_2\varepsilon_k^2)$ in general.
+\end{theorem}
+\begin{proof}
+From \eqref{eq:recursion}, $\nW{(I-\beta M)e}^2=\nW e^2-2\beta\ip{e}{Me}+\beta^2\nW{Me}^2\le(1-2\beta\mu+\beta^2
+\Gamma^2)\nW e^2\le(1-\beta\mu)\nW e^2$ for $\beta\le\mu/\Gamma^2$, and $\sqrt{1-\beta\mu}\le1-\beta\mu/2$.
+The step satisfies $\n{\theta_{k+1}-\theta_k}\le\beta c_Jc_L\nW{e_k}+\varepsilon_k$, so
+$\nW{R_k}\le\tfrac{L_2}{2}(\beta c_Jc_L\nW{e_k}+\varepsilon_k)^2\le L_2\beta^2c_J^2c_L^2\nW{e_k}^2+L_2\varepsilon_k^2$.
+With $\nW{e_k}\le\delta$ and the choice of $\delta$, $L_2\beta^2c_J^2c_L^2\nW{e_k}^2\le\tfrac{\beta\mu}{4}\nW{e_k}$.
+Adding $\nW{GJr_k}\le c_G\varepsilon_k$ gives the recursion, valid as long as $\theta_k\in\cN$ and
+$\nW{e_k}\le\delta$. Invariance, by induction: if $\nW{e_k}\le\delta$ then
+$\nW{e_{k+1}}\le(1-\tfrac{\beta\mu}4)\delta+c_G\bar\varepsilon+L_2\bar\varepsilon^2\le\delta$. Summing the recursion,
+$\sum_k\nW{e_k}\le\frac{4}{\beta\mu}\big(\nW{e_0}+c_G\varepsilon_\Sigma+L_2\bar\varepsilon\varepsilon_\Sigma\big)$, hence
+$\sum_k\n{\theta_{k+1}-\theta_k}\le\beta c_Jc_L\sum_k\nW{e_k}+\varepsilon_\Sigma\le R$: every iterate lies in the ball,
+inside $\cN$, where all constants are valid.
+\end{proof}
+
+\paragraph{Noise.}
+\begin{enumerate}[label=(N\arabic*),leftmargin=3em]
+\item The measured error is $\tilde e_k=e(\theta_k)+\xi_k$ with $\E[\xi_k\mid\cF_k]=0$ and
+  $\E[\nW{\xi_k}^2\mid\cF_k]\le\sigma^2$ (trial-to-trial noise from initial states, disturbances and sensing).
+\item The Jacobian used in iteration $k$ is $\cF_k$-measurable, or its dependence on $\xi_k$ is at most second order:
+  $\nW{\E[(\Lhat(\tilde x_k)-\Lhat(x_k))\xi_k\mid\cF_k]}\le c_\xi\sigma^2$. (Our implementation evaluates $\Ghat$ at the
+  measured states of the same trial; with idealized sensing in the pogo study $\xi\equiv$ start-state randomness only.)
+\end{enumerate}
+
+\begin{theorem}[Almost-sure convergence with Robbins--Monro gains]\label{thm:stoch}
+Let Assumptions~\ref{as:smooth}--\ref{as:pos}, (N1), (N2) with $c_\xi=0$ hold, $r_k=0$, and use gains
+$\beta_k>0$ with $\sum_k\beta_k=\infty$, $\sum_k\beta_k^2<\infty$, $\beta_k\le\mu/\Gamma^2$. On the event
+$\Omega_\cN:=\{\theta_k\in\cN,\ \nW{e(\theta_k)}\le\delta\ \forall k\}$, $e(\theta_k)\to0$ almost surely. If
+$c_\xi>0$, $\limsup_k\nW{e(\theta_k)}=O(c_\xi\sigma^2/\mu)$ a.s.\ on $\Omega_\cN$.
+\end{theorem}
+\begin{proof}
+Let $V_k=\nW{e(\theta_k)}^2$. The update uses $-\beta_k M_k\tilde e_k=-\beta_kM_ke_k-\beta_kM_k\xi_k$; by (N1) and
+$\cF_k$-measurability of $M_k$, $\E[\ip{e_k}{M_k\xi_k}\mid\cF_k]=0$. Expanding as in Theorem~\ref{thm:local},
+$\E[V_{k+1}\mid\cF_k]\le(1-\beta_k\mu)V_k+C\beta_k^2(V_k+\sigma^2)$ on $\Omega_\cN$ for a constant $C$ collecting
+$\Gamma$, $L_2$, $c_J$, $c_L$. The Robbins--Siegmund theorem gives $V_k\to V_\infty$ a.s.\ and
+$\sum_k\beta_k\mu V_k<\infty$ a.s.; since $\sum\beta_k=\infty$, $V_\infty=0$. With $c_\xi>0$ the conditional mean of the
+update carries an extra $O(\beta_kc_\xi\sigma^2)$ term, which leaves a neighbourhood of radius $O(c_\xi\sigma^2/\mu)$.
+\end{proof}
+\begin{remark}[Localization]
+The event $\Omega_\cN$ is not automatic: a noisy step can leave $\cN$ (change the mode sequence, saturate). The
+implementation's rollback (a trial worse than the last kept one restores the previous network and halves the step) is a
+practical projection onto a safe set; it makes the iterate sequence a.s.\ remain in a sublevel set of the measured cost,
+not in $\cN$. We state the theorem on $\Omega_\cN$ and do not claim more.
+\end{remark}
+
+%=====================================================================================================================
+\section{Guided policy search: where it fails and where it does not}\label{sec:gps}
+
+We take GPS in its standard form \cite{levine2013gps,levine2014unknown,montgomery2016mdgps}: per trained condition
+(goal) a local controller $p_g$ is optimized by a trajectory optimizer (iLQR/LQG) on a cost $\ell$ under a dynamics
+model, subject to a trust region (KL) to the current policy; the policy is regressed onto the local controllers; repeat.
+Three cases cover the variants relevant to sim-to-real.
+
+\subsection{GPS with the nominal model}
+\begin{proposition}[Irreducible zeroth-order bias]\label{prop:gpsnominal}
+Let GPS use $\fhat$ for its trajectory optimization, with the task cost $\ell=\tfrac12\nW{\Ehat_g}^2$ (any additional
+cost terms only add bias). At any GPS fixed point $\theta_{\rm GPS}$ with exact regression, the local controllers are
+model-optimal, $D_\theta\tfrac12\nW{\Ehat_g(\theta_{\rm GPS})}^2=0$; if the goals are feasible in the model and the
+model-optimal set is $\{\Ehat_g=0\}$, then the real error is
+\[e_g(\theta_{\rm GPS})=\underbrace{\Ehat_g(\theta_{\rm GPS})}_{=0}+\rho_g(\theta_{\rm GPS}),\qquad
+\rho_g:=e_g-\Ehat_g,\]
+with $\rho_g$ the zeroth-order sim-to-real residual along the policy,
+so $\inf\{\nW{e_g(\theta)}:\Ehat_g(\theta)=0\}=\inf\{\nW{\rho_g(\theta)}:\Ehat_g(\theta)=0\}$, which is strictly positive
+whenever the residual does not vanish on the model's solution set. No number of GPS iterations reduces it; DistILC's
+fixed points (Proposition~\ref{prop:fixedpoints}) have zero real error.
+\end{proposition}
+\begin{proof}
+Immediate from the definitions: the GPS update depends on the real system only through the regression's input
+distribution, and its targets are model-optimal; the decomposition is the definition of $\rho_g$.
+\end{proof}
+\begin{remark}
+This is the pogo study's zero-shot row: the nominal-sim network has 0\% success on the real sticks (apex 4.5 cm low:
+the residual is the unmodelled leg damping), while the nominal-sim validation reports 100\%.
+\end{remark}
+
+\subsection{GPS with dynamics fitted from real samples}
+In the unknown-dynamics variant \cite{levine2014unknown}, GPS fits a time-varying linear(-Gaussian) model
+$x_{t+1}\approx F_t[x_t;u_t;1]$ per condition and iteration from $N_s$ real rollouts and optimizes in that model.
+Because the fit includes the affine term from the real samples, the model reproduces the real trajectory to zeroth order,
+and with accurate first-order fits the fixed points are real optima: \emph{this variant is unbiased}. Its cost is
+first-order information:
+
+\begin{proposition}[Identifiability needs $n+m+1$ rollouts per condition and iteration]\label{prop:ident}
+For each $t$, the least-squares fit of $F_t\in\R^{n\times(n+m+1)}$ from samples
+$\{(x_t^i,u_t^i,x_{t+1}^i)\}_{i=1}^{N_s}$ has a unique solution iff the design matrix $Z_t=[x_t^i;u_t^i;1]_{i}\in
+\R^{(n+m+1)\times N_s}$ has full row rank, which requires $N_s\ge n+m+1$ (and persistently exciting, i.e.\ deliberately
+perturbed, rollouts). For $N_s<n+m+1$, $F_t$ is determined on the $(n+m+1-\operatorname{rank}Z_t)$-dimensional
+complement only by the prior/regularizer.
+\end{proposition}
+\begin{proof}
+Normal equations $F_tZ_tZ_t^\top=X_{t+1}Z_t^\top$ have a unique solution iff $Z_tZ_t^\top$ is invertible iff
+$\operatorname{rank}Z_t=n+m+1\le N_s$. For lower rank, any $F_t+\Delta$ with $\Delta Z_t=0$ fits equally well.
+\end{proof}
+With $N$ trained goals, unbiased first-order fits cost at least $N(n+m+1)$ real rollouts per iteration (the GMM prior of
+\cite{levine2014unknown} pools across time and conditions and reduces this in practice, at the price of making the
+first-order model prior-dominated). DistILC uses one rollout per goal per iteration and no fitted first-order model: it
+takes the first-order information from the nominal model and needs only Assumption~\ref{as:pos} of it.
+
+\subsection{GPS with a nominal prior and too few samples: the cost-regularization bias}
+With $N_s$ below identifiability, a fitted model with a nominal prior has the measured zeroth order and an (essentially)
+nominal first order: its trajectory optimization then computes an approximate-Jacobian step on the measured residual,
+much like \eqref{eq:ilc}. The remaining difference is where regularization enters.
+\begin{proposition}[Cost-side regularization biases approximate-Jacobian fixed points; step-side damping does not]\label{prop:regbias}
+Let $\Phi(v)=\tfrac12\nW{E(v)}^2+\tfrac12 v^\top Rv$, $R\succeq0$ (control cost; entropy and KL-to-prior terms have
+the same effect locally), and consider any method whose fixed points satisfy the approximate stationarity
+$\Ghat^\top WE(\hat v)+R\hat v=0$ (e.g.\ iLQR/DDP run to convergence in a model with the measured zeroth order and the
+nominal first order). Then at $\hat v$ the true gradient is
+\[\nabla\Phi(\hat v)=(G-\Ghat)^\top W E(\hat v),\]
+which is non-zero whenever $R\hat v\ne0$, $\Ghat$ has full row rank and $(G-\Ghat)^\top W$ is injective on the range
+of $E(\hat v)$; so $\hat v$ is neither a real stationary point nor a real zero, with
+$\n{\nabla\Phi(\hat v)}\le\n{G-\Ghat}_W\nW{E(\hat v)}$ and $\nW{E(\hat v)}\ge\n{R\hat v}/\n{\Ghat^\top W}$. With
+$R=0$ and damping only in the step \eqref{eq:ilc}, the fixed points are $\{E=0\}$ (Proposition~\ref{prop:fixedpoints}),
+the global minimizers of the real $\tfrac12\nW E^2$.
+\end{proposition}
+\begin{proof}
+$\nabla\Phi=G^\top WE+Rv$; subtract the fixed-point condition. If $R\hat v\neq0$ then $\Ghat^\top WE(\hat v)=-R\hat
+v\neq0$, so $E(\hat v)\ne0$ and $\nW{E}\ge\n{R\hat v}/\n{\Ghat^\top W}$.
+\end{proof}
+This is the precise sense of the contrast with Abbeel, Quigley and Ng \cite{abbeel2006inaccurate}: optimizing a utility
+with approximate derivatives converges to a region of size proportional to the derivative error; root-finding a
+measured residual with approximate derivatives converges to the root.
+
+\subsection{Summary of the comparison}
+\begin{center}
+\begin{tabular}{@{}p{0.27\textwidth}p{0.15\textwidth}p{0.2\textwidth}p{0.3\textwidth}@{}}
+\toprule
+method & real rollouts per goal and iteration & first-order information & real error at fixed points\\
+\midrule
+GPS, nominal model & 0 & model & $\rho_g\neq0$ (Prop.~\ref{prop:gpsnominal})\\
+GPS, fitted dynamics & $\ge n+m+1$ & fitted (unbiased) & $0$ (if feasible, identifiable)\\
+GPS, nominal prior, $N_s<n+m+1$ & $N_s$ & $\approx$ model & biased if $R\ne0$ (Prop.~\ref{prop:regbias})\\
+DistILC hardware stage & 1 & model, positivity only & $0$ (Prop.~\ref{prop:fixedpoints}, Thm.~\ref{thm:local})\\
+\bottomrule
+\end{tabular}
+\end{center}
+``GPS fails'' is therefore a statement about a regime: few real trials and a wrong model. With enough real samples to
+identify local dynamics, GPS does not fail; it costs at least $n+m+1$ times more real rollouts per iteration.
+
+%=====================================================================================================================
+\section{Does correcting the flown goals correct the others?}\label{sec:transfer}
+
+Let $g'\notin\cG_{\rm tr}$ and $J_{g'}$ its policy Jacobian along its own trial. The first-order change of its error
+after one update is, by Lemma~\ref{lem:chain} and \eqref{eq:reg},
+\begin{equation}\label{eq:transfer}
+\Delta e_{g'}=-\beta\,G_{g'}\,S_{g',{\rm tr}}\,\Lhat\,e_{\rm tr}+O(\n{\Delta\theta}^2),\qquad
+S_{g',{\rm tr}}:=J_{g'}J^\top(JJ^\top+\rho I)^{-1}.
+\end{equation}
+
+\begin{proposition}[First-order transfer]\label{prop:transfer}
+Assume, for some $g\in\cG_{\rm tr}$ at goal distance $d=\n{g'-g}$, within one mode-sequence cell:
+(T1) systematic error, $\nW{e_{g'}-e_g}\le L_ed$; (T2) sensitivity continuity, $\n{G_{g'}-G_g}\le L_Gd$; (T3) kernel
+coupling, $S_{g',{\rm tr}}=\kappa\,S_{g,{\rm tr}}+\Sigma$ with $\kappa>0$ and $\n{\Sigma}\le s(d)$, $s(0)=0$;
+(T4) positivity at $g$ with margin $\mu_g$ for the row of $M$ belonging to $g$. Then
+\[-\ip{e_{g'}}{\Delta e_{g'}}\ \ge\ \beta\Big(\kappa\mu_g\nW{e_g}^2-c\,(L_ed+L_Gd+s(d))\,\nW{e_{\rm tr}}\,\nW{e_g}\Big)
+-O(\beta^2),\]
+so the unflown goal's error decreases to first order for $d<r^\star\propto\kappa\mu_g\nW{e_g}/(L_e+L_G+s'(0))\,
+\nW{e_{\rm tr}}^{-1}$: transfer is local, with a radius set by how fast the error, the sensitivity and the network's
+coupling vary with the goal.
+\end{proposition}
+\begin{proof}
+Substitute (T1)--(T3) into the inner product
+\[\ip{e_{g'}}{G_{g'}S_{g',{\rm tr}}\Lhat e_{\rm tr}},\]
+expand around $\ip{e_g}{G_gS_{g,{\rm tr}}\Lhat e_{\rm tr}}\ge\mu_g\nW{e_g}^2$ (T4), and bound each cross term by
+Cauchy--Schwarz with the uniform bounds $c_G,c_L$; the constant $c$ collects them.
+\end{proof}
+\paragraph{Evidence.} Pogo stick, hardware stage on one goal $(0.8,0.65)$ for 6 trials per robot, evaluated on a
+$7\times5$ goal grid over the whole box: the error ratio after/before is $0.11$ at the trained goal, $0.16$--$0.45$
+within normalized distance $0.3$, $0.37$--$0.89$ at $0.5$--$0.73$; the error decreased at all 35 goals. The main
+experiment's 8 test goals are all unflown; all improved. The sources of a systematic error (T1) are robot-wide
+(damping, mass, actuator scale), which is why transfer is broad here. Mode boundaries (e.g.\ a different contact
+sequence) violate (T2)/(T3) and give no first-order guarantee; nor does the theory guarantee anything beyond the trained
+goals: generalization is a property of the network and the data, not of the update.
+
+%=====================================================================================================================
+\section{The simulation stage}\label{sec:sim}
+In simulation the ``real'' system is the nominal model, $G=\Ghat$ up to the hybrid approximation of saltation terms, and
+the recursion \eqref{eq:recursion} has $M=GS\Lhat$ with $G\Lhat=G(G^\top WG+\lambda I)^{-1}G^\top W\succeq0$ (a
+damped projector). Per lane positivity therefore holds automatically in the limit $S\to I$; what can fail is the
+\emph{stacked} condition through $S$: lanes compete for one network (Lemma~\ref{lem:suff}(iii)), and regression error
+$r_k$ accumulates. We observed this: the nominal-sim stage's speed loop drifts late (the nominal-sim score cannot see
+it; a sim-only DR-family score can), and under domain randomization the drift starts before the DR objective is learned.
+\begin{proposition}[Monotone acceptance]\label{prop:accept}
+If each update is kept only when the measured cost $\sum_{\rm lanes}\tfrac12\nW{e}^2$ of the same lanes (same initial
+states, models and exploration noise) decreases, the cost of the accepted sequence on the lanes it is evaluated on is
+non-increasing, and an update is accepted whenever the first-order decrease
+$\beta\mu\sum\nW{e}^2$ exceeds the second-order and regression terms of \eqref{eq:recursion}, i.e.\ for
+$\beta$ small enough when Assumption~\ref{as:pos} holds on those lanes.
+\end{proposition}
+\begin{proof}
+The acceptance test is exactly the sign of the realized change of the cost; the rejection branch restores $\theta_k$.
+The second statement is Theorem~\ref{thm:local}'s one-step inequality summed over lanes.
+\end{proof}
+This is a guarantee on the evaluated lanes only (a fresh batch each iteration), not on the population; it removed the
+drift in the pogo study (speed error $0.04$--$0.10$ m/s at iteration 60 against $0.7$ m/s without it).
+
+%=====================================================================================================================
+\section{Domain randomization, for comparison}
+Let $\xi\sim\nu$ index the randomized family and $L(\theta;\xi)$ the task loss. DR's SGD converges (under the usual
+conditions) to stationary points of $\bar L(\theta)=\E_\nu L(\theta;\xi)$. If reality is $\xi^\star$, the real loss at
+DR's optimum is $L(\theta_{\rm DR};\xi^\star)$, which is small only if (C1) $\xi^\star$ lies where $\nu$ has mass and
+(C2) the compromise optimum $\arg\min\bar L$ is near $\arg\min L(\cdot;\xi^\star)$ (no conflicting family members, or a
+policy that can identify $\xi$ from observations). Neither (C1) nor (C2) is checkable from simulation alone; positivity
+is checkable from a few real trial pairs. The two are not nested: reality can lie outside every family while positivity
+holds (Lemma~\ref{lem:suff}(ii) with a large gain error), and a wide family can contain reality while the nominal
+Jacobian points more than $90^\circ$ off. They are complementary: DR is a choice of warm start, the ILC update is a
+convergence mechanism; the pogo study's best arm is the DR policy followed by the ILC hardware stage (94--96\%).
+
+%=====================================================================================================================
+\section{Anticipated criticisms}\label{sec:critique}
+\begin{enumerate}[leftmargin=1.5em]
+\item \textbf{``This is ILC / Abbeel et al.\ 2006 / GPS with a prior.''} The per-goal step \eqref{eq:ilc} is
+  approximate-model ILC; we do not claim it. What is analysed here is its use as the regression target of one
+  goal-conditioned feedback network shared across goals (operator $S$, Sections~\ref{sec:update}, \ref{sec:transfer}),
+  the role of the network's own feedback in the sensitivity (Definition~\ref{def:G}), and the fixed-point contrast with
+  cost-optimizing methods (Proposition~\ref{prop:regbias}). With a nominal prior and too few samples, GPS becomes a
+  close relative; the difference is then the regularization (cost-side vs step-side) and the use of one step per trial
+  instead of a converged local optimization.
+\item \textbf{``Positivity is an unverifiable assumption.''} It is a condition on observables: predicted vs measured
+  error changes over consecutive trials. Lemma~\ref{lem:suff} gives model-error conditions (small gain; multiplicative
+  mismatch of any size). Empirically it holds in 97\% of pogo trial pairs and predicts the gain; the flipped-Jacobian
+  control fails as predicted.
+\item \textbf{``Only local.''} Yes: Theorems~\ref{thm:local}--\ref{thm:stoch} are local, on a neighbourhood $\cN$ inside one
+  mode-sequence cell. A warm start in the basin (the simulation stage, or a DR policy) is part of the method.
+\item \textbf{``Hybrid systems are not differentiable.''} Assumption~\ref{as:smooth}(b) restricts the analysis to a fixed
+  transversal mode sequence, where the trial map is $C^1$ with saltation terms. The implementation's straight-through
+  saltation terms are an approximation of $G$, i.e.\ part of $G-\Ghat$, covered by positivity; mode-sequence changes
+  are outside the theory.
+\item \textbf{``The network cannot realize the targets.''} Captured by $S\ne I$ (cross-goal coupling) and the regression
+  error $r_k$ (Theorem~\ref{thm:local}'s $O(\varepsilon)$ neighbourhood). Realizability (Assumption~\ref{as:rank}(a)) is an
+  over-parameterization assumption on the visited inputs; it can fail with conflicting targets (one observation, two
+  goals asking for opposite corrections), which is the interference term of Lemma~\ref{lem:suff}(iii).
+\item \textbf{``Guarantees only on the trained goals.''} Correct. Proposition~\ref{prop:transfer} is a first-order,
+  conditional statement; generalization to unflown goals is empirical (Section~\ref{sec:transfer}).
+\item \textbf{``What if a goal is infeasible on the real system?''} Then $\{e_g=0\}=\emptyset$ and
+  Proposition~\ref{prop:fixedpoints} says there is no fixed point at that goal; any limit satisfies only
+  $\Lhat e=0$ in the damped sense, which is \emph{not} the real least-squares stationarity $G^\top We=0$: our iteration
+  is biased for infeasible goals, as Proposition~\ref{prop:regbias} shows for cost-optimizers. The implementation's stall
+  guard and fallback ladders handle infeasible goals heuristically.
+\item \textbf{``More error rows than inputs.''} Then $\Ghat$ cannot have full row rank and zero error is generically
+  unreachable; the theory requires $\dim\cE_g\le\dim\cV$ (Assumption~\ref{as:rank}(b)). In the pogo instance $q=m=2$ and
+  half the rows are masked in stance.
+\item \textbf{``Noise in the Jacobian correlates with noise in the error.''} (N2) with $c_\xi>0$; the bias is second
+  order in the noise level (Theorem~\ref{thm:stoch}). Averaging repeated trials or evaluating $\Ghat$ on the previous
+  trial removes it.
+\item \textbf{``Step sizes are tuned.''} The theory prescribes $\beta\le\mu/\Gamma^2$; the full Gauss--Newton step
+  ($\beta=1$, small $\lambda$) was chosen on validation goals in the pogo study. Too large a step leaves the region of
+  Theorem~\ref{thm:local}; the rollback guards against it.
+\item \textbf{``The sensitivity uses the policy's own feedback, which changes.''} Yes: $M$ depends on $\theta$ through
+  $K$ and $S$. A fragile network can lose positivity (observed: a DR network on the heavy pogo stick, median cosine
+  $<0$, no gain). Assumption~\ref{as:pos} is uniform on $\cN$ for this reason.
+\item \textbf{``The comparison to GPS is not empirical.''} Propositions~\ref{prop:gpsnominal}--\ref{prop:regbias} are
+  structural. The nominal-model case is measured (zero-shot row); a fitted-dynamics GPS arm at equal real budget is the
+  missing experiment.
+\item \textbf{``DR wins zero-shot.''} When its family covers reality it can (PPO+DR 77\% vs 0\% for the nominal-sim
+  network on the pogo sticks, whose damping lies inside the DR family). The claim is not dominance; it is that the ILC
+  update converges on the real system under a different, checkable assumption, and that it composes with DR.
+\item \textbf{``Finite horizon, finite trials.''} The theorems are asymptotic in the iteration count at fixed horizon $T$;
+  at 24 trials the pogo study is in the transient regime, where the linear rate of Theorem~\ref{thm:local} is the
+  relevant statement.
+\end{enumerate}
+
+%=====================================================================================================================
+\section*{Assumption index}
+\begin{center}
+\begin{tabular}{@{}lp{0.72\textwidth}@{}}
+\toprule
+(S1)--(S6) & finite horizon; open state set, compact convex action set, compact goal set; trial input space $\R^{Tm}$
+(Euclidean); error space $\R^{Tq}$ with $W\succ0$ (active rows only); parameter space $\R^p$; filtered probability
+space, measurable noise.\\
+(D1)--(D3) & real (possibly hybrid) dynamics, nominal model, closed-loop trial map with an additive input.\\
+A & interior actions; fixed transversal mode sequence on $\cN$; Lipschitz $D_\theta e$; $C^2$ policy.\\
+B & realizability ($J$ surjective on the visited inputs); full row rank of $\Ghat_g$ ($\dim\cE_g\le\dim\cV$).\\
+C & positivity: $\symW(GS\Lhat)\succeq\mu I$, $\n{GS\Lhat}\le\Gamma$ on $\cN$, cross-goal interference included.\\
+(N1)--(N2) & zero-mean, bounded-variance trial noise; Jacobian independent of the current noise (or second-order).\\
+Thm.~\ref{thm:local} & small initial error, step $\beta\le\mu/\Gamma^2$, iterates stay in $\cN$, regression error $\varepsilon_k$.\\
+Thm.~\ref{thm:stoch} & Robbins--Monro gains; on the event that the iterates stay in $\cN$.\\
+Prop.~\ref{prop:transfer} & (T1)--(T4): systematic error, sensitivity continuity, kernel coupling, positivity at a
+flown goal; same mode-sequence cell.\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{thebibliography}{9}
+\bibitem{levine2013gps} S.~Levine and V.~Koltun. Guided policy search. ICML, 2013.
+\bibitem{levine2014unknown} S.~Levine and P.~Abbeel. Learning neural network policies with guided policy search under
+unknown dynamics. NeurIPS, 2014. [verify]
+\bibitem{montgomery2016mdgps} W.~Montgomery and S.~Levine. Guided policy search via approximate mirror descent.
+NeurIPS, 2016. [verify]
+\bibitem{abbeel2006inaccurate} P.~Abbeel, M.~Quigley and A.~Y.~Ng. Using inaccurate models in reinforcement learning.
+ICML, 2006.
+\bibitem{robbinssiegmund} H.~Robbins and D.~Siegmund. A convergence theorem for non negative almost supermartingales and
+some applications. Optimizing Methods in Statistics, 1971.
+\bibitem{kushner} H.~J.~Kushner and G.~G.~Yin. Stochastic Approximation and Recursive Algorithms and Applications.
+Springer, 2003.
+\end{thebibliography}
+\end{document}

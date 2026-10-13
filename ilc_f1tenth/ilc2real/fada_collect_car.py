@@ -20,7 +20,8 @@ import time
 
 ap = argparse.ArgumentParser()
 ap.add_argument('--out', required=True)
-ap.add_argument('--init', default='runs/bcB/policy_final.npz')
+ap.add_argument('--init', default='runs/bcB/policy_final.npz', help='behaviour network; a path with {car}: one per car (e.g. '
+                'our per-car networks runs/hw/<arm>/{car}_policy.npz: the fully idealized FADA oracle)')
 ap.add_argument('--cars', nargs='+', default=['real_nom', 'real_mass', 'real_mu', 'real_act', 'real_lag'])
 ap.add_argument('--goals', nargs='+', default=[f'mocap_{t}_b{b}' for t in ('square2fast', 'figfast') for b in (0, 10, 18, 25)])
 ap.add_argument('--rungs-from', default='')
@@ -67,11 +68,14 @@ def main():
     rng = np.random.default_rng(a.seed)
     names = list(dict.fromkeys(goal_for(c, g) for c in a.cars for g in a.goals))
     plans = {p['name']: p for p in bank.load_bank(names)}
-    d = np.load(a.init)
-    beh = [(np.asarray(d[f'W{i}']), np.asarray(d[f'b{i}'])) for i in range(3)]
+    def behaviour(c):
+        d = np.load(a.init.format(car=c))
+        n = len([k for k in d.files if k.startswith('W')])
+        return [(np.asarray(d[f'W{i}']), np.asarray(d[f'b{i}'])) for i in range(n)]
     stats = dict(cars={}, rungs={c: RUNGS.get(c, {}) for c in a.cars})
     t0 = time.time()
     for c in a.cars:
+        beh = behaviour(c)
         X, Y, flown, crashes, laps = [], [], 0, 0, 0.0
         while flown < a.episodes:
             jobs = []
