@@ -113,3 +113,12 @@ def add_jobs(S):
             for nm, args in (('base', ''), ('st3k', '--steps 3000'), ('lr3', '--lr 3e-4'), ('st3klr3', '--steps 3000 --lr 3e-4')):
                 hw(f'drLK20_s{s}_fix_{nm}', pol, f'--iters 6 --eval-at 2 4 {args}')
         hw('nom_s2_fix_base', 'runs/nom_s2/policy_pick.npz', '--iters 6 --eval-at 2 4')
+
+    if 'drgrid' in STAGE:
+        # ours + DR: does denser goal coverage fix the DR net's goal generalization? A 3 x 3 grid over the goal box
+        # (not chosen from the validation goals) x 4 iterations = 36 trials, the same budget as 6 goals x 6 iterations
+        G9 = '--goals ' + ' '.join(f'{v} {h}' for v in (0.0, 0.75, 1.5) for h in (0.55, 0.65, 0.75))
+        for s in (0, 1, 2):
+            hw(f'drLK20_s{s}_grid9', f'runs/drBlsLK20_s{s}/policy_pick.npz', f'{G9} --iters 4 --eval-at 2')
+        hw('nom_s2_grid9', 'runs/nom_s2/policy_pick.npz', f'{G9} --iters 4 --eval-at 2')
+        hw('ppo_dr_s2_grid9', 'runs/ppo_dr_s2/policy_final.npz', f'{G9} --iters 4 --eval-at 2')

@@ -23,7 +23,10 @@ PY
 run_trial() {  # name plan policy laps [start offset m]
   python3 $H/car_sim_node.py --ros-args -p car:=$CAR -p plan:=$2 -p start_offset:=${5:-0.0} > $S/sim_$1.log 2>&1 & SIM=$!
   python3 $H/net_runner.py --ros-args -p session_dir:=$S -p stdin_start:=false > $S/runner_$1.log 2>&1 & RUN=$!
-  sleep 6
+  # wait for the stand-in car's odometry (its multi-body model JIT-compiles first: ~2 s with a warm numba cache, ~10 s
+  # cold, e.g. a fresh container) instead of a fixed sleep -- a start request before it is refused ('no fresh odometry')
+  timeout 90 ros2 topic echo /odometry/filtered 2>/dev/null | head -n 1 > /dev/null || true   # (foxy has no --once)
+  sleep 2
   echo "{\"plan\": \"$2\", \"policy\": \"$3\", \"laps\": $4, \"launch\": {\"v_hand\": 1.0, \"current\": 8.0}}" > $S/req_$1.json
   sleep 2
   timeout 20 ros2 service call /net_runner/start std_srvs/srv/Trigger > $S/start_$1.log 2>&1 || true
