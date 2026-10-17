@@ -443,3 +443,35 @@ iterations (36):
   - It costs s1 its soft stick (97 → 81).
 - **Goal coverage is part of it (s2) but not the whole story.**
 - Ours + DR remains the weakest variant. The adaptive trust region (on the other computer) is the next test.
+
+## LM trust region (2026-10-17, machine ube; validation goals, 36 trials, 3 networks x 3 seeds; runs/v4, scheduler_tr.py)
+
+Question: can ONE adaptive step rule replace the hand-set step knobs (beta, cap, rollback ratio) in all three domains?
+
+**The rule** (`hw_stage.py --tr 1`; Levenberg-Marquardt / Nocedal-Wright 4.1):
+- the full GN step inside a radius r (rms, normalized action);
+- after each trial, rho = measured / predicted relative cost reduction. The prediction is for the change the refit
+  actually realized: J(f) = 1/2 |e + f de|^2, with f the realized fraction;
+- rho < 0.25 halves r; rho < 0 (or a new fall) rejects the step; rho > 0.75 doubles r (max 0.4).
+
+**The environment reproduces matcha's numbers.** The fixed default (`fix10`) gives 96.0 / 91.5 / 99.0 % at 36 trials,
+against matcha's validation curves of 96.4 / 91.1 / 98.8 %. ube runs JAX 0.4.35 vs matcha's 0.9.
+
+**Batch 1** (success % at 12 / 24 / 36 trials; seeds pooled, 95 % cluster CI at 36 in brackets):
+
+| net | fix10 (current default) | tr10 (trust region, r0 0.10) | fix10 + refit to convergence | tr10 + refit to convergence |
+|---|---|---|---|---|
+| nominal | 84 / 93 / **96.0** [91, 100] | 84 / 91 / **94.6** [89, 99] | 91 / 91 / 87.5 | 91 / 91 / 88.4 |
+| ours + DR | 87 / 89 / **91.5** [86, 96] | 87 / 90 / **89.9** [84, 95] | 86 / 83 / 82.1 | 86 / 81 / 79.7 |
+| PPO+DR | 91 / 96 / **99.0** [98, 100] | 91 / 96 / **99.1** [98, 100] | 94 / 90 / 87.5 | 93 / 93 / 89.2 |
+
+- **At the default size the trust region matches the fixed step.**
+  - Median rho is 0.50-0.70, inside the [0.25, 0.75] band, so the radius rarely moves.
+  - About 1 rejected step per run.
+  - Whether it removes the NEED to choose the size is batch 2: fixed caps 0.025 / 0.05 / 0.2 vs the trust region
+    started at 0.025 / 0.4.
+- **Refit to convergence hurts.** Refitting only the newest trials (age decay 0) until the realized fraction plateaus
+  takes it from about 0.4 to 0.75.
+  - It is faster at 12 trials (+6 on the nominal net).
+  - It is 8-12 points lower at 36: dropping the older trials forgets what they fixed.
+  - Dropped from batch 2.
