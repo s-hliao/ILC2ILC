@@ -9,7 +9,8 @@ seeds. Outputs runs/v4/<arm>_<net>_s<k>/.
      tr10_fit   adaptive trust region + refit to convergence
   batch 'tr2' (sensitivity to the one remaining number, the initial size):
      fix025 / fix05 / fix20   fixed cap 0.025 / 0.05 / 0.20 (rollback 0.7)
-     tr025_fit / tr40_fit     adaptive, r0 0.025 / 0.40, refit to convergence
+     tr025 / tr40             adaptive, r0 0.025 / 0.40 (fixed refit; batch 1 showed refit-to-convergence with age decay
+                              0 starts faster but ends 8-12 points lower)
     POGO_FIX_STAGE=tr1 POGO_STATE=scheduler_tr1 POGO_GPUS=0,1,2 POGO_CPU_JOBS=12 nohup python scheduler.py --jobs scheduler_tr &
 """
 import os
@@ -22,7 +23,7 @@ ARMS = {
     'tr1': {'fix10': '--cap 0.10', 'fix10_fit': f'--cap 0.10 {FIT}', 'tr10': '--tr 1 --cap 0.10',
             'tr10_fit': f'--tr 1 --cap 0.10 {FIT}'},
     'tr2': {'fix025': '--cap 0.025', 'fix05': '--cap 0.05', 'fix20': '--cap 0.20',
-            'tr025_fit': f'--tr 1 --cap 0.025 {FIT}', 'tr40_fit': f'--tr 1 --cap 0.40 {FIT}'},
+            'tr025': '--tr 1 --cap 0.025', 'tr40': '--tr 1 --cap 0.40'},     # batch 1: refit-to-convergence hurts
 }
 
 

@@ -295,6 +295,7 @@ def main():
     rollbacks = {c: [] for c in a.cars}
     tr_last = {c: {} for c in a.cars}          # --tr: goal -> (J measured, J predicted for the realized change) of the kept step
     tr_log = {c: [] for c in a.cars}
+    tr_kept_it = {c: None for c in a.cars}
     realize = {c: [] for c in a.cars}
     goal_now = {c: {g: g for g in a.goals} for c in a.cars}
     rung = {c: {g: 0 for g in a.goals} for c in a.cars}
@@ -408,8 +409,8 @@ def main():
                 params[c] = prev_params[c]                 # less progress or a new crash: back to the last kept network
                 if not a.tr or not (rho is not None and rho < a.tr_lo):
                     cap[c] *= 0.5
-                if a.tr:
-                    tr_last[c] = {}                        # the previous network flies again: re-measure
+                if a.tr:                                   # the reverted step's predictions are void; older ones stand
+                    tr_last[c] = {g: v for g, v in tr_last[c].items() if v[2] != tr_kept_it[c]}
                 rollbacks[c].append(dict(it=it, prog=prog, last=last_prog[c], cap=cap[c], new_crash=new_crash))
                 print(json.dumps(dict(it=it, car=c, rollback=True, prog=prog, last=last_prog[c], cap=cap[c],
                                       new_crash=new_crash)), flush=True)
@@ -473,8 +474,9 @@ def main():
             realize[c].append(dict(it=it, realized=realized, steps=n_steps))
             if a.tr:                                   # J(f) of a GN projection step: J - (2f - f^2)(J - J_pred)
                 f_ = float(np.clip(realized, 0.0, 1.0))
-                tr_last[c].update({gn_names[pid_c[k]]: (float(J[k]), float(J[k] - (2 * f_ - f_ ** 2) * (J[k] - Jp[k])))
+                tr_last[c].update({gn_names[pid_c[k]]: (float(J[k]), float(J[k] - (2 * f_ - f_ ** 2) * (J[k] - Jp[k])), it)
                                    for k in range(len(rr)) if valid[k].any()})   # per goal: its last kept trial (goals cycle)
+                tr_kept_it[c] = it
             if np.isfinite(float(l)) and all(np.isfinite(np.asarray(W)).all() for W, b in ps):
                 params[c] = ps                           # a non-finite fit is discarded
             last = [t for t in trials[c] if t['it'] == it]
