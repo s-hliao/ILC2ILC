@@ -15,7 +15,7 @@ P2="--hist 40 --p2-onpolicy 1 --p2-am 10 --adapt-iters 150"
   F1T_PROCS=4 $PY -u hw_stage.py --policy runs/ppo_dr_task_s0/policy_final.npz --out runs/hw/ppo_dr_task_s0_zs --iters 0 --gpu 1 > logs/hw_ppo_dr_task_s0_zs.log 2>&1 ) &
 ( $PY -u ppo_dr.py --plans $PL8 --out runs/rma_task_s0 --init $INIT --mode rma --reward task $P2 --gpu 2 > logs/rma_task_s0.log 2>&1
   F1T_PROCS=4 $PY -u hw_stage.py --policy runs/rma_task_s0/policy_final.npz --out runs/hw/rma_task_s0_zs --iters 0 --gpu 2 > logs/hw_rma_task_s0_zs.log 2>&1 ) &
-( $PY -u ppo_dr.py --plans $PL8 --out runs/rma_p2fix_s0 --mode rma --adapt-only --teacher runs/rma_s0/policy_final.npz $P2 --gpu 3 > logs/rma_p2fix_s0.log 2>&1
-  F1T_PROCS=4 $PY -u hw_stage.py --policy runs/rma_p2fix_s0/policy_final.npz --out runs/hw/rma_p2fix_s0_zs --iters 0 --gpu 3 > logs/hw_rma_p2fix_s0_zs.log 2>&1 ) &
+( $PY -u ppo_dr.py --plans $PL8 --out runs/rma_p2fix_s0 --mode rma --adapt-only --teacher runs/rma_s0/policy_final.npz $P2 --gpu 0 > logs/rma_p2fix_s0.log 2>&1
+  F1T_PROCS=4 $PY -u hw_stage.py --policy runs/rma_p2fix_s0/policy_final.npz --out runs/hw/rma_p2fix_s0_zs --iters 0 --gpu 0 > logs/hw_rma_p2fix_s0_zs.log 2>&1 ) &
 wait
 echo "$(date +%T) CAR_BASELINE_FIX_DONE"
