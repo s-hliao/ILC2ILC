@@ -43,6 +43,11 @@ ap.add_argument('--beta', type=float, default=0.5)
 ap.add_argument('--delta', type=float, default=0.02)
 ap.add_argument('--cap', type=float, default=0.08)
 ap.add_argument('--no-feedback-jac', action='store_true')
+ap.add_argument('--fbk-refresh', type=int, default=0, help='> 0: the network feedback inside the sensitivity comes from a '
+                'snapshot refreshed every N iterations (a target network), not from the network being fitted')
+ap.add_argument('--fb-jac', default='policy', choices=('policy', 'expert', 'none'), help='the feedback inside the '
+                'closed-loop sensitivity: the network\'s own (default), the Raibert controller\'s (fixed: the sensitivity '
+                'cannot co-evolve with the network\'s gains), or none (= --no-feedback-jac)')
 ap.add_argument('--replay', type=int, default=4)
 ap.add_argument('--steps', type=int, default=400)
 ap.add_argument('--mb', type=int, default=4096)
@@ -122,7 +127,7 @@ def ou_noise(key, n, T, rms, rho=0.9):
 @jax.jit
 def gn_steps(params, xs, applied, g, p, failed, err, beta, cap):
     def lane(X, Ap, gg, pp, F, E):
-        one = pj.lane_jacobians(policy_fn, params, gg, pp, 'none' if a.no_feedback_jac else 'policy')
+        one = pj.lane_jacobians(policy_fn, params, gg, pp, 'none' if a.no_feedback_jac else a.fb_jac)
         A, B, Cm, K = jax.vmap(one)(X[:-1], Ap)
         valid = ~F
         step, J, Jp = pj.gn_lane(A, B, Cm, K, E, valid, beta, a.delta, cap)
@@ -230,6 +235,7 @@ def lane_cost(out):
 pool = []
 chain = None
 beta_now, cap_now = a.beta, a.cap
+params_K = params
 for it in range(a.iters):
     key, k1, k2, k3 = jax.random.split(key, 4)
     x0, G, explore = sample_lanes(k1, a.lanes, chain)
@@ -239,7 +245,10 @@ for it in range(a.iters):
     SIM_SECONDS += a.lanes * a.T * C.DT
     chain = (out['x_end'], out['failed_end'])
     CH = 256                                                  # the GN step in lane chunks (GPU memory)
-    parts = [gn_steps(params, out['x'][i:i + CH], out['a'][i:i + CH], G[i:i + CH],
+    if a.fbk_refresh and it % a.fbk_refresh == 0:
+        params_K = params
+    pK = params_K if a.fbk_refresh else params
+    parts = [gn_steps(pK, out['x'][i:i + CH], out['a'][i:i + CH], G[i:i + CH],
                       jax.tree_util.tree_map(lambda v: v[i:i + CH], p), out['failed'][i:i + CH], out['err'][i:i + CH],
                       beta_now, cap_now) for i in range(0, a.lanes, CH)]
     step, valid, J, Jp = (jnp.concatenate([q[j] for q in parts]) for j in range(4))

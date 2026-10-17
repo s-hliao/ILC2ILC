@@ -64,6 +64,7 @@ def simulate(policy, goals, x0, params, T, noise=None, ff=None):
     O, MU, A, E = (np.zeros((n, T, d)) for d in (len(features(x[:1], goals[:1], np)[0]), 2, 2, 2))
     F = np.zeros((n, T), bool)
     f = np.zeros(n, bool)
+    EV = [[] for _ in range(n)]                       # per run: (period, fraction of the period, 1 touchdown / 0 liftoff)
     h = DT / SUB_REAL
     for t in range(T):
         xs[:, t] = x
@@ -72,13 +73,43 @@ def simulate(policy, goals, x0, params, T, noise=None, ff=None):
         a = mu + (0 if noise is None else noise[:, t]) + (0 if ff is None else ff[:, t])
         O[:, t], MU[:, t], A[:, t], E[:, t], F[:, t] = o, mu, a, errors(x, goals, np), f
         xn = x
-        for _ in range(SUB_REAL):
+        for j in range(SUB_REAL):
+            st0 = xn[:, 5]
             xn = substep(xn, a, p, h, np)
+            ch = np.where((xn[:, 5] != st0) & ~f)[0]
+            for i in ch:                              # the mode signature: event, its control period and sub-step
+                EV[i].append((t, (j + 1) / SUB_REAL, int(xn[i, 5] > 0.5)))
         fn = f | failed(xn, np)
         x = np.where(fn[:, None], x, xn)
         f = fn
     xs[:, T] = x
-    return dict(x=xs, obs=O, mu=MU, a=A, err=E, failed=F, failed_end=f)
+    return dict(x=xs, obs=O, mu=MU, a=A, err=E, failed=F, failed_end=f, events=EV)
+
+
+def signature(res, i, a_lim=1.0):
+    """Mode signature of run i: the event sequence (type, control period) -- the trial map's piece -- plus the
+    clip pattern (periods with a saturated action component); the margins: the smallest distance of an event from a
+    control-period boundary (fraction of a period) and the smallest |1 - |a|| over unsaturated actions."""
+    ev = res['events'][i]
+    a = np.asarray(res['a'][i])
+    sat = np.abs(a) >= a_lim
+    t_margin = min([min(fr, 1.0 - fr) for _, fr, _ in ev] + [0.5])
+    free = ~sat & ~res['failed'][i][:, None]
+    a_margin = float(np.min(np.abs(a_lim - np.abs(a[free])))) if free.any() else 0.0
+    return dict(events=[(int(t), int(k)) for t, _, k in ev], n_td=int(sum(k for _, _, k in ev)),
+                fell=bool(res['failed_end'][i]), sat=sat, t_margin=float(t_margin), a_margin=a_margin)
+
+
+def same_cell(s0, s1):
+    """(topological: same event types in the same order and no fall; piece: also every event in the same control
+    period and the same clip pattern)."""
+    # events are compared on their common prefix: a hop that moves past the trial's end (the hop period changed) is
+    # the horizon truncating the trial, not a change of the dynamics' mode sequence
+    n = min(len(s0['events']), len(s1['events']))
+    t0, t1 = [k for _, k in s0['events'][:n]], [k for _, k in s1['events'][:n]]
+    topo = t0 == t1 and s0['fell'] == s1['fell'] and abs(len(s0['events']) - len(s1['events'])) <= 2
+    piece = topo and s0['events'][:n] == s1['events'][:n] and bool(np.array_equal(s0['sat'], s1['sat']))
+    return topo, piece
 
 
 def start_states(goals, pert, rs):

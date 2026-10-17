@@ -219,3 +219,47 @@ Success over the 6 robots, test goals (± about 6 points at n = 192).
 - **Coverage suite:**
   `POGO_STATE=scheduler_axes POGO_CPU_JOBS=8 nohup python scheduler.py --jobs scheduler_axes &`
 - **Table and figures:** `python table.py > results_table.txt; python figures.py`
+
+## Overnight 2026-10-13: fixing the sim stage, ours + DR vs PPO+DR (v3 arms in runs/hw/v3/)
+
+**What was wrong with our DR sim stage, and the fixes (each confirmed in sim on in-family conditions first)**
+1. **Drift without a check.** A regression onto model-predicted corrections can drift where the prediction is poor
+   (the speed loop through the touchdown angle). Fix: the measured-cost check, `sim_train --accept`.
+   - `--accept 1` (reject and halve) stalls on unlucky seeds.
+   - `--accept 2` is a backtracking line search on the measured cost along the regression direction (Abbeel et al.'s
+     line search, in sim). It fixed the stalls: all 3 seeds learn the heavy and soft sticks in sim.
+2. **A late drift remained** at about iterations 40–50, whatever the learning-rate schedule (constant, low, no anchor:
+   all drift).
+   - Cause, confirmed: the sensitivity uses the network's OWN feedback, so the Jacobian co-evolves with the gains it
+     shapes (the same loop that broke the VG critic on the quadruped).
+   - A fixed (Raibert) feedback in the Jacobian removes the drift but learns less (DR success 22–28 %).
+   - Fix: a lagged feedback, the snapshot refreshed every 20 iterations (`--fbk-refresh 20`). No drift through 80–120
+     iterations; DR success 56–59 % in sim. Every 10 iterations still drifts.
+3. **Stopping rule.** It now uses the mean normalized task error under DR draws (128 lanes) and over 20 s, instead of
+   the thresholded success rate over 32 lanes (`sim_validate.py`; sim-only).
+
+**Real sticks, test goals, 6 robots**
+
+| | zero-shot | +24 trials | +48 trials |
+|---|---|---|---|
+| ours + DR, v2 (drB_s0, no fixes) | 52 % | 63 % | 65 % |
+| ours + DR, line search, 3 seeds | 51 / 64 / 53 % | 84 / 90 / 85 % | |
+| ours + DR, line search + lagged feedback, s0 / s1 / s2 / s0 120 it | 67 / 59 / 56 / 66 % | 89 / 91 / 69 / 87 % | 90 / 93 % (s0 / s1) |
+| PPO+DR, 3 seeds | 77 / 79 / 65 % (mean 74) | with OUR stage: 94 / 99.5 / 100 % (mean 98) | 91 % (s0) |
+| PPO on the robots (from PPO+DR s0, privileged critic) | 77 % | 79 % | 79 % at 96, 100 % at 384 |
+
+**Reading.**
+- Ours + DR (about 50 sim hours) beats PPO+DR zero-shot (74 %) with 24 real trials (84 % mean of 4 runs). It also
+  beats PPO+DR fine-tuned by PPO on the robots at equal real budget (79 % at 24–96 trials).
+- It does NOT beat PPO+DR's network followed by our hardware stage (98 %). PPO's 427 sim hours give a better warm start
+  (74 vs 62 % zero-shot, and more consistent across seeds). Inside the DR family after the stage, ours is level or
+  better (96–97 % vs 91–100 %); the gap is the leg-offset robot, where both sit at the 0.1 m/s speed threshold.
+
+**Mode cells** (`real_pogo.signature`; `hw_stage --mode-accept`; distilc_theory.tex "Mode cells"):
+- the pogo hardware stage never changes its mode cell (0 % topological changes, events compared on their common prefix);
+- events cross 10 ms period boundaries in 96–98 % of trial pairs (kinks: the piecewise-differentiable regime).
+
+**GPS-style fitted local dynamics** (`hw_stage --fit-samples`, runs/hw/gps/): 0–9 % at up to 192 trials per robot with
+data-dominated fits (positivity cos 0.15–0.21), 56–60 % with a strong nominal prior, vs ours 80 / 87 % at 24 / 48.
+- 4x lanes (1024 per iteration, 250 sim hours, `drBlsLK20x4_s{0,1}`): 61 / 68 % zero-shot, 82 / 88 % after 24 trials.
+  No better than 256 lanes: more simulation alone does not close the gap to PPO+DR's warm start.

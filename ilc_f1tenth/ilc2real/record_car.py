@@ -35,6 +35,8 @@ def save(path, recs, plans):
     T = max(len(r['x_true']) for _, r in recs)
     n = len(recs)
     x = np.full((n, T, 6), np.nan, np.float32)
+    x9 = np.full((n, T, 9), np.nan, np.float32)      # the full true planar state (+ wheel speed, current, steering)
+    app = np.zeros((n, T, 2), np.float32)            # the applied (delayed / offset) commands: steering, current
     idx = np.zeros((n, T), np.int32)
     act = np.zeros((n, T, 2), np.float32)
     ns = np.zeros(n, np.int32)
@@ -43,6 +45,8 @@ def save(path, recs, plans):
         L = len(r['x_true'])
         ns[k] = L
         x[k, :L] = np.asarray(r['x_true'])[:, :6]
+        x9[k, :L] = np.asarray(r['x_true'])[:, :9]
+        app[k, :L] = np.asarray(r['applied'])[:L]
         x[k, L:] = x[k, L - 1]
         idx[k, :L] = r['idx']
         idx[k, L:] = r['idx'][-1]
@@ -56,7 +60,7 @@ def save(path, recs, plans):
         geo[f'plan__{name}__beta'] = np.degrees(np.arctan2(p['z'][:, 3], p['z'][:, 2])).astype(np.float32)
         geo[f'plan__{name}__lap_time'] = np.float32(p['lap_time'])
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    np.savez_compressed(path, x=x, idx=idx, a=act, n_steps=ns, dt=np.float32(rc.DT), meta=np.array(json.dumps(meta)), **geo)
+    np.savez_compressed(path, x=x, x9=x9, applied=app, idx=idx, a=act, n_steps=ns, dt=np.float32(rc.DT), meta=np.array(json.dumps(meta)), **geo)
     json.dump(dict(file=os.path.basename(path), n=n, T=int(T), dt=rc.DT, plans=list(by),
                    env={k: os.environ.get(k) for k in ('F1T_MU', 'F1T_PLANS', 'F1T_TRACKS', 'F1T_SAFETY_EY')},
                    runs=meta), open(os.path.splitext(path)[0] + '.json', 'w'), indent=1)

@@ -227,7 +227,15 @@ Ideas we implemented, measured and dropped; the final recipe uses none of them. 
 they support -- together they back the claim that the nominal model's Jacobians plus the measured outcome are enough,
 and that learning a critic, the feedback structure or the sensitivity from data does not help.
 
-- [memory] **Gurumurthy et al.** -- VG-SAC / value-gradient regularization (find the exact paper). The critic we started
+- [READ pp. 1-9] **Gurumurthy, Kolter & Manchester**, "Deep Off-Policy Iterative Learning Control", L4DC 2023, PMLR 211;
+  code github.com/RoboticExplorationLab/Deep-ILC. https://proceedings.mlr.press/v211/gurumurthy23b/gurumurthy23b.pdf
+  VG-SAC: a value-gradient loss (the Bellman residual's gradient through APPROXIMATE simulator Jacobians evaluated
+  along real rollouts, "just like ILC") added to SAC; 2-3x sample efficiency on cartpole, acrobot, quadrotor, airplane,
+  dflex HalfCheetah / Hopper; nominal = simplified / perturbed model. ASSUMPTIONS (relevant to our theory): the
+  simulator and reward are "assumed differentiable in most regions of the state action space"; non-smooth / contact
+  dynamics are handled "by simply skipping or clipping the gradient updates on transitions with such discontinuities"
+  and by hinge losses on the value-gradient terms (ill-conditioned Jacobians); no mode identification, no convergence
+  theorem. The critic we started
   from. Audit against exact closed-loop gradients on the GPU sim: its target (next action held fixed) is the OPEN-loop
   gradient, uncorrelated with the closed-loop truth for a feedback policy (r = 0.00); teaching it closed-loop co-states
   diverges (the co-states depend on the actor's gains, which follow the critic). Replaced by regressing onto the ILC's
@@ -248,6 +256,45 @@ and that learning a critic, the feedback structure or the sensitivity from data 
   estimating model parameters. No arm beat the plain model sensitivity (33-34 % vs 33-35 % at 24 jumps); every
   estimated sensitivity predicted the next landing change poorly (cos 0.31-0.47), since one jump's trial noise is
   about one step's effect. (Abbeel et al.'s corrected-model direction, Section 3, was tested the same way: a tie.)
+
+## 6b. Hybrid dynamics, discontinuities and mode cells (for the theory: src/paper/theory)
+
+How the field treats the non-smoothness our convergence analysis has to assume away (distilc_theory.tex, Section
+"Mode cells"; continuity_assumptions.md).
+
+- [web] **Burden, Sastry, Koditschek & Revzen**, "Event-Selected Vector Field Discontinuities Yield Piecewise-
+  Differentiable Flows", SIAM J. Applied Dynamical Systems 15(2):1227-1267, 2016; arXiv 1407.1775.
+  https://arxiv.org/abs/1407.1775 -- discontinuities confined to finitely many smooth surfaces, the field transverse to
+  them -> a Lipschitz, PIECEWISE-DIFFERENTIABLE flow with a continuous piecewise-linear (Bouligand) derivative; excludes
+  sliding modes / branching. THE reference for our semismooth restatement (kinks, not jumps, within a mode cell).
+  Follow-up computing the B-derivative: Council, Revzen & Burden, ASME JCND 2022 (verify).
+- [web] **Kong, Council & Johnson**, "iLQR for Piecewise-Smooth Hybrid Dynamical Systems", IEEE CDC 2021; arXiv
+  2103.14584. https://arxiv.org/abs/2103.14584 -- mode changes in the forward pass, the SALTATION matrix in the backward
+  pass, a reference extension for mode mismatch; "the optimal sequence and timing of these modes are typically not known
+  ahead of time". Our straight-through touchdown terms (pogo) are a crude saltation.
+- [web] **Suh, Simchowitz, Zhang & Tedrake**, "Do Differentiable Simulators Give Better Policy Gradients?", ICML 2022,
+  PMLR 162. https://arxiv.org/abs/2202.00817 -- stiffness / discontinuities BIAS first-order gradient estimates; the
+  alpha-order estimator mixes first and zeroth order. Directly relevant: our model-derivative steps across a mode
+  boundary are the biased case; RL's zeroth-order estimates = randomized smoothing.
+- [web] **Pang, Suh, Yang & Tedrake**, "Global Planning for Contact-Rich Manipulation via Local Smoothing of
+  Quasi-dynamic Contact Models", IEEE T-RO 2023; arXiv 2206.10787. https://arxiv.org/abs/2206.10787 -- stochastic
+  (RL) and analytic smoothing equivalent on simple systems; plan through smoothed contact modes.
+- [web, bibliography only] **Saccon, van de Wouw & Nijmeijer**, "Sensitivity analysis of hybrid systems with state jumps
+  with application to trajectory tracking", IEEE CDC 2014; arXiv 1406.2811. https://arxiv.org/abs/1406.2811
+- [web, bibliography only -- verify] **Rijnen, Saccon & Nijmeijer**, "Reference Spreading: Tracking Performance for
+  Impact Trajectories of a 1DoF Setup", IEEE TCST 28(3):1124-1131, 2020 -- ante- and post-impact references overlapping
+  around the nominal impact time, so the tracking error stays meaningful when the impact moves (the analogue of our
+  car's arc-length-indexed errors; what a pogo / quadruped error should do). Later: van Steen, van de Wouw & Saccon,
+  time-invariant reference spreading (arXiv 2206.04852, 2411.09870).
+- [web] **Levine & Abbeel**, "Learning Neural Network Policies with Guided Policy Search under Unknown Dynamics",
+  NeurIPS 2014. https://papers.nips.cc/paper_files/paper/2014/hash/6766aa2750c19aad2fa1b32f36ed4aee-Abstract.html --
+  time-varying linear-Gaussian dynamics fitted per iteration, a GMM prior ("soft piecewise-linear dynamics") and a KL
+  trust region to keep the local fit valid; "numerous contact discontinuities". Mode locality by step size, not
+  identified. Our fitted-dynamics arm (src/ilc_pogo runs/hw/gps): 0-9 % at <= 192 trials vs ours 80-87 % at 24-48.
+- [memory -- verify] **Westervelt, Grizzle, Chevallereau, Choi & Morris**, "Feedback Control of Dynamic Bipedal Robot
+  Locomotion", CRC Press 2007 -- hybrid zero dynamics: the mode sequence is fixed by design and stabilized.
+- [memory -- verify] **Todorov**, "Convex and analytically-invertible dynamics with contacts and constraints: theory and
+  implementation in MuJoCo", ICRA 2014 -- soft contact: smooth by construction (our quadruped's Jacobian source).
 
 ## 7. The car platform
 

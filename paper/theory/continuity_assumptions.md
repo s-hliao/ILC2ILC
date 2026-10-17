@@ -96,10 +96,14 @@ Ratings:
   - Fiala tire force is C¹ but not C² at the sliding limit.
   - The wheel-speed clamp `max(ω, 0)` and the open-differential / multi-body structure of the real cars add kinks
     only at rare states.
-- **Drift is the delicate regime for positivity, not for continuity.**
-  - The plans run at tire saturation, where the sensitivity of path error to steering is small and its sign depends
-    on the regime (grip vs slide, countersteer).
-  - That is where positivity is weakest: measured 64–80 %; the low-friction car needed the reference ladder.
+- **Drift: deep in full slide, not at the limit (corrected after measuring).**
+  - Measured on two 24-lap arms: both axles slide 78–86 % of the time, and only 5–7 % of periods are within 10 % of the
+    Fiala sliding limit. The tires sit well past the limit, where the lateral force is saturated at μF_z and its
+    derivative with respect to slip angle is zero. Steering then acts through the force *direction* and the yaw moment,
+    not through a slip-angle gain.
+  - An earlier version of this note said the drift runs "at the limit, margin ≈ 0". That was wrong. The fragile point
+    is the saturated sensitivity, not proximity to a boundary.
+  - Positivity is weakest there: measured 64–80 %, and the low-friction car needed the reference ladder.
 - **Error map (≈).**
   - Rows are time-indexed but measured against the plan at the car's own arc-length projection
     (`sim_jax.path_coords`, `project`), so they are self-aligned in phase.
@@ -119,7 +123,26 @@ Ratings:
   - There is no continuity across tracks; cross-track transfer, if any, is generalization, not the proposition.
   - The reference ladder (`_mu80`, `_mu60` rungs) is a discrete outer loop entirely outside the theory.
 
-## 5. What to change in the proof (all three domains)
+## 5. Measured mode crossings (2026-10-13; distilc_theory.tex, "How often do our domains cross?")
+
+Consecutive trials of a robot at the same goal, compared on their mode signatures:
+- **Topological change:** the event-type sequence, compared on the common prefix so that an event leaving the trial
+  window does not count, plus the fall flag.
+- **Piece change:** also every event's control period and the actuator-clip pattern.
+
+| domain | topological change | piece change | notes |
+|---|---|---|---|
+| pogo | **0 %** (nominal, DR; 108 pairs each) | 96–98 % | median event margin 1–3 % of a 10 ms period. With a whole-sequence comparison, 27 % (nominal) looked like crossings; all of it was hops leaving the 3-s window. Mode-consistent acceptance with that naive definition took the nominal arm from 80 % to 0 %; with the prefix definition it never fires. |
+| quadruped | push-off 61–65 %, landing 47–57 %, fall flips 7–11 % | 94–98 % | from the saved jumps (`src/ilc_mjx/scripts/mode_signatures.py`; contacts debounced at 3 ticks). 80–88 % of jumps touch down before the landing sample N. Torque saturation in 11 % of push-off samples. |
+| car | tire regimes 53 % | 100 % (actuator clips) | from re-flown, recorded arms (`src/ilc_f1tenth/ilc2real/mode_signatures.py`). Steering at ±0.34 rad 51 % of the time, toggling ~46× per 2-lap trial. Axles slide 78–86 % of the time. |
+
+**Reading.**
+- The pogo stick is inside the theory: one mode cell, piecewise-smooth kinks.
+- The quadruped and the car cross cells in about half of their iterations. There, convergence rests on positivity of
+  the Jacobian actually used (finite differences through soft contact; saturated tire forces), outside the local
+  analysis.
+
+## 6. What to change in the proof (all three domains)
 
 1. **Restate Assumption A as piecewise C¹ / semismooth.**
    - Finitely many C¹ pieces (one per mode sequence and saturation pattern), with Clarke generalized Jacobians.

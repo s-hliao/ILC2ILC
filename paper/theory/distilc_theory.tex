@@ -475,6 +475,134 @@ This is a guarantee on the evaluated lanes only (a fresh batch each iteration), 
 drift in the pogo study (speed error $0.04$--$0.10$ m/s at iteration 60 against $0.7$ m/s without it).
 
 %=====================================================================================================================
+\section{Mode cells: certifying and enforcing Assumption~\ref{as:smooth}(b)}\label{sec:modes}
+Assumption~\ref{as:smooth}(b) asks the iterates to stay where the trial map is $C^1$. For hybrid systems with
+transversal, event-selected discontinuities the flow is \emph{piecewise} differentiable, with a continuous
+piecewise-linear Bouligand derivative \cite{burden2016pwd}: kinks, not jumps. The map from parameters to
+\emph{sampled} trajectories and errors has two kinds of non-smoothness, which we separate.
+
+\begin{definition}[Mode signature and mode cells]\label{def:sigma}
+For a trial of $(\theta,g)$ let the \emph{mode signature} $\sigma(\theta)$ be the ordered list of events (guard
+crossings: touchdown, lift-off, slip onset, a tire entering or leaving the sliding regime), each with its type and the
+control period in which it occurs, together with the actuator-saturation pattern (the periods and channels at a clip)
+and the fall flag. Its \emph{topological part} $\sigma^{\rm top}$ keeps only the ordered types and the fall flag.
+The \emph{piece} of $\theta$ is $P_\sigma=\{\theta':\sigma(\theta')=\sigma(\theta)\}$ and its \emph{mode cell} is
+$C_\sigma=\{\theta':\sigma^{\rm top}(\theta')=\sigma^{\rm top}(\theta)\}\supseteq P_\sigma$.
+\end{definition}
+Within a piece the sampled trial map is $C^1$ (Assumption~\ref{as:smooth}(b),(c) hold piecewise). Crossing between
+pieces of one cell (an event moving into the neighbouring control period, an action reaching its clip) is a kink; the
+analysis of Section~\ref{sec:conv} extends to it if positivity holds for every limiting Jacobian of the adjacent pieces
+(the Clarke generalized Jacobian), as in semismooth Newton methods. Crossing between cells (an event appears or
+disappears, a fall) is in general a jump of the error and lies outside every first-order argument.
+
+\begin{lemma}[Margin certificate]\label{lem:margin}
+Let $\theta\in P_\sigma$. Suppose that on the closure of $P_\sigma$ (i) each event time $\tau_i(\theta')$ is Lipschitz with
+constant $L_\tau$ (by the implicit function theorem, $L_\tau\le\sup\n{\nabla h_i}\n{\partial_\theta x}/|\dot h_i|$
+under transversality), and (ii) every \emph{inactive} guard value $\gamma_j(\theta')$ (a guard function along the
+trajectory where it does not cross, e.g.\ foot clearance during flight, leg force during stance, the distance of an
+action to its clip, a tire's distance to the sliding limit) is Lipschitz with constant $L_\gamma$. Define the margins
+\[m_\tau(\theta):=\min_i\operatorname{dist}\big(\tau_i(\theta),\{0,\Delta t,2\Delta t,\dots,T\Delta t\}\big),\qquad
+m_\gamma(\theta):=\min_j|\gamma_j(\theta)|.\]
+Then the ball $B\big(\theta,r(\theta)\big)$, $r(\theta):=\min\{m_\tau/L_\tau,\ m_\gamma/L_\gamma\}$, is contained in
+$P_\sigma$.
+\end{lemma}
+\begin{proof}
+Let $\theta'\in B(\theta,r)$ and suppose $\theta'\notin P_\sigma$. On the segment from $\theta$ to $\theta'$ let
+$\theta^\star$ be the first point not in $P_\sigma$ (it exists: $P_\sigma$ is relatively open along the segment by
+continuity of the event times and guard values, and its complement is closed). At $\theta^\star$ the signature changes,
+so either an event time reaches a control-period boundary, which needs $|\tau_i(\theta^\star)-\tau_i(\theta)|\ge
+m_\tau$, hence $\n{\theta^\star-\theta}\ge m_\tau/L_\tau\ge r$; or an inactive guard reaches zero (an event appears,
+a clip activates), which needs $|\gamma_j(\theta^\star)-\gamma_j(\theta)|\ge m_\gamma$, hence $\n{\theta^\star-\theta}\ge
+m_\gamma/L_\gamma\ge r$; or an event disappears, which happens only through its guard becoming inactive, i.e.\ through
+an event time leaving the horizon (the first case, with the boundaries $0$ and $T\Delta t$) or a transversality loss,
+excluded by (i). Every case contradicts $\n{\theta^\star-\theta}<r$. The Lipschitz bounds apply on the segment up to
+$\theta^\star$, which lies in the closure of $P_\sigma$.
+\end{proof}
+
+\begin{corollary}[Certified steps]\label{cor:certified}
+If every update satisfies $\n{\theta_{k+1}-\theta_k}<r(\theta_k)$, all iterates lie in one piece, where
+Theorem~\ref{thm:local} applies with $\cN=P_\sigma$ (if its other hypotheses hold there).
+\end{corollary}
+The certificate needs $L_\tau$ and $L_\gamma$ \emph{of the real system}, which are unknown. They can be estimated from
+consecutive trial pairs (measured change of event times and guard values per parameter change), or bounded from the
+nominal model and an assumed mismatch. Either way the certificate has the same epistemic status as positivity: an
+assumption checkable from data, not a guarantee from the model.
+
+\begin{proposition}[Mode-consistent acceptance]\label{prop:modeaccept}
+Suppose the algorithm keeps an update only if the next trial's topological signature equals that of the last kept trial
+at every flown goal (and rolls back otherwise). Then every kept iterate lies in the mode cell of the first one.
+Theorem~\ref{thm:local}, with the semismooth extension above, applies to the kept sequence if (a) a zero of the real
+error exists in the interior of that cell, (b) positivity holds for all limiting Jacobians in the cell, and (c) the steps
+can be shrunk until accepted (the rollback's halving).
+\end{proposition}
+\begin{proof}
+The cell is defined by a measured quantity; the acceptance rule makes the kept sequence remain in it by construction.
+Within the cell the trial map is piecewise $C^1$ with finitely many pieces (finitely many event-to-period assignments
+and clip patterns), continuous across pieces \cite{burden2016pwd}; the contraction argument of Theorem~\ref{thm:local}
+holds with any element of the generalized Jacobian under (b). Halving the step makes it eventually smaller than the
+certified radius of Lemma~\ref{lem:margin}, so (c) holds whenever the current iterate is in the cell's interior.
+\end{proof}
+What remains an assumption is (a): that the solution lies inside the cell and can be reached without crossing.
+Nothing local certifies it in advance; after convergence the margins at the limit can be checked.
+
+\paragraph{How often do our domains cross?} Measured on the hardware stages from the mode signatures (consecutive
+trials of a robot at the same goal; events compared on their common prefix, so that an event moving past the end of the
+trial window is not counted as a mode change):
+\begin{center}
+\begin{tabular}{@{}p{0.2\textwidth}p{0.36\textwidth}p{0.36\textwidth}@{}}
+\toprule
+domain & topological change (cell) & piece change (kink) and margins\\
+\midrule
+pogo stick & \textbf{0\%} (nominal and DR networks, 108 pairs each); mode-consistent acceptance never fires and costs
+nothing & 96--98\%: an event moves to the neighbouring 10 ms period almost every iteration (median event margin 1--3\% of a
+period)\\
+quadruped & push-off 61--65\% (stance-foot contact flicker $\ge6$\,ms), landing 47--57\% (bounces), fall outcome 7--11\%;
+80--88\% of jumps touch down before the landing sample $N$ & 94--98\%; torque saturation in 11\% of push-off samples\\
+car & tire regimes (front/rear axle sliding) 53\% (a slide appears or vanishes in a corner); no crashes in the
+recorded arms & 100\% with actuator clips: the steering is at $\pm0.34$\,rad 51\% of the time and toggles $\sim$46 times per
+2-lap trial; the axles slide 78--86\% of the time, only 5--7\% of periods within 10\% of the sliding limit\\
+\bottomrule
+\end{tabular}
+\end{center}
+So the three domains sit at different places relative to the theory. The pogo stick's hardware stage stays in one mode
+cell and crosses kinks constantly, exactly the piecewise-differentiable regime of this section. The car and the
+quadruped cross cells in about half of their iterations, and their convergence rests on positivity holding for the
+averaged or saturated Jacobians actually used (finite differences through soft contact; Fiala forces in full slide,
+whose lateral sensitivity to slip angle is zero), not on the local analysis. This is a statement about the scope of the
+theory, made with measured numbers, not a claim that the theory covers them.
+
+\paragraph{How other work handles discontinuities.}
+\begin{itemize}[leftmargin=1.5em]
+\item \emph{Assume differentiability almost everywhere, treat discontinuities heuristically.} Deep off-policy ILC
+  \cite{gurumurthy2023deepilc}, the closest relative of DistILC, assumes the simulator and reward ``differentiable in
+  most regions'' and handles non-smooth dynamics by skipping or clipping the gradient update on such transitions and by
+  hinge losses on the value-gradient terms; there is no mode identification and no convergence statement.
+\item \emph{Fix the mode sequence by design}: hybrid zero dynamics \cite{westervelt2007feedback} plans the contact
+  sequence and stabilizes the motion along it; early or late impacts are disturbances. Our quadruped's prescribed
+  push-off schedule is of this kind.
+\item \emph{Model the jump}: saltation matrices give the first-order effect of an event
+  \cite{burden2016pwd,kong2021hilqr}; hybrid iLQR adds a reference extension for mode mismatch \cite{kong2021hilqr};
+  sensitivity analysis of trajectories with state-triggered jumps and \emph{reference spreading} (overlapping ante- and
+  post-impact references) keep tracking errors meaningful when impact times shift
+  \cite{saccon2014sensitivity,rijnen2020reference}. Our straight-through saltation terms (pogo stick) are a crude
+  instance; the arc-length-indexed errors of the car are the analogue of time reparameterization.
+\item \emph{Smooth the contact}: first-order gradients are biased near discontinuities, and zeroth-order (RL-style)
+  estimators amount to randomized smoothing \cite{suh2022pg}; stochastic and analytic smoothing are equivalent on simple
+  systems and enable planning through contact \cite{pang2023global}; soft-contact simulators (MuJoCo) are smooth by
+  construction \cite{todorov2014convex}. Our quadruped's finite-difference Jacobians through soft contact are an implicit
+  smoothing of this kind.
+\item \emph{Fit local models that span modes}: GPS under unknown dynamics fits time-varying linear-Gaussian dynamics
+  with a Gaussian-mixture prior (soft piecewise-linear dynamics) and bounds each update by a KL trust region so that the
+  local fit stays valid \cite{levine2014unknown}: mode locality enforced through the step size, not identified. In the
+  pogo study, fitting local dynamics from real samples that straddle different event timings gives Jacobians with median
+  positivity cosine $0.15$--$0.21$ and $0$--$9\%$ success at up to 192 trials per robot, against $0.9$ and $80$--$87\%$ for the
+  nominal model's derivative at 24--48 trials.
+\end{itemize}
+None of these certifies, during learning on the real system, that the iterates stay in one mode cell;
+Lemma~\ref{lem:margin} and Proposition~\ref{prop:modeaccept} make that a measured and enforced condition, at the price of
+an estimated Lipschitz constant and of stalling, rather than converging, when the solution lies across a boundary.
+
+%=====================================================================================================================
 \section{Domain randomization, for comparison}
 Let $\xi\sim\nu$ index the randomized family and $L(\theta;\xi)$ the task loss. DR's SGD converges (under the usual
 conditions) to stationary points of $\bar L(\theta)=\E_\nu L(\theta;\xi)$. If reality is $\xi^\star$, the real loss at
@@ -561,10 +689,10 @@ flown goal; same mode-sequence cell.\\
 \end{tabular}
 \end{center}
 
-\begin{thebibliography}{9}
+\begin{thebibliography}{99}
 \bibitem{levine2013gps} S.~Levine and V.~Koltun. Guided policy search. ICML, 2013.
 \bibitem{levine2014unknown} S.~Levine and P.~Abbeel. Learning neural network policies with guided policy search under
-unknown dynamics. NeurIPS, 2014. [verify]
+unknown dynamics. NeurIPS, 2014.
 \bibitem{montgomery2016mdgps} W.~Montgomery and S.~Levine. Guided policy search via approximate mirror descent.
 NeurIPS, 2016. [verify]
 \bibitem{abbeel2006inaccurate} P.~Abbeel, M.~Quigley and A.~Y.~Ng. Using inaccurate models in reinforcement learning.
@@ -573,5 +701,23 @@ ICML, 2006.
 some applications. Optimizing Methods in Statistics, 1971.
 \bibitem{kushner} H.~J.~Kushner and G.~G.~Yin. Stochastic Approximation and Recursive Algorithms and Applications.
 Springer, 2003.
+\bibitem{gurumurthy2023deepilc} S.~Gurumurthy, J.~Z.~Kolter and Z.~Manchester. Deep off-policy iterative learning
+control. Learning for Dynamics and Control (L4DC), PMLR 211, 2023.
+\bibitem{burden2016pwd} S.~A.~Burden, S.~S.~Sastry, D.~E.~Koditschek and S.~Revzen. Event-selected vector field
+discontinuities yield piecewise-differentiable flows. SIAM J.\ Applied Dynamical Systems 15(2):1227--1267, 2016.
+\bibitem{kong2021hilqr} N.~J.~Kong, G.~Council and A.~M.~Johnson. iLQR for piecewise-smooth hybrid dynamical systems.
+IEEE CDC, 2021 (arXiv 2103.14584).
+\bibitem{suh2022pg} H.~J.~T.~Suh, M.~Simchowitz, K.~Zhang and R.~Tedrake. Do differentiable simulators give better policy
+gradients? ICML, PMLR 162, 2022.
+\bibitem{pang2023global} T.~Pang, H.~J.~T.~Suh, L.~Yang and R.~Tedrake. Global planning for contact-rich manipulation via
+local smoothing of quasi-dynamic contact models. IEEE Trans.\ Robotics, 2023.
+\bibitem{saccon2014sensitivity} A.~Saccon, N.~van de Wouw and H.~Nijmeijer. Sensitivity analysis of hybrid systems with
+state jumps with application to trajectory tracking. IEEE CDC, 2014.
+\bibitem{rijnen2020reference} M.~Rijnen, A.~Saccon and H.~Nijmeijer. Reference spreading: tracking performance for
+impact trajectories of a 1DoF setup. IEEE Trans.\ Control Systems Technology 28(3):1124--1131, 2020. [verify]
+\bibitem{westervelt2007feedback} E.~R.~Westervelt, J.~W.~Grizzle, C.~Chevallereau, J.~H.~Choi and B.~Morris. Feedback
+Control of Dynamic Bipedal Robot Locomotion. CRC Press, 2007. [verify]
+\bibitem{todorov2014convex} E.~Todorov. Convex and analytically-invertible dynamics with contacts and constraints:
+theory and implementation in MuJoCo. IEEE ICRA, 2014. [verify]
 \end{thebibliography}
 \end{document}

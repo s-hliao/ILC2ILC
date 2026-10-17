@@ -1,51 +1,18 @@
-E1013 05:38:56.242088 3222735 platform_util.cc:250] Failed to create stream executor for device CUDA:0: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
-Traceback (most recent call last):
-  File "/home/henry/miniconda3/envs/pogo/lib/python3.12/site-packages/jax/_src/xla_bridge.py", line 824, in backends
-    backend = _init_backend(platform)
-              ^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/henry/miniconda3/envs/pogo/lib/python3.12/site-packages/jax/_src/xla_bridge.py", line 908, in _init_backend
-    backend = registration.factory()
-              ^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/henry/miniconda3/envs/pogo/lib/python3.12/site-packages/jax/_src/xla_bridge.py", line 553, in make_pjrt_c_api_client
-    return xla_client.make_c_api_client(plugin_name, updated_options, None)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/henry/miniconda3/envs/pogo/lib/python3.12/site-packages/jaxlib/xla_client.py", line 161, in make_c_api_client
-    return _xla.get_c_api_client(
-           ^^^^^^^^^^^^^^^^^^^^^^
-jax.errors.JaxRuntimeError: INTERNAL: no supported devices found for platform CUDA
-
-During handling of the above exception, another exception occurred:
-
-Traceback (most recent call last):
-  File "/home/henry/ilc_ws/src/ilc_pogo/hw_stage.py", line 311, in <module>
-    main()
-  File "/home/henry/ilc_ws/src/ilc_pogo/hw_stage.py", line 179, in main
-    jb = [(jnp.array(W), jnp.array(b)) for W, b in base.params]
-           ^^^^^^^^^^^^
-  File "/home/henry/miniconda3/envs/pogo/lib/python3.12/site-packages/jax/_src/numpy/array_constructors.py", line 286, in array
-    out_array: Array = lax._convert_element_type(
-                       ^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/henry/miniconda3/envs/pogo/lib/python3.12/site-packages/jax/_src/lax/lax.py", line 1689, in _convert_element_type
-    return convert_element_type_p.bind(
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/henry/miniconda3/envs/pogo/lib/python3.12/site-packages/jax/_src/core.py", line 632, in bind
-    return self._true_bind(*args, **params)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/henry/miniconda3/envs/pogo/lib/python3.12/site-packages/jax/_src/core.py", line 648, in _true_bind
-    return self.bind_with_trace(prev_trace, args, params)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/henry/miniconda3/envs/pogo/lib/python3.12/site-packages/jax/_src/lax/lax.py", line 5012, in _convert_element_type_bind_with_trace
-    operand = core.Primitive.bind_with_trace(convert_element_type_p, trace, args, params)
-              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/henry/miniconda3/envs/pogo/lib/python3.12/site-packages/jax/_src/core.py", line 660, in bind_with_trace
-    return trace.process_primitive(self, args, params)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/henry/miniconda3/envs/pogo/lib/python3.12/site-packages/jax/_src/core.py", line 1205, in process_primitive
-    return primitive.impl(*args, **params)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/henry/miniconda3/envs/pogo/lib/python3.12/site-packages/jax/_src/dispatch.py", line 91, in apply_primitive
-    outs = fun(*args)
-           ^^^^^^^^^^
-RuntimeError: Unable to initialize backend 'cuda': INTERNAL: no supported devices found for platform CUDA (you may need to uninstall the failing plugin package, or set JAX_PLATFORMS=cpu to skip this backend.)
---------------------
-For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
+{"it": 0, "robot": "real_nom", "J": 1.023, "falls": 0, "loss": 0.0025768487248569727, "cos": [], "t": 99.1}
+{"it": 0, "robot": "real_mass", "J": 1.828, "falls": 0, "loss": 0.0011646350612863898, "cos": [], "t": 118.8}
+{"it": 0, "robot": "real_spring", "J": 2.501, "falls": 0, "loss": 0.002498860936611891, "cos": [], "t": 145.9}
+{"it": 0, "robot": "real_act", "J": 1.658, "falls": 0, "loss": 0.002833329839631915, "cos": [], "t": 167.3}
+{"it": 0, "robot": "real_offset", "J": 3.797, "falls": 0, "loss": 0.0019040690967813134, "cos": [], "t": 184.9}
+{"it": 0, "robot": "real_prog", "J": 0.808, "falls": 0, "loss": 0.0018959389999508858, "cos": [], "t": 208.5}
+{"it": 1, "robot": "real_nom", "J": 0.443, "falls": 0, "loss": 0.0010665697045624256, "cos": [0.97, 0.94, 0.68, 0.69, 0.16, 0.87], "t": 254.5}
+{"it": 1, "robot": "real_mass", "J": 1.66, "falls": 0, "loss": 0.0019890915136784315, "cos": [0.57, 0.58, 0.14, 0.19, 0.02, -0.08], "t": 272.5}
+{"it": 1, "robot": "real_spring", "J": 1.913, "falls": 0, "loss": 0.0024218300823122263, "cos": [0.76, 0.73, 0.36, 0.16, 0.5, 0.41], "t": 292.8}
+{"it": 1, "robot": "real_act", "J": 1.287, "falls": 0, "loss": 0.0011719076428562403, "cos": [0.97, 0.63, 0.23, 0.25, -0.06, 0.57], "t": 314.9}
+{"it": 1, "robot": "real_offset", "J": 2.742, "falls": 0, "loss": 0.0016499535413458943, "cos": [0.95, 0.6, 0.51, 0.64, 0.13, 0.39], "t": 333.9}
+{"it": 1, "robot": "real_prog", "J": 0.454, "falls": 0, "loss": 0.0011404710821807384, "cos": [0.79, 0.55, 0.82, 0.81, 0.57, 0.53], "t": 358.0}
+real_nom {"success": 0.375, "rms_apex": 0.025929395220409265, "v_err": 0.041010314607724016, "pos_frac": 1.0, "cos_med": 0.78}
+real_mass {"success": 0.0, "rms_apex": 0.045921022604781196, "v_err": 0.09704488731845387, "pos_frac": 0.83, "cos_med": 0.17}
+real_spring {"success": 0.0, "rms_apex": 0.050881878619647034, "v_err": 0.08499249191578605, "pos_frac": 1.0, "cos_med": 0.45}
+real_act {"success": 0.125, "rms_apex": 0.045751007008556034, "v_err": 0.02583027915189845, "pos_frac": 0.83, "cos_med": 0.41}
+real_offset {"success": 0.125, "rms_apex": 0.031436283227084014, "v_err": 0.20386165685329202, "pos_frac": 1.0, "cos_med": 0.55}
+real_prog {"success": 0.5, "rms_apex": 0.018113273507060254, "v_err": 0.03673684481708403, "pos_frac": 1.0, "cos_med": 0.68}

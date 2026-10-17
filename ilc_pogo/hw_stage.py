@@ -63,6 +63,9 @@ ap.add_argument('--fit-samples', type=int, default=0, help='GPS-style fitted loc
                 'as a real trial. 0 / 1: off (ours)')
 ap.add_argument('--fit-noise', type=float, default=0.05)
 ap.add_argument('--fit-prior', type=float, default=1e-3)
+ap.add_argument('--mode-accept', type=int, default=0, help='1: mode-consistent acceptance -- a trial whose mode '
+                'signature (event sequence: real_pogo.signature) changed TOPOLOGICALLY from the last kept trial at that goal '
+                'rolls the robot back and halves its cap, as a new fall does: the kept iterates stay in one mode cell')
 ap.add_argument('--record', default='', help='save every training trial (x, goal, robot, it) to this npz')
 ap.add_argument('--gpu', default=None)
 a = ap.parse_args()
@@ -203,6 +206,8 @@ def main():
     rollbacks = {r: [] for r in ROBOTS}
     pos = {r: [] for r in ROBOTS}
     pending = {r: {} for r in ROBOTS}          # goal -> (valid mask, e, de) of the last kept trial
+    last_sig = {r: {} for r in ROBOTS}         # goal -> mode signature of the last kept trial
+    modes = {r: [] for r in ROBOTS}            # per trial pair: mode-cell crossing record
     n_trials = {r: 0 for r in ROBOTS}
     recs = []
     names = [r for r in ROBOTS for _ in GOALS]
@@ -231,7 +236,18 @@ def main():
             Jm = 0.5 * np.sum((res['err'][rr] * w) ** 2 * (~F)[..., None], axis=(1, 2)) / a.T
             if a.record:
                 recs += [dict(robot=r, it=it, goal=GOALS[gi].tolist(), x=res['x'][rr][gi]) for gi in range(len(GOALS))]
+            sigs = [rp.signature(res, int(i)) for i in rr]
+            cross = []
+            for gi in range(len(GOALS)):              # mode-cell crossings vs the last kept trial at the goal
+                if gi in last_sig[r]:
+                    topo, piece = rp.same_cell(last_sig[r][gi], sigs[gi])
+                    cross.append(dict(it=it, goal=gi, topo_change=not topo, piece_change=not piece,
+                                      t_margin=sigs[gi]['t_margin'], a_margin=sigs[gi]['a_margin'],
+                                      n_td=sigs[gi]['n_td'], n_td_prev=last_sig[r][gi]['n_td']))
+            modes[r] += cross
             new_fall = sorted(fell - last_fell[r]) if a.crash_rollback and lastJ[r] is not None else []
+            if a.mode_accept and any(c['topo_change'] for c in cross):
+                new_fall = new_fall + ['mode']
             if lastJ[r] is not None and ((a.rollback > 0 and Jm.mean() > lastJ[r] / a.rollback) or new_fall):
                 params[r] = prev[r]
                 cap[r] *= 0.5
@@ -240,6 +256,7 @@ def main():
                 print(json.dumps(dict(it=it, robot=r, rollback=True, J=float(Jm.mean()), last=lastJ[r])), flush=True)
                 continue
             lastJ[r], last_fell[r], prev[r] = float(Jm.mean()), fell, params[r]
+            last_sig[r] = {gi: sigs[gi] for gi in range(len(GOALS))}
             valid = ~F
             for gi in fell:                          # the last 20 periods before a fall are not trusted
                 kk = np.where(F[gi])[0]
@@ -297,6 +314,13 @@ def main():
     if a.record and recs:
         np.savez(a.record, recs=np.array(recs, dtype=object))
     ev, runs = evaluate({r: pols[r] for r in ROBOTS})
+    summary['modes'] = modes
+    allc = [c for r in ROBOTS for c in modes[r]]
+    if allc:
+        summary['mode_rates'] = dict(pairs=len(allc), topo=float(np.mean([c['topo_change'] for c in allc])),
+                                     piece=float(np.mean([c['piece_change'] for c in allc])),
+                                     t_margin_median=float(np.median([c['t_margin'] for c in allc])))
+        print(json.dumps(dict(mode_rates=summary['mode_rates'])), flush=True)
     summary.update(eval=ev, runs=runs, real_trials=n_trials, trials=trials, positivity=pos, rollbacks=rollbacks,
                    seconds=time.time() - t0)
     write(summary)
