@@ -5,7 +5,6 @@ import os
 import numpy as np
 
 import car_model as cm
-import plan_lqr
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PLAN_DIR = os.environ.get('F1T_PLANS') or os.path.join(HERE, 'plans')
@@ -17,10 +16,12 @@ def load_plan(name):
     kf = os.path.join(PLAN_DIR, f'{name}_K.npy')
     if os.path.exists(kf):
         K = np.load(kf)
-    else:
+    else:                                         # casadi only here: the car's computer runs from the cached gains
+        import plan_lqr
         K, _, _, info = plan_lqr.lqr_gains(d, dict(cm.NOMINAL))
         np.save(kf, K)
-    d['K'] = plan_lqr.dense_gains(d, K)
+    N = int(d['N'])                               # plan_lqr.dense_gains: K on the fine s-grid (interval-wise constant)
+    d['K'] = K[np.minimum((d['s'] / (float(d['length']) / N)).astype(int), N - 1)]
     d['name'] = name
     return d
 

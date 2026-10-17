@@ -8,7 +8,7 @@
 set -e
 CAR=${1:-real_nom}; POL=${2:?policy npz}; VESC=${3:-/tmp/f1t_scratch/install/setup.bash}
 H=$(cd "$(dirname "$0")" && pwd); I=$H/../../ilc_f1tenth/ilc2real
-source /opt/ros/humble/setup.bash; source $VESC; source $I/env_tight.sh
+source /opt/ros/${ROS_DISTRO:-$(ls /opt/ros | head -1)}/setup.bash; source $VESC; source $I/env_tight.sh
 export ROS_DOMAIN_ID=77
 if [ -n "$DDS_ROLE" ]; then source $H/dds_env.sh $DDS_ROLE; export ROS_DOMAIN_ID=77   # e.g. DDS_ROLE=local: CycloneDDS
 else export ROS_LOCALHOST_ONLY=1; fi

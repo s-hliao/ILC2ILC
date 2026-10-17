@@ -120,6 +120,52 @@ python ../ilc_f1tenth/ilc2real/hw_stage.py --backend manual --session-dir $HOME/
   - trial B (the network steering away): stopped and braking at a peak e_y of 0.48 m. The heading check (`spin`, 1.2 rad)
     fired just before the 0.5 m wall check.
 
+## ROS 2 Foxy (Jetson Nano / Ubuntu 20.04)
+
+The package runs on Foxy as well as Humble. The ROS distro picks the f1tenth_system branch and its patch set.
+
+| | Humble | Foxy |
+|---|---|---|
+| `../f1tenth_system` | `humble-devel` (the submodule's pin) | `foxy-devel` (vesc `foxy`, ackermann_mux and teleop_tools `foxy-devel`) |
+| patches | `patches/{f1tenth_system,vesc,ackermann_mux}.patch` | `patches/foxy/{f1tenth_system,vesc}.patch` |
+| CycloneDDS | `ros-humble-rmw-cyclonedds-cpp` | `ros-foxy-rmw-cyclonedds-cpp` |
+
+- **The Foxy set is the same LLA modification**, ported to Foxy's sources:
+  - the VESC current / duty-cycle modes with their clamps;
+  - the odometry sign flip;
+  - the -25 / 50 A current range;
+  - the mux timeouts and the joystick deadman;
+  - the base_link -> cg / imu_link static TFs.
+- **Foxy's `ackermann_mux` already publishes `ackermann_drive_out`, and Foxy already ships `tf_publisher.py`**, so the
+  Foxy set has no mux patch and adds no file.
+- **The Python nodes, launch file and configs are shared.** The runtime the network uses (`policy_runtime.py`,
+  `bank.py`, `car_model.py`) needs only numpy (>= 1.17, Foxy's). It parses under Python 3.6, and CasADi is only needed
+  if a plan's LQR gains are not cached (all of `plans_mu02_tight` are).
+
+```bash
+source /opt/ros/foxy/setup.bash
+cd ~/ilc_ws/src
+git -C f1tenth_system fetch origin foxy-devel && git -C f1tenth_system checkout foxy-devel
+git -C f1tenth_system submodule update --init --recursive
+bash ilc_f1tenth_hw/scripts/apply_hw_patches.sh          # picks patches/foxy from $ROS_DISTRO (or --distro foxy)
+sudo apt install ros-foxy-ackermann-msgs ros-foxy-robot-localization ros-foxy-rmw-cyclonedds-cpp ros-foxy-serial-driver \
+                 ros-foxy-diagnostic-updater python3-numpy
+cd ~/ilc_ws && rosdep install -y -r --from-paths src/f1tenth_system --ignore-src --rosdistro foxy
+colcon build --symlink-install --packages-up-to ilc_f1tenth_hw natnet_ros2
+```
+
+- **On a Jetson Nano with JetPack 4.x (Ubuntu 18.04)** there are no Foxy apt packages. Run the above inside an L4T
+  Foxy container (e.g. dustynv's `ros:foxy-ros-base-l4t-r32.7.1`), or build Foxy from source.
+- **Do not mix distros over DDS.** Foxy and Humble nodes discover each other, but message and service compatibility is
+  not guaranteed. With the network on the laptop (remote running), run the laptop side in Foxy too, e.g. a
+  `ros:foxy-ros-base` container with `~/ilc_ws` mounted. Or run `net_runner.py` on the car.
+- **Tested (2026-10-17) in a `ros:foxy-ros-base` container** (Python 3.8, numpy 1.17):
+  - the patched foxy-devel stack (vesc_msgs, vesc_driver, vesc_ackermann, ackermann_mux, f1tenth_stack) and this package
+    build;
+  - plans and networks load;
+  - the desk test runs over CycloneDDS: `ROS_DISTRO=foxy DDS_ROLE=local bash scripts/desk_test_runner.sh real_nom <policy> <foxy ws>/install/setup.bash`.
+  - natnet_ros2 (its README lists Foxy) was not built here: it downloads the NatNet SDK on its first build.
+
 ## The interface the ILC2Real network uses (as LLA-MPC's `llampc_fiala_fixed.py`)
 
 The network's state is the Fiala car's `[X, Y, psi, vx, vy, r, omega_w, I, delta]`, at 40 Hz (`DT = 0.025`, as LLA-MPC).

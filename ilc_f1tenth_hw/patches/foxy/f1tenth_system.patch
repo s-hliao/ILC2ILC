@@ -1,0 +1,137 @@
+diff --git a/f1tenth_stack/config/joy_teleop.yaml b/f1tenth_stack/config/joy_teleop.yaml
+index 795cbd6..7267eb0 100755
+--- a/f1tenth_stack/config/joy_teleop.yaml
++++ b/f1tenth_stack/config/joy_teleop.yaml
+@@ -8,40 +8,34 @@ joy:
+ 
+ joy_teleop:
+   ros__parameters:
++    # 0 STATE (Stop): Active when holding 4. 
++    # Because it's Priority 10 in Mux, it blocks the MPC.
+     default:
+       type: topic
+       interface_type: ackermann_msgs/msg/AckermannDriveStamped
+-      topic_name: teleop
++      topic_name: safety
++      deadman_axes: [4]
+       axis_mappings:
+-        drive-speed:
+-          axis: 1
+-          scale: 0.0
+-          offset: 0.0
+-        drive-steering_angle:
+-          axis: 2
+-          scale: 0.0
+-          offset: 0.0
++        drive-speed: {axis: 1, scale: 0.0, offset: 0.0}
++        drive-steering_angle: {axis: 2, scale: 0.0, offset: 0.0}
+ 
++    # HUMAN CONTROL: Active when holding 6. 
++    # Also blocks the MPC.
+     human_control:
+       type: topic
+       interface_type: ackermann_msgs/msg/AckermannDriveStamped
+       topic_name: teleop
+-      deadman_buttons: [4]
++      deadman_buttons: [6]
+       axis_mappings:
+-        drive-speed:
+-          axis: 1
+-          scale: 5.0
+-          offset: 0.0
+-        drive-steering_angle:
+-          axis: 2
+-          scale: 0.34
+-          offset: 0.0
++        drive-speed: {axis: 1, scale: 5.0, offset: 0.0}
++        drive-steering_angle: {axis: 2, scale: 0.34, offset: 0.0}
+ 
++    # MPC ENABLE: Button 7. 
++    # By sending this to /dev/null, /teleop becomes SILENT.
++    # When /teleop is silent, the Mux finally lets the MPC (/drive) through.
+     autonomous_control:
+       type: topic
+       interface_type: std_msgs/msg/Int8
+       topic_name: /dev/null
+-      deadman_buttons: [5]
+-      message_value:
+-        data:
+-          value: 0
++      deadman_buttons: [7]
++      message_value: {data: {value: 0}}
+diff --git a/f1tenth_stack/config/mux.yaml b/f1tenth_stack/config/mux.yaml
+index 1a02c9f..99ba6e7 100755
+--- a/f1tenth_stack/config/mux.yaml
++++ b/f1tenth_stack/config/mux.yaml
+@@ -1,11 +1,11 @@
+ ackermann_mux:
+   ros__parameters:
+     topics:
++      joystick:
++        topic   : "teleop"
++        timeout : 0.5
++        priority: 100
+       navigation:
+-        topic   : drive
+-        timeout : 0.2
++        topic   : "drive"
++        timeout : 0.5
+         priority: 10
+-      joystick:
+-        topic   : teleop
+-        timeout : 0.2
+-        priority: 100
+\ No newline at end of file
+diff --git a/f1tenth_stack/config/vesc.yaml b/f1tenth_stack/config/vesc.yaml
+index 5531a64..e55b213 100755
+--- a/f1tenth_stack/config/vesc.yaml
++++ b/f1tenth_stack/config/vesc.yaml
+@@ -10,8 +10,8 @@
+     steering_angle_to_servo_offset: 0.5304
+ 
+     port: /dev/sensors/vesc
+-    duty_cycle_min: 0.0
+-    duty_cycle_max: 0.0
++    duty_cycle_min: -1.0
++    duty_cycle_max: 1.0
+     current_min: 0.0
+     current_max: 100.0
+     brake_min: -20000.0
+@@ -23,6 +23,12 @@
+     servo_min: 0.15
+     servo_max: 0.85
+ 
++    # ackermann_to_vesc's direct current mode (drive.jerk == 2.0): the clamp on the motor current command, set to the
++    # current range ILC2Real's networks are trained for (car_model.NOMINAL I_min / I_max, LLA-MPC's -25 .. 50 A); the
++    # duty-cycle mode (drive.jerk == 1.0) clamp is the node's default +-0.95
++    current_command_min: -25.0
++    current_command_max: 50.0
++
+ # No longer needed, all parameters are shared
+ # ackermann_to_vesc_node:
+ #   ros__parameters:
+diff --git a/f1tenth_stack/launch/bringup_launch.py b/f1tenth_stack/launch/bringup_launch.py
+index 239b731..829b9a0 100755
+--- a/f1tenth_stack/launch/bringup_launch.py
++++ b/f1tenth_stack/launch/bringup_launch.py
+@@ -118,7 +118,7 @@ def generate_launch_description():
+         executable='ackermann_mux',
+         name='ackermann_mux',
+         parameters=[LaunchConfiguration('mux_config')],
+-        remappings=[('ackermann_cmd_out', 'ackermann_drive')]
++        remappings=[('ackermann_drive_out', 'ackermann_cmd')]
+     )
+     static_tf_node = Node(
+         package='tf2_ros',
+@@ -137,5 +137,10 @@ def generate_launch_description():
+     ld.add_action(urg_node)
+     ld.add_action(ackermann_mux_node)
+     ld.add_action(static_tf_node)
++    # LLA-MPC-onboard: the centre of gravity (the EKF's body frame, cg) and the VESC IMU relative to base_link
++    ld.add_action(Node(package='tf2_ros', executable='static_transform_publisher', name='static_baselink_to_cg',
++                       arguments=['0.15', '0.0', '0.0', '0.0', '0.0', '0.0', 'base_link', 'cg']))
++    ld.add_action(Node(package='tf2_ros', executable='static_transform_publisher', name='static_baselink_to_imu',
++                       arguments=['0.065', '0.0', '0.09', '0.0', '0.0', '0.0', 'base_link', 'imu_link']))
+ 
+     return ld
+\ No newline at end of file

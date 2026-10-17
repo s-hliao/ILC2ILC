@@ -29,8 +29,9 @@ if [ -n "$_car_ip$_lap_ip" ]; then
   mkdir -p ~/.ros; _xml=~/.ros/cyclonedds_$_role.xml
   sed -e "s|@SELF_IP@|$_self|" -e "s|@PEERS@|${_peers%\\n}|" "$_dds_dir/template.xml.in" | sed 's/\\n/\n/g' > "$_xml"
 fi
-if [ ! -e /opt/ros/humble/lib/librmw_cyclonedds_cpp.so ]; then
-  echo "dds_env.sh: rmw_cyclonedds_cpp is not installed: sudo apt install ros-humble-rmw-cyclonedds-cpp"
+_distro=${ROS_DISTRO:-$(ls /opt/ros 2>/dev/null | head -1)}
+if [ ! -e /opt/ros/$_distro/lib/librmw_cyclonedds_cpp.so ]; then
+  echo "dds_env.sh: rmw_cyclonedds_cpp is not installed: sudo apt install ros-$_distro-rmw-cyclonedds-cpp"
   return 1 2>/dev/null || exit 1
 fi
 _self_ip=$(sed -n 's|.*<NetworkInterfaceAddress>\(.*\)</NetworkInterfaceAddress>.*|\1|p' "$_xml")
@@ -43,4 +44,4 @@ export ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
 unset ROS_LOCALHOST_ONLY
 echo "DDS: $RMW_IMPLEMENTATION, $CYCLONEDDS_URI (self $_self_ip), ROS_DOMAIN_ID=$ROS_DOMAIN_ID"
 ros2 daemon stop >/dev/null 2>&1 || true        # a running daemon keeps the old middleware / discovery settings
-unset _dds_dir _role _car_ip _lap_ip _extra _xml _self _peers _ip _self_ip
+unset _distro _dds_dir _role _car_ip _lap_ip _extra _xml _self _peers _ip _self_ip
