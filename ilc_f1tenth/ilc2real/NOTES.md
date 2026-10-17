@@ -1,5 +1,51 @@
 # ILC2Real on the F1TENTH: continuous drift on the LLA-MPC car
 
+## Baseline diagnosis: the RL baselines optimized a different objective (2026-10-17)
+
+**Finding.**
+- PPO+DR and RMA were rewarded on the plan's full drift state: `sim_jax.ERR_SCALE`, which weights e_y, e_psi, vx, vy
+  and r.
+- The headline network `v3drBt` is trained on the task objective `TASK_SCALE`: e_y and pace only.
+- On the multi-body cars the figfast b25 plan cannot be tracked in full state. Every full-state tracker crashes there
+  on every car, the plan LQR included, while ours flies it. The baselines were handicapped by their objective, not by
+  RL.
+
+**Other causes ruled out or found.**
+- Not the training horizon: in the training sim, PPO+DR runs 27 s (5 laps) with 0 % (nominal) / 2 % (DR) failures
+  and a smaller e_y than ours.
+- RMA phase 2 had two bugs:
+  - it was trained off-policy (teacher rollouts);
+  - its history held a_t where the deployed buffer holds a_{t-1}.
+
+  Fixed in `ppo_dr.py` (`--p2-onpolicy 1`, a_prev histories, `--hist 40`). This is worth only +5 points alone: the
+  teacher with the true z reached only 53 %.
+
+**Zero-shot on the 5 cars** (`car_baseline_fix.sh`, `runs/hw/*_zs`; 12-run evals; b25 = both drift plans at 25°):
+
+| arm | b25 success | b25 crash | all plans |
+|---|---|---|---|
+| plan LQR | 40.0 % | 45.0 % | 52.5 % |
+| PPO+DR, track reward (old) | 27.5 % | 65.0 % | 54.4 % |
+| **PPO+DR, task reward** | 70.0 % | 22.5 % | 78.8 % |
+| RMA, track reward (old) | 45.0 % | 52.5 % | 63.8 % |
+| RMA, old teacher + fixed phase 2 | 50.0 % | 42.5 % | 65.0 % |
+| **RMA, task reward + fixed phase 2** | **77.5 %** | **0.0 %** | **80.6 %** |
+| ours `v3drBt_s0`, zero-shot | 70.0 % | 0.0 % | 80.0 % |
+
+- **With the same objective, RMA zero-shot is level with (b25 77.5 vs 70 %) our zero-shot network.** Both have 0
+  crashes, and both fail only on the friction ×0.8 car (`real_mu`).
+- **PPO+DR with the task reward** still crashes figfast b25 on the nominal, mass and friction cars (22.5 % crashes).
+- **Consequence for the paper.** Every car baseline number before this section used the track reward and understates
+  RL. The comparisons to redo with the task reward:
+  - zero-shot;
+  - with our hardware stage;
+  - the low-friction ladder (`_mu80` / `_mu60` bank);
+  - the data matching (PPO / RMA on the cars).
+
+  Ours after the 10-lap ladder is 100 % b25 on all 8 cars, so the open question is whether a task-reward RMA plus
+  ladder rungs matches that zero-shot.
+- **Single seed.** s1 / s2 of the task-reward baselines are needed.
+
 ## Exact-dynamics oracles: RL matches ours under idealized conditions (2026-10-12)
 
 User: show that RL can transfer under idealized conditions, so the baselines cannot be dismissed as implemented wrong

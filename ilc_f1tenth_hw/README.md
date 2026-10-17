@@ -163,7 +163,10 @@ colcon build --symlink-install --packages-up-to ilc_f1tenth_hw natnet_ros2
   - the patched foxy-devel stack (vesc_msgs, vesc_driver, vesc_ackermann, ackermann_mux, f1tenth_stack) and this package
     build;
   - plans and networks load;
-  - the desk test runs over CycloneDDS: `ROS_DISTRO=foxy DDS_ROLE=local bash scripts/desk_test_runner.sh real_nom <policy> <foxy ws>/install/setup.bash`.
+  - the desk test over CycloneDDS (`ROS_DISTRO=foxy DDS_ROLE=local bash scripts/desk_test_runner.sh real_nom <policy> <foxy ws>/install/setup.bash`;
+    the stand-in car needs `pip3 install numba==0.53.1`, the real car does not):
+    - trial A: 2.05 laps, RMS e_y 4.1 cm, peak 9.3 cm, max current 36.1 A, identical to Humble;
+    - trial B: stopped `wall` at 0.506 m, braking.
   - natnet_ros2 (its README lists Foxy) was not built here: it downloads the NatNet SDK on its first build.
 
 ## The interface the ILC2Real network uses (as LLA-MPC's `llampc_fiala_fixed.py`)

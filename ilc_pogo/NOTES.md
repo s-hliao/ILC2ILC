@@ -426,6 +426,24 @@ applies on its own trials.
   - the adaptive trust region (proposed) that replaces the fixed step knobs.
 - No new test pass: nothing was adopted.
 
+**Denser goal coverage** (`drgrid`, validation goals). A 3 × 3 grid over the goal box (v 0 / 0.75 / 1.5 × h 0.55 /
+0.65 / 0.75), not chosen from the validation goals, × 4 iterations = 36 trials, against the 6 training goals × 6
+iterations (36):
+
+| arm | 6 goals @36 | grid9 @18 | grid9 @36 | heavy / soft sticks @36 (6 goals → grid) |
+|---|---|---|---|---|
+| ours + DR s0 | 89.6 | 91.7 | 93.2 | 94 / 97 → 97 / 91 |
+| ours + DR s1 | 96.9 | 89.1 | 92.7 | 100 / 97 → 100 / 81 |
+| ours + DR s2 | 87.0 | 78.6 | 88.5 | 78 / 78 → 88 / 88 |
+| ours nominal s2 | 94.3 | 87.5 | 96.9 | 100 / 100 → 100 / 100 |
+| PPO+DR s2 + stage | 100 | 91.1 | 100 | 100 / 100 → 100 / 100 |
+
+- **Mixed, not a fix.** The ours + DR mean is 91.2 → 91.5.
+  - The grid lifts s2's heavy / soft sticks (78 → 88) and s0.
+  - It costs s1 its soft stick (97 → 81).
+- **Goal coverage is part of it (s2) but not the whole story.**
+- Ours + DR remains the weakest variant. The adaptive trust region (on the other computer) is the next test.
+
 ## LM trust region (2026-10-17, machine ube; validation goals, 36 trials, 3 networks x 3 seeds; runs/v4, scheduler_tr.py)
 
 Question: can ONE adaptive step rule replace the hand-set step knobs (beta, cap, rollback ratio) in all three domains?
