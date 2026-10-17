@@ -48,6 +48,15 @@ ap.add_argument("--update", default="grad", choices=("grad", "gn"),
                      "(x, z, pitch) through the closed-loop landing sensitivity G_N (fd Jacobians), "
                      "-gn-beta G_N' (G_N G_N' + gn-delta I)^-1 e, its rms capped at --step-rms")
 ap.add_argument("--gn-beta", type=float, default=0.5)
+ap.add_argument("--tr", type=int, default=0,
+                help="1: adaptive trust region per goal (Levenberg-Marquardt; the pogo / car hw_stage --tr): the full GN "
+                     "step (gain 1) inside a radius (rms, normalized action; starts at --step-rms) instead of the scale / "
+                     "bold / rollback-ratio heuristics; rho = (J_prev - J) / (J_prev - J_pred), J_pred from the landing "
+                     "sensitivity times the commanded step (J_prev x e_pred'Qe_pred / e'Qe); rho < tr-lo halves the "
+                     "radius, rho < 0 rolls the goal back to its best trial, rho > tr-hi doubles it (up to --tr-max)")
+ap.add_argument("--tr-lo", type=float, default=0.25)
+ap.add_argument("--tr-hi", type=float, default=0.75)
+ap.add_argument("--tr-max", type=float, default=0.4)
 ap.add_argument("--gn-delta", type=float, default=0.1, help="damping, relative to tr(G_N G_N')/3")
 ap.add_argument("--est-window", type=float, default=0.0,
                 help="s: the sim's policy observes the robots' estimator (as the network was trained: jump.Config)")
@@ -680,6 +689,9 @@ def run_robot(robot):
     scale = {g: 1.0 for g in a.goals}
     sec = {g: None for g in a.goals}         # Broyden correction of the landing sensitivity, per goal
     prev = {g: None for g in a.goals}        # (e3, commanded step, J) of the goal's previous trial
+    rad = {g: a.step_rms for g in a.goals}   # --tr: the trust radius per goal
+    jpred = {g: None for g in a.goals}       # --tr: the predicted J of the goal's next trial
+    tr_log = []
     frozen = {g: False for g in a.goals}
     Jh = {g: [] for g in a.goals}
     Bh = {g: [] for g in a.goals}            # saturation bind of each GN step, per goal (--stall-sat)
@@ -857,6 +869,20 @@ def run_robot(robot):
                 continue
             runaway = bool(a.rollback) and best[g] is not None and J > a.rollback[0] * best[g][0] \
                 and J > best[g][0] + a.rollback[1]
+            rho = None
+            if a.tr:
+                runaway = False
+                if jpred[g] is not None and prev[g] is not None and not fell:
+                    rho = (prev[g][2] - J) / max(prev[g][2] - jpred[g], 1e-9)
+                    tr_log.append(dict(it=it, goal=g, rho=rho, r=rad[g], J=J, J_prev=prev[g][2], J_pred=jpred[g]))
+                    runaway = rho < 0
+                    if rho > a.tr_hi:
+                        rad[g] = min(2.0 * rad[g], a.tr_max)
+                    elif rho < a.tr_lo:
+                        rad[g] *= 0.5
+                elif fell:
+                    rad[g] *= 0.5
+                jpred[g] = None
             if fell and a.update == "gn" and a.clear > 0 and env.has_box and An is not None:
                 # a fall with the legs or trunk too close to the box (a clip): the step on its clearance rows and its
                 # predicted landing (the measured one is the clip's), from the trial's own actions, the scale kept --
@@ -889,7 +915,7 @@ def run_robot(robot):
                 continue
             if best[g] is None or J < best[g][0]:
                 best[g] = (J, obs[:Nc], act)
-            if a.bold > 0 and prev[g] is not None:
+            if a.bold > 0 and prev[g] is not None and not a.tr:
                 scale[g] = scale[g] * 0.5 if J > (1 + a.bold) * prev[g][2] else min(1.0, scale[g] * 1.25)
             if a.update == "gn":
                 if a.jac_at == "real":
@@ -1012,9 +1038,14 @@ def run_robot(robot):
                     if a.sat_project:
                         stp = free
                     sat_txt = f", sat {100 * satf:.0f}% bind {bind:.2f} held {n_off}"
-                step = stp.reshape(Nc, 4) * scale[g]
+                step = stp.reshape(Nc, 4) * (1.0 if a.tr else scale[g])
                 rms = np.sqrt((step ** 2).sum() / mask.sum())
-                step *= min(1.0, (a.abbeel_cap if a.abbeel else a.step_rms) / max(rms, 1e-12))
+                step *= min(1.0, (rad[g] if a.tr else (a.abbeel_cap if a.abbeel else a.step_rms)) / max(rms, 1e-12))
+                if a.tr:                                  # the landing predicted for the commanded change (-step)
+                    qd = np.asarray(bank["qe"], float)[:3]
+                    e_now = np.asarray(e3, float)[:3]
+                    e_pr = e_now - S[:3] @ step.ravel()
+                    jpred[g] = J * float(e_pr @ (qd * e_pr)) / max(float(e_now @ (qd * e_now)), 1e-12)
                 if a.control == "random":
                     r_ = rng.standard_normal(step.shape) * mask
                     step = r_ * np.sqrt((step ** 2).sum() / max((r_ ** 2).sum(), 1e-12))
@@ -1100,7 +1131,7 @@ def run_robot(robot):
                 w = w_prev
                 for g in a.goals:
                     scale[g] *= 0.5
-    res = dict(robot=robot, hist=hist, args=vars(a), pred=pred_log)
+    res = dict(robot=robot, hist=hist, args=vars(a), pred=pred_log, tr=tr_log)
     if a.eval != "none":
         goals, seed = EVAL[a.eval]
         for tag, pd_ in (("start", os.path.join(out, "it0", "policy")), ("final", os.path.join(out, f"it{a.iters}", "policy"))):

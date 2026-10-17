@@ -47,6 +47,19 @@ ap.add_argument('--age-decay', type=float, default=0.5)
 ap.add_argument('--steps', type=int, default=800)
 ap.add_argument('--lr', type=float, default=1e-4)
 ap.add_argument('--rollback', type=float, default=0.7, help='0: off')
+ap.add_argument('--tr', type=int, default=0, help='1: adaptive trust region (Levenberg-Marquardt / Nocedal-Wright 4.1) '
+                'instead of the fixed cap + rollback: the full GN step inside a radius r (rms, normalized action; starts at '
+                '--cap); after each trial rho = measured / predicted relative reduction of the task cost; rho < tr-lo '
+                'halves r (and rho < 0 or a new fall rejects the step: the previous network flies again), rho > tr-hi '
+                'doubles r (up to --tr-max)')
+ap.add_argument('--tr-lo', type=float, default=0.25)
+ap.add_argument('--tr-hi', type=float, default=0.75)
+ap.add_argument('--tr-max', type=float, default=0.4)
+ap.add_argument('--fit-realize', type=float, default=0.0, help='>0: refit to convergence -- until the realized fraction of '
+                'the iteration\'s GN step on its own trials reaches this value OR stops improving (< 0.003 over 1000 '
+                'steps; the network cannot represent every time-indexed correction); checked every 200 steps (0: the '
+                'fixed --steps)')
+ap.add_argument('--fit-max-steps', type=int, default=8000)
 ap.add_argument('--crash-rollback', type=int, default=1)
 ap.add_argument('--train-pert', type=float, default=0.0, help='drop perturbation of the training trials (0: the goal\'s '
                 'clean drop, the same start every iteration)')
@@ -207,6 +220,8 @@ def main():
     trials = {r: [] for r in ROBOTS}
     rollbacks = {r: [] for r in ROBOTS}
     realize = {r: [] for r in ROBOTS}
+    pred_rel = {r: None for r in ROBOTS}       # the kept step's predicted relative reduction of the task cost (--tr)
+    tr_log = {r: [] for r in ROBOTS}
     pos = {r: [] for r in ROBOTS}
     pending = {r: {} for r in ROBOTS}          # goal -> (valid mask, e, de) of the last kept trial
     last_sig = {r: {} for r in ROBOTS}         # goal -> mode signature of the last kept trial
@@ -251,10 +266,24 @@ def main():
             new_fall = sorted(fell - last_fell[r]) if a.crash_rollback and lastJ[r] is not None else []
             if a.mode_accept and any(c['topo_change'] for c in cross):
                 new_fall = new_fall + ['mode']
-            if lastJ[r] is not None and ((a.rollback > 0 and Jm.mean() > lastJ[r] / a.rollback) or new_fall):
+            rho = None
+            if a.tr and lastJ[r] is not None and pred_rel[r] is not None:
+                rho = (1.0 - float(Jm.mean()) / max(lastJ[r], 1e-12)) / max(pred_rel[r], 1e-6)
+                tr_log[r].append(dict(it=it, rho=rho, r=cap[r], pred_rel=pred_rel[r], J=float(Jm.mean()), last=lastJ[r]))
+                if rho > a.tr_hi:
+                    cap[r] = min(2.0 * cap[r], a.tr_max)
+                elif rho < a.tr_lo:
+                    cap[r] *= 0.5
+            reject = (rho is not None and rho < 0) if a.tr else (a.rollback > 0 and lastJ[r] is not None and
+                                                                  Jm.mean() > lastJ[r] / a.rollback)
+            if lastJ[r] is not None and (reject or new_fall):
                 params[r] = prev[r]
-                cap[r] *= 0.5
+                if not a.tr:
+                    cap[r] *= 0.5
+                elif new_fall and not (rho is not None and rho < a.tr_lo):
+                    cap[r] *= 0.5
                 rollbacks[r].append(dict(it=it, J=float(Jm.mean()), last=lastJ[r], cap=cap[r], new_fall=new_fall))
+                pred_rel[r] = None                   # the previous network flies again: re-measure, no prediction
                 pending[r] = {}
                 print(json.dumps(dict(it=it, robot=r, rollback=True, J=float(Jm.mean()), last=lastJ[r])), flush=True)
                 continue
@@ -279,6 +308,7 @@ def main():
                 step, J, Jp, e, de = gn(params[r], jnp.asarray(res['x'][rr]), jnp.asarray(res['a'][rr]),
                                         jnp.asarray(Gb[rr]), jnp.asarray(res['err'][rr]), jnp.asarray(valid), cap=float(cap[r]))
             step, e, de = np.nan_to_num(np.asarray(step)), np.asarray(e), np.asarray(de)
+            pred_rel[r] = float(1.0 - np.sum(np.asarray(Jp)) / max(np.sum(np.asarray(J)), 1e-12))
             vrow = np.repeat(valid, C.NE, axis=1)
             for gi in range(len(GOALS)):              # positivity: last kept prediction vs this measured change
                 if gi in pending[r]:
@@ -302,20 +332,37 @@ def main():
             wa = a.anchor_w * a.anchor_n0 / (a.anchor_n0 + len(data[r]))
             ps, st = params[r], opt.init(params[r])
             O_, Y_, W_, Oa_, Ya_ = map(jnp.asarray, (O, Y, W, O_anchor, Ya))
-            for s in range(a.steps):
-                b = jnp.asarray(rs.integers(0, len(O), min(2048, len(O))))
-                ba = jnp.asarray(rs.integers(0, len(O_anchor), min(2048, len(O_anchor))))
-                ps, st, l = fit_step(ps, st, O_[b], Y_[b], W_[b], Oa_[ba], Ya_[ba], wa)
             # how much of this iteration's GN step the refit realized on its own trials (1 = all of it)
             new = [d for d in data[r] if d['it'] == it]
-            if new:
-                On = jnp.asarray(np.concatenate([d['obs'] for d in new]))
-                Yn = np.concatenate([d['y'] for d in new])
-                m0, m1 = np.asarray(pj.mlp(params[r], On)), np.asarray(pj.mlp(ps, On))
-                tgt = Yn - m0
-                realized = float(np.sum((m1 - m0) * tgt) / max(np.sum(tgt ** 2), 1e-12))
-                fit_res = float(np.sqrt(np.mean((m1 - Yn) ** 2)) / max(np.sqrt(np.mean(tgt ** 2)), 1e-12))
-                realize[r].append(dict(it=it, realized=realized, residual=fit_res))
+            On = jnp.asarray(np.concatenate([d['obs'] for d in new]))
+            Yn = np.concatenate([d['y'] for d in new])
+            m0 = np.asarray(pj.mlp(params[r], On))
+            tgt = Yn - m0
+
+            def realized_of(q):
+                m1 = np.asarray(pj.mlp(q, On))
+                return (float(np.sum((m1 - m0) * tgt) / max(np.sum(tgt ** 2), 1e-12)),
+                        float(np.sqrt(np.mean((m1 - Yn) ** 2)) / max(np.sqrt(np.mean(tgt ** 2)), 1e-12)))
+            n_steps, hist_r = 0, []
+            while True:
+                chunk = a.steps if a.fit_realize <= 0 else 200
+                for s in range(chunk):
+                    b = jnp.asarray(rs.integers(0, len(O), min(2048, len(O))))
+                    ba = jnp.asarray(rs.integers(0, len(O_anchor), min(2048, len(O_anchor))))
+                    ps, st, l = fit_step(ps, st, O_[b], Y_[b], W_[b], Oa_[ba], Ya_[ba], wa)
+                n_steps += chunk
+                realized, fit_res = realized_of(ps)
+                hist_r.append(realized)
+                if a.fit_realize <= 0 or realized >= a.fit_realize or n_steps >= a.fit_max_steps or \
+                        (len(hist_r) > 5 and realized - hist_r[-6] < 0.003):
+                    break
+            realize[r].append(dict(it=it, realized=realized, residual=fit_res, steps=n_steps))
+            if a.tr:                                  # the prediction for the change the network actually made: f x step
+                f_ = float(np.clip(realized, 0.0, 1.0))
+                e2 = sum(float(np.sum(pending[r][gi][1][pending[r][gi][0]] ** 2)) for gi in pending[r])
+                p2 = sum(float(np.sum((pending[r][gi][1] + f_ * pending[r][gi][2])[pending[r][gi][0]] ** 2))
+                         for gi in pending[r])
+                pred_rel[r] = 1.0 - p2 / max(e2, 1e-12)
             if np.isfinite(float(l)) and all(np.isfinite(np.asarray(W)).all() for W, b in ps):
                 params[r] = ps
             print(json.dumps(dict(it=it, robot=r, J=round(float(Jm.mean()), 3), falls=len(fell), loss=float(l),
@@ -344,7 +391,7 @@ def main():
                                      piece=float(np.mean([c['piece_change'] for c in allc])),
                                      t_margin_median=float(np.median([c['t_margin'] for c in allc])))
         print(json.dumps(dict(mode_rates=summary['mode_rates'])), flush=True)
-    summary.update(eval=ev, runs=runs, real_trials=n_trials, trials=trials, positivity=pos, rollbacks=rollbacks, realize=realize,
+    summary.update(eval=ev, runs=runs, real_trials=n_trials, trials=trials, positivity=pos, rollbacks=rollbacks, realize=realize, tr=tr_log,
                    seconds=time.time() - t0)
     write(summary)
     for r in ROBOTS:

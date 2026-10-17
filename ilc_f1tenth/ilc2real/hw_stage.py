@@ -35,6 +35,17 @@ ap.add_argument('--anchor-plans', nargs='+', default=[f'mocap_{t}_b{b}' for t in
 ap.add_argument('--rollback', type=float, default=0.7, help='a car whose laps this iteration progress less than this '
                 'fraction of the last kept iteration\'s (a new spin-out) is rolled back to its previous network and its '
                 'step cap halved (0: off)')
+ap.add_argument('--tr', type=int, default=0, help='1: adaptive trust region (Levenberg-Marquardt) instead of the fixed '
+                '--cap + the progress rollback: the GN step inside a radius r (starts at --cap); rho = measured / predicted '
+                'reduction of the ILC cost J over this iteration\'s goals, each against its own last kept trial (the prediction '
+                'for the change the refit realized); rho < tr-lo halves r, rho < 0 rejects the step (the previous network '
+                'flies again), rho > tr-hi doubles r (up to --tr-max). A new crash still rejects')
+ap.add_argument('--tr-lo', type=float, default=0.25)
+ap.add_argument('--tr-hi', type=float, default=0.75)
+ap.add_argument('--tr-max', type=float, default=0.4)
+ap.add_argument('--fit-realize', type=float, default=0.0, help='>0: refit the newest trials to convergence: until the '
+                'realized fraction of the GN step reaches this or stops improving (< 0.003 over 1000 steps); 0: --steps')
+ap.add_argument('--fit-max-steps', type=int, default=8000)
 ap.add_argument('--crash-rollback', type=int, default=1, help='a car that crashes (wall / spin) on a goal it flew '
                 'cleanly in the last kept iteration is rolled back to that network and its step cap halved (1: on)')
 ap.add_argument('--max-crashes', type=int, default=0, help='crash budget per car: after this many crashed trials the '
@@ -282,6 +293,9 @@ def main():
     cap = {c: a.cap for c in a.cars}
     last_prog = {c: None for c in a.cars}
     rollbacks = {c: [] for c in a.cars}
+    tr_last = {c: {} for c in a.cars}          # --tr: goal -> (J measured, J predicted for the realized change) of the kept step
+    tr_log = {c: [] for c in a.cars}
+    realize = {c: [] for c in a.cars}
     goal_now = {c: {g: g for g in a.goals} for c in a.cars}
     rung = {c: {g: 0 for g in a.goals} for c in a.cars}
     fails_row = {c: {g: 0 for g in a.goals} for c in a.cars}
@@ -372,9 +386,30 @@ def main():
                     params[c] = prev_params[c]
                 print(json.dumps(dict(it=it, car=c, frozen=True, crashes=len(crashes[c]))), flush=True)
                 continue
-            if (a.rollback > 0 and last_prog[c] is not None and prog < a.rollback * last_prog[c]) or new_crash:
+            if a.tr:                                   # rho from the J of this trial vs the kept step's prediction
+                xs_, idx_, acts_, err_, valid_ = ilc_core.pad_runs(rr, T)
+                _, J_now, _ = gn_for(cap[c])(params[c], jnp.array(xs_), jnp.array(idx_), jnp.array(acts_),
+                                             jnp.array(pid_c), jnp.array(valid_), jnp.array(err_))
+                J_now = {gn_names[pid_c[k]]: float(np.nan_to_num(np.asarray(J_now)[k])) for k in range(len(rr))}
+                common = [g for g in J_now if g in tr_last[c]]
+                rho = None
+                if common:
+                    dm = sum(tr_last[c][g][0] - J_now[g] for g in common)
+                    dp = sum(tr_last[c][g][0] - tr_last[c][g][1] for g in common)
+                    rho = dm / max(dp, 1e-9)
+                    tr_log[c].append(dict(it=it, rho=rho, r=cap[c], goals=common))
+                    if rho > a.tr_hi:
+                        cap[c] = min(2.0 * cap[c], a.tr_max)
+                    elif rho < a.tr_lo:
+                        cap[c] *= 0.5
+                tr_reject = rho is not None and rho < 0
+            if (a.tr and (tr_reject or new_crash)) or (not a.tr and (
+                    (a.rollback > 0 and last_prog[c] is not None and prog < a.rollback * last_prog[c]) or new_crash)):
                 params[c] = prev_params[c]                 # less progress or a new crash: back to the last kept network
-                cap[c] *= 0.5
+                if not a.tr or not (rho is not None and rho < a.tr_lo):
+                    cap[c] *= 0.5
+                if a.tr:
+                    tr_last[c] = {}                        # the previous network flies again: re-measure
                 rollbacks[c].append(dict(it=it, prog=prog, last=last_prog[c], cap=cap[c], new_crash=new_crash))
                 print(json.dumps(dict(it=it, car=c, rollback=True, prog=prog, last=last_prog[c], cap=cap[c],
                                       new_crash=new_crash)), flush=True)
@@ -417,10 +452,29 @@ def main():
             wa = a.anchor_w * a.anchor_n0 / (a.anchor_n0 + len(data[c]))
             ps, st = params[c], opt.init(params[c])
             O_, Y_, W_, Oa_, Ya_ = map(jnp.array, (O, Y, W, O_anchor, Ya))
-            for s in range(a.steps):
-                b = jnp.array(rs.integers(0, len(O), min(2048, len(O))))
-                ba = jnp.array(rs.integers(0, len(O_anchor), min(2048, len(O_anchor))))
-                ps, st, l = fit_step(ps, st, O_[b], Y_[b], W_[b], Oa_[ba], Ya_[ba], wa)
+            new = [d for d in data[c] if d['it'] == it]
+            On = jnp.array(np.concatenate([d['obs'] for d in new]))
+            Yn = np.concatenate([d['y'] for d in new])
+            m0 = np.asarray(policy_fn(params[c], On))
+            tgt = Yn - m0
+            n_steps, hist_r = 0, []
+            while True:
+                chunk = a.steps if a.fit_realize <= 0 else 200
+                for s in range(chunk):
+                    b = jnp.array(rs.integers(0, len(O), min(2048, len(O))))
+                    ba = jnp.array(rs.integers(0, len(O_anchor), min(2048, len(O_anchor))))
+                    ps, st, l = fit_step(ps, st, O_[b], Y_[b], W_[b], Oa_[ba], Ya_[ba], wa)
+                n_steps += chunk
+                realized = float(np.sum((np.asarray(policy_fn(ps, On)) - m0) * tgt) / max(np.sum(tgt ** 2), 1e-12))
+                hist_r.append(realized)
+                if a.fit_realize <= 0 or realized >= a.fit_realize or n_steps >= a.fit_max_steps or \
+                        (len(hist_r) > 5 and realized - hist_r[-6] < 0.003):
+                    break
+            realize[c].append(dict(it=it, realized=realized, steps=n_steps))
+            if a.tr:                                   # J(f) of a GN projection step: J - (2f - f^2)(J - J_pred)
+                f_ = float(np.clip(realized, 0.0, 1.0))
+                tr_last[c].update({gn_names[pid_c[k]]: (float(J[k]), float(J[k] - (2 * f_ - f_ ** 2) * (J[k] - Jp[k])))
+                                   for k in range(len(rr)) if valid[k].any()})   # per goal: its last kept trial (goals cycle)
             if np.isfinite(float(l)) and all(np.isfinite(np.asarray(W)).all() for W, b in ps):
                 params[c] = ps                           # a non-finite fit is discarded
             last = [t for t in trials[c] if t['it'] == it]
@@ -452,6 +506,8 @@ def main():
     summary['trials'] = trials
     summary['real_laps'] = real_laps
     summary['rollbacks'] = rollbacks
+    summary['tr'] = tr_log
+    summary['realize'] = realize
     summary['crashes'] = crashes
     if a.record and recs:
         import record_car
