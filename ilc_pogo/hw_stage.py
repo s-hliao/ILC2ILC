@@ -52,7 +52,7 @@ ap.add_argument('--train-pert', type=float, default=0.0, help='drop perturbation
                 'clean drop, the same start every iteration)')
 ap.add_argument('--eval-runs', type=int, default=4)
 ap.add_argument('--eval-seconds', type=float, default=10.0)
-ap.add_argument('--eval-seed', type=int, default=701)
+ap.add_argument('--eval-seed', type=int, default=None, help='drop seed (default: common.EVAL_SEED of POGO_EVAL_SET)')
 ap.add_argument('--eval-goals', type=int, default=8)
 ap.add_argument('--seed', type=int, default=9001)
 ap.add_argument('--fit-samples', type=int, default=0, help='GPS-style fitted local dynamics (the baseline of '
@@ -67,6 +67,8 @@ ap.add_argument('--mode-accept', type=int, default=0, help='1: mode-consistent a
                 'signature (event sequence: real_pogo.signature) changed TOPOLOGICALLY from the last kept trial at that goal '
                 'rolls the robot back and halves its cap, as a new fall does: the kept iterates stay in one mode cell')
 ap.add_argument('--record', default='', help='save every training trial (x, goal, robot, it) to this npz')
+ap.add_argument('--eval-at', type=int, nargs='*', default=[], help='also evaluate after these iterations (the budget '
+                'curve along one run) -> summary_it<k>.json')
 ap.add_argument('--gpu', default=None)
 a = ap.parse_args()
 if a.gpu is not None:
@@ -82,7 +84,7 @@ import real_pogo as rp                           # noqa: E402
 
 ROBOTS = a.robots or rp.DEFAULT_ROBOTS
 GOALS = np.array(a.goals).reshape(-1, 2) if a.goals else C.TRAIN_GOALS
-EVAL_GOALS = C.test_goals(a.eval_goals)
+EVAL_GOALS = C.eval_goals(a.eval_goals)
 
 
 class GroupPolicy:
@@ -119,7 +121,7 @@ def main():
     os.makedirs(a.out, exist_ok=True)
     json.dump(vars(a), open(os.path.join(a.out, 'args.json'), 'w'), indent=1)
     t0 = time.time()
-    summary = dict(args=vars(a), goals_eval=EVAL_GOALS.tolist(), goals_train=GOALS.tolist())
+    summary = dict(args=vars(a), eval_set=C.EVAL_SET, goals_eval=EVAL_GOALS.tolist(), goals_train=GOALS.tolist())
     base = policies.load_any(a.policy)
     if a.iters == 0 or not isinstance(base, policies.MLPPolicy):
         assert a.iters == 0, 'only MLP policies can be adapted'
@@ -204,6 +206,7 @@ def main():
     data = {r: [] for r in ROBOTS}
     trials = {r: [] for r in ROBOTS}
     rollbacks = {r: [] for r in ROBOTS}
+    realize = {r: [] for r in ROBOTS}
     pos = {r: [] for r in ROBOTS}
     pending = {r: {} for r in ROBOTS}          # goal -> (valid mask, e, de) of the last kept trial
     last_sig = {r: {} for r in ROBOTS}         # goal -> mode signature of the last kept trial
@@ -303,11 +306,31 @@ def main():
                 b = jnp.asarray(rs.integers(0, len(O), min(2048, len(O))))
                 ba = jnp.asarray(rs.integers(0, len(O_anchor), min(2048, len(O_anchor))))
                 ps, st, l = fit_step(ps, st, O_[b], Y_[b], W_[b], Oa_[ba], Ya_[ba], wa)
+            # how much of this iteration's GN step the refit realized on its own trials (1 = all of it)
+            new = [d for d in data[r] if d['it'] == it]
+            if new:
+                On = jnp.asarray(np.concatenate([d['obs'] for d in new]))
+                Yn = np.concatenate([d['y'] for d in new])
+                m0, m1 = np.asarray(pj.mlp(params[r], On)), np.asarray(pj.mlp(ps, On))
+                tgt = Yn - m0
+                realized = float(np.sum((m1 - m0) * tgt) / max(np.sum(tgt ** 2), 1e-12))
+                fit_res = float(np.sqrt(np.mean((m1 - Yn) ** 2)) / max(np.sqrt(np.mean(tgt ** 2)), 1e-12))
+                realize[r].append(dict(it=it, realized=realized, residual=fit_res))
             if np.isfinite(float(l)) and all(np.isfinite(np.asarray(W)).all() for W, b in ps):
                 params[r] = ps
             print(json.dumps(dict(it=it, robot=r, J=round(float(Jm.mean()), 3), falls=len(fell), loss=float(l),
+                                  realized=realize[r][-1]['realized'] if realize[r] and realize[r][-1]['it'] == it else None,
                                   cos=[round(q['cos'], 2) for q in pos[r] if q['it'] == it], t=round(time.time() - t0, 1))),
                   flush=True)
+        if it + 1 in a.eval_at and it + 1 < a.iters:
+            evk, runsk = evaluate({r: [(np.asarray(W), np.asarray(b)) for W, b in params[r]] for r in ROBOTS})
+            json.dump(dict(summary, eval=evk, runs=runsk, real_trials=dict(n_trials), it=it + 1, seconds=time.time() - t0),
+                      open(os.path.join(a.out, f'summary_it{it + 1}.json'), 'w'), indent=1)
+            print(json.dumps(dict(eval_at=it + 1, success={r: round(v['success'], 3) for r, v in evk.items()})), flush=True)
+            os.makedirs(os.path.join(a.out, f'it{it + 1}'), exist_ok=True)
+            for r in ROBOTS:
+                C.save_policy(os.path.join(a.out, f'it{it + 1}', f'{r}_policy.npz'),
+                              [(np.asarray(W), np.asarray(b)) for W, b in params[r]], kind='mlp')
     pols = {r: [(np.asarray(W), np.asarray(b)) for W, b in params[r]] for r in ROBOTS}
     for r in ROBOTS:
         C.save_policy(os.path.join(a.out, f'{r}_policy.npz'), pols[r], kind='mlp')
@@ -321,7 +344,7 @@ def main():
                                      piece=float(np.mean([c['piece_change'] for c in allc])),
                                      t_margin_median=float(np.median([c['t_margin'] for c in allc])))
         print(json.dumps(dict(mode_rates=summary['mode_rates'])), flush=True)
-    summary.update(eval=ev, runs=runs, real_trials=n_trials, trials=trials, positivity=pos, rollbacks=rollbacks,
+    summary.update(eval=ev, runs=runs, real_trials=n_trials, trials=trials, positivity=pos, rollbacks=rollbacks, realize=realize,
                    seconds=time.time() - t0)
     write(summary)
     for r in ROBOTS:

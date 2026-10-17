@@ -134,7 +134,7 @@ Consecutive trials of a robot at the same goal, compared on their mode signature
 |---|---|---|---|
 | pogo | **0 %** (nominal, DR; 108 pairs each) | 96–98 % | median event margin 1–3 % of a 10 ms period. With a whole-sequence comparison, 27 % (nominal) looked like crossings; all of it was hops leaving the 3-s window. Mode-consistent acceptance with that naive definition took the nominal arm from 80 % to 0 %; with the prefix definition it never fires. |
 | quadruped | push-off 61–65 %, landing 47–57 %, fall flips 7–11 % | 94–98 % | from the saved jumps (`src/ilc_mjx/scripts/mode_signatures.py`; contacts debounced at 3 ticks). 80–88 % of jumps touch down before the landing sample N. Torque saturation in 11 % of push-off samples. |
-| car | tire regimes 53 % | 100 % (actuator clips) | from re-flown, recorded arms (`src/ilc_f1tenth/ilc2real/mode_signatures.py`). Steering at ±0.34 rad 51 % of the time, toggling ~46× per 2-lap trial. Axles slide 78–86 % of the time. |
+| car | tire regimes 21–53 % (headline ladder arm 21 %, 14 pairs; plain 24-lap arms 53 %) | 100 % (actuator clips) | from re-flown, recorded arms (`src/ilc_f1tenth/ilc2real/mode_signatures.py`). Steering at ±0.34 rad 51 % of the time, toggling ~46× per 2-lap trial. Axles slide 78–86 % of the time. |
 
 **Reading.**
 - The pogo stick is inside the theory: one mode cell, piecewise-smooth kinks.

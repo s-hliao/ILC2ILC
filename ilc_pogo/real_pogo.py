@@ -14,6 +14,7 @@ Robots (ROBOTS; 'ax:<key>=<value>' builds a single-axis robot on top of real_nom
 """
 import numpy as np
 
+import common as C
 from common import NOMINAL, NX, DT, features, errors, failed, substep, hop_metrics
 
 SUB_REAL = 100
@@ -124,10 +125,11 @@ def start_states(goals, pert, rs):
     return x0
 
 
-def evaluate(policies, goals, robots, runs=4, seconds=10.0, seed=701, pert=1.0):
+def evaluate(policies, goals, robots, runs=4, seconds=10.0, seed=None, pert=1.0):
     """policies: {robot: policy}; every robot flies every goal from `runs` perturbed drops (reserved seed), for
     `seconds` without a reset -> {robot: [per (goal, run) hop_metrics + goal]}."""
     T = int(round(seconds / DT))
+    seed = C.EVAL_SEED if seed is None else seed
     out = {}
     for r in robots:
         rs = np.random.default_rng(seed)

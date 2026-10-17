@@ -4,11 +4,14 @@
 # (started 0.45 m left of the path, then a constant 0.1 rad left at 3 A after the launch: away from the path) must stop on
 # the 0.5 m envelope ('wall') and brake.
 #   bash desk_test_runner.sh <car> <policy.npz> [vesc_msgs install setup.bash]
+#   DDS_ROLE=local bash desk_test_runner.sh ...     (the same over CycloneDDS, as the remote setup runs)
 set -e
 CAR=${1:-real_nom}; POL=${2:?policy npz}; VESC=${3:-/tmp/f1t_scratch/install/setup.bash}
 H=$(cd "$(dirname "$0")" && pwd); I=$H/../../ilc_f1tenth/ilc2real
 source /opt/ros/humble/setup.bash; source $VESC; source $I/env_tight.sh
-export ROS_DOMAIN_ID=77 ROS_LOCALHOST_ONLY=1
+export ROS_DOMAIN_ID=77
+if [ -n "$DDS_ROLE" ]; then source $H/dds_env.sh $DDS_ROLE; export ROS_DOMAIN_ID=77   # e.g. DDS_ROLE=local: CycloneDDS
+else export ROS_LOCALHOST_ONLY=1; fi
 S=/tmp/net_sess_$$; mkdir -p $S
 python3 - "$POL" "$S/zero.npz" <<'PY'
 import sys, numpy as np

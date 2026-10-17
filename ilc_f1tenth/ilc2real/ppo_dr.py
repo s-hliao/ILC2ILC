@@ -35,6 +35,18 @@ ap.add_argument('--lam', type=float, default=0.95)
 ap.add_argument('--clip', type=float, default=0.2)
 ap.add_argument('--hist', type=int, default=10)
 ap.add_argument('--adapt-iters', type=int, default=40)
+ap.add_argument('--reward', default='track', choices=('track', 'task'), help='the reward\'s error rows: track = '
+                'sim_jax.ERR_SCALE (the plan\'s full drift state: e_y, e_psi, vx, vy, r), task = consts.TASK_SCALE (e_y and '
+                'pace only: the objective of the headline network v3drBt; 2026-10-17: the track reward crashes every '
+                'full-state tracker, LQR included, on figfast_b25 of the multi-body cars)')
+ap.add_argument('--adapt-only', action='store_true', help='RMA: skip PPO; the teacher from --teacher, refit phase 2')
+ap.add_argument('--teacher', default=None, help='RMA --adapt-only: the teacher policy npz (copied into DIR)')
+ap.add_argument('--p2-onpolicy', type=int, default=0, help='RMA phase 2 on the STUDENT\'s rollouts pi(o, phi(h)) '
+                '(DAgger: iteration 0 flies the teacher), data aggregated over --p2-keep iterations')
+ap.add_argument('--p2-am', type=float, default=0.0, help='RMA phase 2: + w |pi(o, z_hat) - pi(o, z)|^2 (action matching)')
+ap.add_argument('--p2-dr', type=float, default=None, help='RMA phase 2 DR scale (default --dr)')
+ap.add_argument('--p2-keep', type=int, default=8)
+ap.add_argument('--p2-sub', type=int, default=4, help='phase 2 on-policy: keep every p2-sub-th period')
 ap.add_argument('--seed', type=int, default=0)
 ap.add_argument('--gpu', default=None)
 a = ap.parse_args()
@@ -50,6 +62,7 @@ import optax                                     # noqa: E402
 
 import bank                                      # noqa: E402
 import sim_jax as sj                             # noqa: E402
+from consts import TASK_SCALE                    # noqa: E402
 
 os.makedirs(a.out, exist_ok=True)
 json.dump(vars(a), open(os.path.join(a.out, 'args.json'), 'w'), indent=1)
@@ -117,8 +130,11 @@ def fly(params, x0, i0, pid, p, noise):
     return jax.tree_util.tree_map(lambda v: v[:, 0], out), z
 
 
+RW_SCALE = jnp.array(sj.ERR_SCALE if a.reward == 'track' else TASK_SCALE)
+
+
 def rewards(out):
-    e = out['err'] / jnp.array(sj.ERR_SCALE)
+    e = out['err'] / RW_SCALE
     r = 1.0 - 0.1 * jnp.minimum(jnp.sum(e ** 2, -1), 10.0)
     alive = ~out['failed']
     return r * alive, alive
@@ -165,7 +181,11 @@ def save(tag):
              **{f'cW{i}': np.asarray(W) for i, (W, b) in enumerate(cr)}, **{f'cb{i}': np.asarray(b) for i, (W, b) in enumerate(cr)})
 
 
-for it in range(a.iters):
+if a.adapt_only:
+    T_ = np.load(a.teacher)
+    kk = sorted(int(f[1:]) for f in T_.files if f[0] == 'W')
+    params['actor'] = [(jnp.array(T_[f'W{i}']), jnp.array(T_[f'b{i}'])) for i in kk]
+for it in range(0 if a.adapt_only else a.iters):
     x0, i0, pid = sample_lanes(a.lanes)
     key, kn, kp = jax.random.split(key, 3)
     p = sj.dr_params(kp, a.lanes, a.dr) if a.dr > 0 else sj.nominal_params(a.lanes)
@@ -203,33 +223,80 @@ if a.mode == 'rma':
     opt2 = optax.adam(3e-4)
     st2 = opt2.init(adapt)
 
+    actor = params['actor']
+    p2dr = a.dr if a.p2_dr is None else a.p2_dr
+
     @jax.jit
-    def adapt_step(ad, st, x, y):
-        l, g = jax.value_and_grad(lambda q: jnp.mean((sj.mlp(q, x) - y) ** 2))(ad)
+    def adapt_step(ad, st, x, y, o):
+        def loss(q):
+            zh = sj.mlp(q, x)
+            l = jnp.mean((zh - y) ** 2)
+            if a.p2_am > 0:
+                at = sj.mlp(actor, jnp.concatenate([o, y], -1))
+                ah = sj.mlp(actor, jnp.concatenate([o, zh], -1))
+                l = l + a.p2_am * jnp.mean(jnp.sum((ah - at) ** 2, -1))
+            return l
+        l, g = jax.value_and_grad(loss)(ad)
         u, st = opt2.update(g, st, ad)
         return optax.apply_updates(ad, u), st, l
 
     def histories(out):
-        f = jnp.concatenate([out['obs'][..., :8], out['a']], -1)            # (n, T, 10)
+        """(n, T, H*10): at period t the last H of [obs_t[:8], a_{t-1}] -- what the deployed buffer holds (real_car /
+        policy_runtime: hist.append(obs[:8], last_a)). Before 2026-10-17 this used a_t (one period ahead of deployment)."""
+        a_prev = jnp.concatenate([jnp.zeros_like(out['a'][:, :1]), out['a'][:, :-1]], 1)
+        f = jnp.concatenate([out['obs'][..., :8], a_prev], -1)              # (n, T, 10)
         f = jnp.pad(f, ((0, 0), (H - 1, 0), (0, 0)))
         idx = jnp.arange(a.T)[:, None] + jnp.arange(H)[None]
         return f[:, idx].reshape(f.shape[0], a.T, nh)
 
+    @jax.jit
+    def student_fly(ad, x0, i0, pid, p, teach):
+        """The deployed RMA loop in sim (real_car's buffer): z_hat = phi(last H of [obs[:8], a_prev]), a = pi(o, z_hat);
+        `teach` lanes use the true z (iteration 0)."""
+        z = zvec(p)
+
+        def run(x0, i0, q, pp, zz, tl):
+            def pol(o, ps):
+                buf, ap_ = ps
+                buf = jnp.concatenate([buf[1:], jnp.concatenate([o[:8], ap_])[None]], 0)
+                zh = sj.mlp(ad, buf.reshape(-1))
+                mu = sj.mlp(actor, jnp.concatenate([o, jnp.where(tl, zz, zh)]))
+                return mu, (buf, mu)
+            ps0 = (jnp.zeros((1, H, 10)), jnp.zeros((1, 2)))
+            return sj.rollout(P, pol, a.T, x0[None], i0[None], q[None], jax.tree_util.tree_map(lambda v: v[None], pp),
+                              None, pstate=ps0)
+        out = jax.vmap(run)(x0, i0, pid, p, z, teach)
+        return jax.tree_util.tree_map(lambda v: v[:, 0], out), z
+
+    buf = []
     for it in range(a.adapt_iters):
-        x0, i0, pid = sample_lanes(a.lanes // 2)
+        nl = a.lanes // 2
+        x0, i0, pid = sample_lanes(nl)
         key, kn, kp = jax.random.split(key, 3)
-        p = sj.dr_params(kp, a.lanes // 2, a.dr)
-        out, z = fly(params, x0, i0, pid, p, jnp.zeros((a.lanes // 2, a.T, 2)))
+        p = sj.dr_params(kp, nl, p2dr)
+        if a.p2_onpolicy:
+            out, z = student_fly(adapt, x0, i0, pid, p, jnp.full((nl,), it == 0))
+        else:
+            out, z = fly(params, x0, i0, pid, p, jnp.zeros((nl, a.T, 2)))
         SIM_LAPS += float(np.sum(np.asarray(out['progress']) / np.asarray(P.L)[np.asarray(pid)]))
-        X = histories(out).reshape(-1, nh)
-        Y = jnp.broadcast_to(z[:, None], (z.shape[0], a.T, NZ)).reshape(-1, NZ)
-        ok = (~out['failed']).reshape(-1)
-        X, Y = X[ok], Y[ok]
-        for s in range(200):
+        sel = jnp.arange(0, a.T, a.p2_sub if a.p2_onpolicy else 1)
+        X = histories(out)[:, sel].reshape(-1, nh)
+        O = out['obs'][:, sel].reshape(-1, out['obs'].shape[-1])
+        Y = jnp.broadcast_to(z[:, None], (z.shape[0], len(sel), NZ)).reshape(-1, NZ)
+        ok = jnp.asarray(np.where(~np.asarray(out['failed'][:, sel]).reshape(-1))[0])
+        if a.p2_onpolicy:
+            buf.append((X[ok], Y[ok], O[ok]))
+            buf = buf[-a.p2_keep:]
+            X, Y, O = [jnp.concatenate([b_[i] for b_ in buf]) for i in range(3)]
+        else:
+            X, Y, O = X[ok], Y[ok], O[ok]
+        for s_ in range(200):
             b = jnp.array(rng.integers(0, X.shape[0], 8192))
-            adapt, st2, l = adapt_step(adapt, st2, X[b], Y[b])
-        if it % 5 == 0:
-            log(event='adapt', it=it, loss=float(l), var=float(jnp.mean(jnp.var(Y, 0))))
+            adapt, st2, l = adapt_step(adapt, st2, X[b], Y[b], O[b])
+        if it % 5 == 0 or it == a.adapt_iters - 1:
+            log(event='adapt', it=it, loss=float(l), var=float(jnp.mean(jnp.var(Y, 0))),
+                fail=float(np.asarray(out['failed'][:, -1]).mean()),
+                ey=float(jnp.sqrt(jnp.mean(jnp.where(out['failed'], 0.0, out['err'][..., 0]) ** 2))))
     np.savez(os.path.join(a.out, 'rma_adapt.npz'), **{f'W{i}': np.asarray(W) for i, (W, b) in enumerate(adapt)},
              **{f'b{i}': np.asarray(b) for i, (W, b) in enumerate(adapt)}, hist=H)
 log(event='done')

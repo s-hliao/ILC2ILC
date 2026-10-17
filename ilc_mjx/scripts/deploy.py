@@ -115,6 +115,14 @@ ap.add_argument("--bold", type=float, default=0.0,
 ap.add_argument("--control", default="none", choices=("none", "random"),
                 help="causal control: random replaces every step by a random direction of the same rms (same loop, "
                      "safeguards, regression and anchor), so any gain left is the refit's, not the ILC's")
+ap.add_argument("--nbr-radius", type=float, default=0.0,
+                help="> 0 (m): NEIGHBOUR TARGETS -- each trial's measured landing error also steps every valid grid goal within "
+                     "this goal-space radius of its goal (same contact mode; never another training goal or a test goal), each "
+                     "through its OWN nominal-sim landing sensitivity (one GN step, the trial's safeguards and cap), the targets "
+                     "on the neighbour's sim trajectory: the update interpolates the correction by construction (assumption: "
+                     "the robot's error is systematic, the same at nearby goals)")
+ap.add_argument("--nbr-weight", type=float, default=0.5, help="neighbour targets' weight x exp(-(d / radius)^2)")
+ap.add_argument("--nbr-grid", type=float, default=0.025, help="the neighbours' grid step (m)")
 ap.add_argument("--reps", type=int, default=1,
                 help="jumps per goal per iteration (seeds): gn steps on their mean landing error and sensitivity, the "
                      "safeguards on their mean J, every jump a target (the noise floor: --iters 5 --reps 2 is 30 jumps)")
@@ -713,6 +721,28 @@ def run_robot(robot):
                               dyn=None if a.jac_dyn is None else env.dyn_arrays(np.tile(a.jac_dyn, (len(goals), 1))))
             An = sim["A"] * D[None, None, None, :] / D[None, None, :, None]
             Bn = sim["B"] / D[None, None, :, None]
+        nbr, nsim = {}, None
+        if a.nbr_radius > 0 and a.update == "gn":
+            TESTG = {(0.4875, 0.0), (0.6125, 0.0), (0.52, 0.12), (0.54, 0.14), (0.57, 0.11), (0.51, 0.17), (0.4875, 0.035),
+                     (0.6375, 0.09)}
+            md = lambda v: v[1] >= 0.01
+            pool = [tuple(np.round(p, 4)) for p in env.plane_grid(a.nbr_grid)]
+            trn = {tuple(np.round(gvec(g_), 4)) for g_ in a.goals}
+            NG = []
+            for g_ in a.goals:
+                v = gvec(g_)
+                nbr[g_] = []
+                for p in pool:
+                    dd = float(np.hypot(p[0] - v[0], p[1] - v[1]))
+                    if 0 < dd <= a.nbr_radius + 1e-9 and md(p) == md(v) and p not in trn and p not in TESTG:
+                        if p not in NG:
+                            NG.append(p)
+                        nbr[g_].append((NG.index(p), dd))
+            if NG:
+                nsim = env.rollout(w, env.references(np.array(NG)), jax.random.PRNGKey(7000 + it), stochastic=False, fd=True)
+                nAn = nsim["A"] * D[None, None, None, :] / D[None, None, :, None]
+                nBn = nsim["B"] / D[None, None, :, None]
+                nok = ~np.asarray(nsim["fell"]).astype(bool)
         if a.select == "fixed":
             sel = list(a.goals)
         else:
@@ -816,7 +846,7 @@ def run_robot(robot):
                 stalled = sat_bound or geo_bound
             if stalled:
                 frozen[g] = True                                   # no progress: stop stepping this goal
-                trials[:] = [t for t in trials if t["goal"] != g]
+                trials[:] = [t for t in trials if t["goal"] != g and t.get("src") != g]
             if frozen[g]:
                 if best[g] is not None and not any(t["goal"] == g for t in trials):
                     trials.append(dict(goal=g, it=it, obs=best[g][1], tgt=best[g][2]))
@@ -991,10 +1021,24 @@ def run_robot(robot):
                 for z_ in zs:
                     trials.append(dict(goal=g, it=it, obs=np.asarray(z_["obs"], float)[:Nc],
                                        tgt=np.clip((own(z_) - step) * mask, -0.999, 0.999)))
+                nb_txt = ""
+                if nsim is not None and nbr.get(g) and a.control == "none":
+                    for j, dd in nbr[g]:
+                        if not nok[j]:
+                            continue
+                        oj = np.asarray(nsim["obs"])[j][:Nc]
+                        Sj = landing_sensitivity(dict(obs=oj), w, j, nAn, nBn).reshape(3, -1)
+                        sj = gn_step(Sj, e3_land[:3]).reshape(Nc, 4) * scale[g]
+                        rj = np.sqrt((sj ** 2).sum() / mask.sum())
+                        sj *= min(1.0, a.step_rms / max(rj, 1e-12))
+                        base_j = np.asarray(actor_mean(w, jnp.asarray(oj, jnp.float32))) * mask
+                        trials.append(dict(goal=("nbr", j), src=g, it=it, obs=oj, w=a.nbr_weight * np.exp(-(dd / a.nbr_radius) ** 2),
+                                           tgt=np.clip((base_j - sj) * mask, -0.999, 0.999)))
+                    nb_txt = f", {len(nbr[g])} nbr"
                 e3 = e3_land
                 prev[g] = (e3.copy(), -step.copy(), J)                     # the change commanded: -step
                 line.append(f"g{gname(g)} J {J:.2f} e {e3[0] * 100:+.1f}/{e3[1] * 100:+.1f}cm {np.degrees(e3[2]):+.1f}deg "
-                            f"(gn rms {min(rms, a.abbeel_cap if a.abbeel else a.step_rms):.3f}, scale {scale[g]:.2f}{sat_txt}{clr_txt}{ab_txt}){sat_note}")
+                            f"(gn rms {min(rms, a.abbeel_cap if a.abbeel else a.step_rms):.3f}, scale {scale[g]:.2f}{sat_txt}{clr_txt}{ab_txt}{nb_txt}){sat_note}")
                 continue
             G = gradient(z, w, gi, An, Bn, g)
             d = G / max(np.linalg.norm(G), 1e-12)
@@ -1032,7 +1076,7 @@ def run_robot(robot):
         Aa = actor_mean(w, Oa)
         To = jnp.asarray(np.concatenate([t["obs"] for t in trials]), jnp.float32)
         Tt = jnp.asarray(np.concatenate([t["tgt"] for t in trials]), jnp.float32)
-        Tw = jnp.asarray(np.concatenate([np.full(Nc, a.age_decay ** (it - t["it"])) for t in trials]), jnp.float32)
+        Tw = jnp.asarray(np.concatenate([np.full(Nc, t.get("w", 1.0) * a.age_decay ** (it - t["it"])) for t in trials]), jnp.float32)
         Tm = jnp.asarray(np.tile(mask, (len(trials), 1)), jnp.float32)
 
         if a.reg_jac > 0:

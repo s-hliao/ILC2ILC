@@ -12,7 +12,7 @@ to match our method?
   --mode rma_oracle  start: the RMA teacher with the robot's TRUE z folded into its first-layer bias (the oracle
                      latent; then a plain observation->action network), and the teacher's critic
 At checkpoints (--checkpoints, real trials per robot) each robot's deterministic actor is evaluated on the reserved
-test goals (real_pogo.evaluate: 8 goals x 4 drops x 10 s, seed 701) ->
+test goals (real_pogo.evaluate: 8 goals x 4 drops x 10 s of the POGO_EVAL_SET set) ->
 runs/hw/match/{mode}_ep{N}/summary.json (+ <robot>_policy.npz, plain MLPs: policies.load_any).
 """
 import argparse
@@ -174,9 +174,9 @@ def update(ps, st, o, oc, act, logp_old, adv, ret, w):
 
 def checkpoint(n_done):
     t = time.time()
-    G = C.test_goals(8)
+    G = C.eval_goals(8)
     pols = {r: np_actor(r) for r in ROBOTS}
-    res = rp.evaluate(pols, G, ROBOTS, runs=a.eval_runs, seconds=a.eval_seconds, seed=701)
+    res = rp.evaluate(pols, G, ROBOTS, runs=a.eval_runs, seconds=a.eval_seconds)
     out = os.path.join(a.out, f'{NAME}_ep{n_done}')
     os.makedirs(out, exist_ok=True)
     for r in ROBOTS:

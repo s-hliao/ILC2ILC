@@ -191,23 +191,34 @@ A_OFF = jnp.array(cm.A_OFF)
 
 
 # ---------------------------------------------------------------------------------------------------------------
-def rollout(P, policy, T, x0, idx0, pid, p, noise=None, expert_mix=0.0):
+def rollout(P, policy, T, x0, idx0, pid, p, noise=None, expert_mix=0.0, pstate=None):
     """Fly T control periods on every lane. policy(obs) -> normalized action (or None: the expert flies).
     noise: (n, T, 2) normalized action offsets (exploration; a disturbance the ILC targets ignore).
     Returns dict of (n, T+1, .) states, (n, T, .) obs / mean actions / applied actions / errors, indices,
-    progress (m) and failure flags. A lane that fails (|e_y| > 0.6 m, heading error > 1.2 rad, vx < 0.3) holds."""
+    progress (m) and failure flags. A lane that fails (|e_y| > 0.6 m, heading error > 1.2 rad, vx < 0.3) holds.
+    pstate: a stateful policy's initial state (per lane, a pytree; e.g. RMA's history buffer): then policy(obs, ps)
+    -> (mu, ps_new), and the state rides in the scan carry."""
     n = x0.shape[0]
     if noise is None:
         noise = jnp.zeros((n, T, 2))
 
-    def lane(x0, i0, pid, p, nz):
+    stateful = pstate is not None
+    if not stateful:
+        pstate = jnp.zeros((n,))
+
+    def lane(x0, i0, pid, p, nz, ps0):
         def body(c, nz_t):
-            x, i, prog, failed, buf = c
+            x, i, prog, failed, buf, ps = c
             i_new = project(P, pid, i, x[:2])
             s_off_old = 0.0
             dprog = jnp.mod((i_new - i) + P.M[pid] // 2, P.M[pid]) - P.M[pid] // 2
             obs, err = features(P, pid, i_new, x)
-            mu = policy(obs) if policy is not None else (expert_action(P, pid, i_new, x) - A_OFF) / A_SCALE
+            if policy is None:
+                mu = (expert_action(P, pid, i_new, x) - A_OFF) / A_SCALE
+            elif stateful:
+                mu, ps = policy(obs, ps)
+            else:
+                mu = policy(obs)
             a = mu + nz_t
             a_phys = a * A_SCALE + A_OFF
             buf_new = jnp.stack([a_phys, buf[0]])                 # [now, previous]
@@ -218,14 +229,14 @@ def rollout(P, policy, T, x0, idx0, pid, p, noise=None, expert_mix=0.0):
             bad = (jnp.abs(err[0]) > FAIL_EY) | (jnp.abs(err[1]) > FAIL_EPSI) | (x[3] < 0.3) | ~jnp.all(jnp.isfinite(x_new))
             failed_new = failed | bad
             x_out = jnp.where(failed_new, x, x_new)
-            c_new = (x_out, i_new, prog + dprog * P.ds[pid], failed_new, buf_new)
+            c_new = (x_out, i_new, prog + dprog * P.ds[pid], failed_new, buf_new, ps)
             return c_new, (x, obs, mu, a, err, i_new, failed_new, jnp.stack([d_cmd, i_cmd]))
-        c0 = (x0, i0, 0.0, False, jnp.zeros((2, 2)))
+        c0 = (x0, i0, 0.0, False, jnp.zeros((2, 2)), ps0)
         cT, out = jax.lax.scan(body, c0, nz)
         xs, obs, mu, a, err, idx, failed, applied = out
         return dict(x=jnp.concatenate([xs, cT[0][None]]), obs=obs, mu=mu, a=a, err=err, idx=idx, failed=failed,
                     applied=applied, progress=cT[2], x_end=cT[0], idx_end=cT[1], failed_end=cT[3])
-    return jax.vmap(lane)(x0, idx0, pid, p, noise)
+    return jax.vmap(lane)(x0, idx0, pid, p, noise, pstate)
 
 
 def start_states(P, key, pid, s0, pert=0.0):

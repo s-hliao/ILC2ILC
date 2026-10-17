@@ -3,11 +3,13 @@
 # optitrack_node (NatNet pose -> /optitrack/odom) and the robot_localization EKF (config/mocap.yaml) -> /odometry/filtered
 # in the cg frame.
 #   ros2 launch ilc_f1tenth_hw opti_launch.py server_ip:=<Motive PC> client_ip:=<this car> mocap_topic:=/f1tenth/pose
+# (+ drive_relay.py, the brake watchdog, unless drive_relay:=false). Remote running: source scripts/dds_env.sh car first.
 import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -24,6 +26,9 @@ def generate_launch_description():
                               description='NatNet rigid-body pose topic: /<rigid body name in Motive>/pose'),
         DeclareLaunchArgument('yaw_offset', default_value='-1.5707963267948966',
                               description='mocap -> ROS yaw offset (rad), found per mocap space'),
+        DeclareLaunchArgument('drive_relay', default_value='true',
+                              description='also run drive_relay.py (/mpc/drive -> /drive + the brake watchdog) ON THE CAR: with '
+                                          'the network on the laptop (remote running) the watchdog must sit next to the VESC'),
     ]
     natnet = IncludeLaunchDescription(PythonLaunchDescriptionSource(natnet_launch), launch_arguments={
         'serverIP': LaunchConfiguration('server_ip'), 'clientIP': LaunchConfiguration('client_ip'),
@@ -35,4 +40,6 @@ def generate_launch_description():
     optitrack = Node(package='ilc_f1tenth_hw', executable='optitrack_node.py', name='optitrack_subscriber',
                      output='screen', parameters=[{'mocap_topic': LaunchConfiguration('mocap_topic'),
                                                    'yaw_offset': LaunchConfiguration('yaw_offset')}])
-    return LaunchDescription(args + [natnet, f1tenth_stack, zupt, ekf, optitrack])
+    relay = Node(package='ilc_f1tenth_hw', executable='drive_relay.py', name='drive_relay', output='screen',
+                 condition=IfCondition(LaunchConfiguration('drive_relay')))
+    return LaunchDescription(args + [natnet, f1tenth_stack, zupt, ekf, optitrack, relay])

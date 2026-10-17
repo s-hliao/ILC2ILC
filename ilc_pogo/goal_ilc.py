@@ -7,7 +7,7 @@ closed-loop Gauss-Newton ILC step as ours -- the NOMINAL model's Jacobians at th
 controller's own feedback in the closed loop (pogo_jax.lane_jacobians(feedback='expert'), pogo_jax.gn_lane). One
 trial per goal per iteration, always from the same clean drop at the goal's apex (pert 0).
 After each budget (trials per goal) one arm dir DIR_PREFIX_b{N}: the evaluation flies the TRAINED goals only (a
-feedforward exists only for them), 4 perturbed drops each (reserved seed 701, ff time-indexed from t = 0), 10 s.
+feedforward exists only for them), 4 perturbed drops each (common.EVAL_SEED, ff time-indexed from t = 0), 10 s.
 Also stored: the clean-start evaluation (the drop it was trained from).
     python goal_ilc.py --out runs/hw/goalilc --budgets 1 2 4 8 --gpu 3
 """
@@ -27,7 +27,7 @@ ap.add_argument('--beta', type=float, default=0.5)
 ap.add_argument('--delta', type=float, default=0.02)
 ap.add_argument('--cap', type=float, default=0.1)
 ap.add_argument('--eval-runs', type=int, default=4)
-ap.add_argument('--eval-seed', type=int, default=701)
+ap.add_argument('--eval-seed', type=int, default=None, help='drop seed (default: common.EVAL_SEED of POGO_EVAL_SET)')
 ap.add_argument('--gpu', default=None)
 a = ap.parse_args()
 if a.gpu is not None:
@@ -67,10 +67,10 @@ def robot_param_arrays(keys):
 
 
 def evaluate(ff):
-    """Every robot x trained goal: eval_runs perturbed drops (seed 701) + the clean drop, the goal's ff from t = 0."""
+    """Every robot x trained goal: eval_runs perturbed drops (common.EVAL_SEED) + the clean drop, the goal's ff from t = 0."""
     out, clean = {}, {}
     rows = [(r, gi) for r in ROBOTS for gi in range(len(GOALS))]
-    rs = np.random.default_rng(a.eval_seed)
+    rs = np.random.default_rng(C.EVAL_SEED if a.eval_seed is None else a.eval_seed)
     G = np.repeat(GOALS, a.eval_runs, 0)
     x0g = rp.start_states(G, 1.0, rs)                       # the same drops for every robot (as real_pogo.evaluate)
     keys, goals, x0, ffs = [], [], [], []

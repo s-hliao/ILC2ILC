@@ -39,6 +39,18 @@ ap.add_argument('--hidden', type=int, default=128)
 ap.add_argument('--hist', type=int, default=50, help='RMA history length (control periods; 50 = ~one hop)')
 ap.add_argument('--adapt-iters', type=int, default=60)
 ap.add_argument('--adapt-only', action='store_true', help='RMA: skip PPO, load the teacher from DIR/policy_final.npz and refit phase 2')
+ap.add_argument('--teacher', default=None, help='RMA --adapt-only: the teacher policy npz (default DIR/policy_final.npz); '
+                'copied into DIR')
+ap.add_argument('--p2-onpolicy', type=int, default=0, help='RMA phase 2 on the STUDENT\'s rollouts pi(o, phi(h)) '
+                '(DAgger: iteration 0 flies the teacher, then the student; data aggregated over --p2-keep iterations)')
+ap.add_argument('--p2-am', type=float, default=0.0, help='RMA phase 2 action-matching weight: + w |pi(o, z_hat) - '
+                'pi(o, z)|^2 through the frozen actor (0: z-MSE only)')
+ap.add_argument('--p2-dr', type=float, default=None, help='RMA phase 2 DR scale (default --dr)')
+ap.add_argument('--p2-steps', type=int, default=200, help='RMA phase 2 gradient steps per iteration')
+ap.add_argument('--p2-keep', type=int, default=8, help='RMA phase 2 on-policy: iterations kept in the buffer')
+ap.add_argument('--p2-sub', type=int, default=6, help='RMA phase 2 on-policy: keep every p2-sub-th period')
+ap.add_argument('--z-noise', type=float, default=0.0, help='RMA teacher: gaussian noise on z during PPO (robustness '
+                'to the estimate)')
 ap.add_argument('--seed', type=int, default=0)
 ap.add_argument('--gpu', default=None)
 a = ap.parse_args()
@@ -101,8 +113,9 @@ def sample_lanes(n, key):
 
 
 @jax.jit
-def fly(params, x0, G, p, noise):
+def fly(params, x0, G, p, noise, zn=None):
     z = zvec(p)
+    z = z if zn is None else z + zn
 
     def run(x0, gg, pp, nz, zz):
         pol = (lambda o: pj.mlp(params['actor'], jnp.concatenate([o, zz]))) if a.mode == 'rma' else \
@@ -169,13 +182,17 @@ def save(tag):
 
 
 if a.adapt_only:
-    params['actor'] = [(jnp.array(W), jnp.array(b)) for W, b in C.load_policy(os.path.join(a.out, 'policy_final.npz'))]
+    tp = a.teacher or os.path.join(a.out, 'policy_final.npz')
+    params['actor'] = [(jnp.array(W), jnp.array(b)) for W, b in C.load_policy(tp)]
+    if a.teacher:
+        save('final')
 for it in range(0 if a.adapt_only else a.iters):
     key, kl, kn, kp = jax.random.split(key, 4)
     x0, G = sample_lanes(a.lanes, kl)
     p = pj.dr_params(kp, a.lanes, a.dr) if a.dr > 0 else pj.nominal_params(a.lanes)
     noise = jax.random.normal(kn, (a.lanes, a.T, 2)) * jnp.exp(params['log_std'])
-    out, z = fly(params, x0, G, p, noise)
+    zn = a.z_noise * jax.random.normal(jax.random.fold_in(kn, 1), (a.lanes, NZ)) if a.mode == 'rma' and a.z_noise > 0 else None
+    out, z = fly(params, x0, G, p, noise, zn)
     SIM_SECONDS += a.lanes * a.T * C.DT
     r, alive = rewards(out, G, p)
     o_in = jnp.concatenate([out['obs'], jnp.broadcast_to(z[:, None], out['obs'].shape[:2] + (NZ,))], -1) \
@@ -227,21 +244,84 @@ if a.mode == 'rma':
         return f[:, idx].reshape(f.shape[0], a.T, H * nf)
 
     nl = a.lanes // 2
+    p2dr = a.dr if a.p2_dr is None else a.p2_dr
+    actor = params['actor']
+
+    @jax.jit
+    def adapt_loss_step(ad, st, x, y, o):
+        def loss(q):
+            zh = pj.mlp(q, x)
+            l = jnp.mean((zh - y) ** 2)
+            if a.p2_am > 0:
+                at = pj.mlp(actor, jnp.concatenate([o, y], -1))
+                ah = pj.mlp(actor, jnp.concatenate([o, zh], -1))
+                l = l + a.p2_am * jnp.mean(jnp.sum((ah - at) ** 2, -1))
+            return l
+        l, g = jax.value_and_grad(loss)(ad)
+        u, st = opt2.update(g, st, ad)
+        return optax.apply_updates(ad, u), st, l
+
+    @jax.jit
+    def student_fly(ad, x0, G, p, teach):
+        """The deployed RMA loop in sim: history buffer of (obs_t, a_{t-1}) as rma_np.RMAPolicy, z_hat = phi(buffer),
+        a = pi(o, z_hat); `teach` lanes use the true z instead (iteration 0)."""
+        z = zvec(p)
+
+        def lane(x0, gg, pp, zz, tl):
+            def body(c, t):
+                x, f, buf, ap_ = c
+                o = pj.obs(x, gg)
+                buf = jnp.concatenate([buf[1:], jnp.concatenate([o, ap_])[None]], 0)
+                zh = pj.mlp(ad, buf.reshape(-1))
+                zu = jnp.where(tl, zz, zh)
+                act = pj.mlp(actor, jnp.concatenate([o, zu]))
+                xn = pj.step(x, act, pp)
+                fn = f | C.failed(xn, jnp)
+                xn = jnp.where(fn, x, xn)
+                return (xn, fn, buf, act), dict(h=buf.reshape(-1), o=o, f=f, zh=zh, err=pj.err(x, gg))
+            c0 = (x0, jnp.array(False), jnp.zeros((H, nf)), jnp.zeros(2))
+            (xe, fe, _, _), out = jax.lax.scan(body, c0, jnp.arange(a.T))
+            out['failed_end'] = fe
+            return out
+        out = jax.vmap(lane)(x0, G, p, z, teach)
+        return out, z
+
+    buf = []
     for it in range(a.adapt_iters):
         key, kl, kp = jax.random.split(key, 3)
         x0, G = sample_lanes(nl, kl)
-        p = pj.dr_params(kp, nl, a.dr)
-        out, z = fly(params, x0, G, p, jnp.zeros((nl, a.T, 2)))
+        p = pj.dr_params(kp, nl, p2dr)
+        if a.p2_onpolicy:
+            teach = jnp.full((nl,), it == 0)
+            out, z = student_fly(adapt, x0, G, p, teach)
+            sel = jnp.arange(0, a.T, a.p2_sub)                       # the buffer stays on the device
+            X = out['h'][:, sel].reshape(-1, H * nf)
+            O = out['o'][:, sel].reshape(-1, C.NOBS)
+            Y = jnp.broadcast_to(z[:, None], (nl, len(sel), NZ)).reshape(-1, NZ)
+            ok = jnp.asarray(np.where(~np.asarray(out['f'][:, sel]).reshape(-1))[0])
+            buf.append((X[ok], Y[ok], O[ok]))
+            buf = buf[-a.p2_keep:]
+            Xa, Ya, Oa = [jnp.concatenate([b_[i] for b_ in buf]) for i in range(3)]
+            fl = np.asarray(out['failed_end'])
+            zmse = float(jnp.mean((out['zh'] - z[:, None]) ** 2))
+            e = np.asarray(out['err']); act = (np.abs(e).sum(-1) > 0) & ~np.asarray(out['f'])
+            apex = float(np.sqrt(np.mean(e[..., 0][act] ** 2))) if act.any() else None
+            dv = float(np.sqrt(np.mean(e[..., 1][act] ** 2))) if act.any() else None
+        else:
+            out, z = fly(params, x0, G, p, jnp.zeros((nl, a.T, 2)))
+            Xa = histories(out['obs'], out['a']).reshape(-1, H * nf)
+            Ya = jnp.broadcast_to(z[:, None], (nl, a.T, NZ)).reshape(-1, NZ)
+            Oa = out['obs'].reshape(-1, C.NOBS)
+            ok = np.asarray(~out['failed']).reshape(-1)
+            Xa, Ya, Oa = Xa[ok], Ya[ok], Oa[ok]
+            fl, zmse, apex, dv = np.asarray(out['failed_end']), None, None, None
         SIM_SECONDS += nl * a.T * C.DT
-        X = histories(out['obs'], out['a']).reshape(-1, H * nf)
-        Y = jnp.broadcast_to(z[:, None], (nl, a.T, NZ)).reshape(-1, NZ)
-        ok = np.asarray(~out['failed']).reshape(-1)
-        X, Y = X[ok], Y[ok]
-        for s in range(200):
-            b = jnp.array(rng.integers(0, X.shape[0], 8192))
-            adapt, st2, l = adapt_step(adapt, st2, X[b], Y[b])
+        for s_ in range(a.p2_steps):
+            b = jnp.array(rng.integers(0, Xa.shape[0], 8192))
+            adapt, st2, l = adapt_loss_step(adapt, st2, Xa[b], Ya[b], Oa[b])
         if it % 5 == 0 or it == a.adapt_iters - 1:
-            log(event='adapt', it=it, loss=float(l), var=float(jnp.mean(jnp.var(Y, 0))))
+            log(event='adapt', it=it, loss=float(l), var=float(jnp.mean(jnp.var(Ya, 0))), fail=float(fl.mean()),
+                zmse_student=zmse, apex_student=apex, dv_student=dv, n=int(Xa.shape[0]))
     np.savez(os.path.join(a.out, 'rma_adapt.npz'), **{f'W{i}': np.asarray(W) for i, (W, b) in enumerate(adapt)},
              **{f'b{i}': np.asarray(b) for i, (W, b) in enumerate(adapt)}, hist=H)
 log(event='done', seconds=round(time.time() - T0, 1))

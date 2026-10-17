@@ -78,6 +78,48 @@ ros2 run ilc_f1tenth_hw drive_relay.py                # on the car
 - **Track frame.** ILC2Real's tracks are LLA's `mocap_*` tracks, in this mocap frame. The tight tracks
   (`make_tight_tracks.py`) are shortened about their own centre, so they sit inside the same space.
 
+## Remote running (CycloneDDS, as LLA-MPC-f1tenth `llampc/utils/cyclonedds{car,laptop}.xml`)
+
+The car runs the stack, state estimation and the brake watchdog. The laptop (the GPU machine) runs the network
+(`net_runner.py`) and the hardware stage. They talk over ROS 2 on CycloneDDS with unicast discovery (multicast off: the
+lab WiFi drops it).
+
+| file | |
+|---|---|
+| `config/cyclonedds/cyclonedds_car.xml` | car side: interface 172.26.112.71 (the car, as `opti_launch.py`'s `client_ip`), peers car + laptop 172.26.100.199 (LLA's pair) |
+| `config/cyclonedds/cyclonedds_laptop.xml` | laptop side: interface 172.26.100.199, the same peers |
+| `config/cyclonedds/cyclonedds_local.xml` | one machine, loopback (desk tests) |
+| `scripts/dds_env.sh` | `source` it: `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp`, `CYCLONEDDS_URI`, `ROS_DOMAIN_ID` (default 0, same on both), restarts the ros2 daemon; with `--car-ip A --laptop-ip B [--peer C]` it writes `~/.ros/cyclonedds_<role>.xml` for other addresses and warns if this machine does not own its interface address |
+
+Both machines need `ros-humble-rmw-cyclonedds-cpp`. It is installed in `docker/f1t/Dockerfile` (and in the running `f1t`
+container). On the car: `sudo apt install ros-humble-rmw-cyclonedds-cpp`.
+
+```bash
+# car
+source scripts/dds_env.sh car            # or: car --car-ip <car> --laptop-ip <laptop>
+ros2 launch ilc_f1tenth_hw opti_launch.py server_ip:=<Motive PC> client_ip:=<car>   # includes drive_relay.py (the watchdog)
+# laptop
+source scripts/dds_env.sh laptop         # or: laptop --car-ip <car> --laptop-ip <laptop>
+ros2 topic hz /odometry/filtered         # discovery check: the car's EKF at its rate
+source ../ilc_f1tenth/ilc2real/env_tight.sh
+ros2 run ilc_f1tenth_hw net_runner.py --ros-args -p session_dir:=$HOME/car_session
+python ../ilc_f1tenth/ilc2real/hw_stage.py --backend manual --session-dir $HOME/car_session ...   # no shared mount needed
+```
+
+- **The watchdog stays on the car** (`opti_launch.py drive_relay:=true`, the default). If the WiFi drops, the car stops
+  receiving `/mpc/drive`. After 0.12 s, `drive_relay.py` brakes on the car side.
+- **On the laptop, `net_runner.py` stops a trial as `stale`** when the EKF or VESC state is older than 0.1 s.
+- **The network then sees the WiFi delay** (one way, typically 2–10 ms) on top of the EKF's.
+  - The simulated real cars were trained and scored with an actuation delay (`real_car.py`).
+  - Check the measured round trip before the first trial: `ros2 topic delay /odometry/filtered` on the laptop, with
+    synchronized clocks (chrony).
+  - If it is regularly > 15 ms, run `net_runner.py` on the car instead. The session dir then needs the shared mount, as
+    in the hardware-stage section above.
+- **Desk test over CycloneDDS:** `DDS_ROLE=local bash scripts/desk_test_runner.sh real_nom <policy>`. Result (2026-10-17):
+  - trial A: 2.05 laps, RMS e_y 4.1 cm, peak 9.3 cm, identical to the FastDDS run;
+  - trial B (the network steering away): stopped and braking at a peak e_y of 0.48 m. The heading check (`spin`, 1.2 rad)
+    fired just before the 0.5 m wall check.
+
 ## The interface the ILC2Real network uses (as LLA-MPC's `llampc_fiala_fixed.py`)
 
 The network's state is the Fiala car's `[X, Y, psi, vx, vy, r, omega_w, I, delta]`, at 40 Hz (`DT = 0.025`, as LLA-MPC).

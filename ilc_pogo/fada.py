@@ -24,7 +24,17 @@ import time
 
 ap = argparse.ArgumentParser()
 ap.add_argument('--out', default='runs/hw/fada', help='arm dirs <out>_zs and <out>_hw<6 iters>')
-ap.add_argument('--init', default='runs/dbg_nom/policy_bc.npz', help='the source policy (planner targets, IDM init)')
+ap.add_argument('--init', default='runs/ppo_dr_s0/policy_final.npz', help='the source policy (planner targets, IDM init); '
+                'FADA\'s recipe: a DR-trained source (PPO+DR)')
+ap.add_argument('--target', default='hstep', choices=('hstep', 'apex'), help='the planner / IDM target: the obs deviation '
+                'H periods ahead (hstep), or the [apex error, speed error] at the first flight apex after the next stance '
+                '(apex: the keyframe every action until then can move -- the pogo\'s actions act only at touchdown / in '
+                'stance, so most a_t do not affect d_{t+H})')
+ap.add_argument('--real-noise', type=float, default=0.0, help='OU action noise (rms) on the real training trials: '
+                'excitation for the hindsight relabelling (same trials, same seconds)')
+ap.add_argument('--idm-clean', type=int, default=0, help='also train the IDM on the noise-free source rollouts (the '
+                'states and targets it is queried at; the noisy ones give coverage)')
+ap.add_argument('--sim-check', type=int, default=1, help='score IDM(o, P(o)) against its source in DR sim (128 lanes, 10 s)')
 ap.add_argument('--robots', nargs='+', default=None)
 ap.add_argument('--dims', type=int, nargs='+', default=[0, 1, 2, 4, 5])
 ap.add_argument('--H', type=int, default=4, help='the deviation H control periods ahead (40 ms)')
@@ -60,7 +70,7 @@ import pogo_jax as pj                            # noqa: E402
 import real_pogo as rp                           # noqa: E402
 
 ROBOTS = a.robots or rp.DEFAULT_ROBOTS
-DIMS = np.array(a.dims)
+DIMS = np.array(a.dims) if a.target == 'hstep' else np.array([-1, -1])     # apex: [apex error, speed error]
 ND, H = len(DIMS), a.H
 
 
@@ -74,9 +84,31 @@ def ou_noise(rng, n, T, rms, rho=0.9):
 
 
 def pairs(obs, act, alive):
-    """(o_t, d_{t+H}, a_t) with both ends before a fall."""
-    ok = alive[:, :-H] & alive[:, H:]
-    return obs[:, :-H][ok], obs[:, H:][..., DIMS][ok], act[:, :-H][ok]
+    """(o_t, d, a_t) with both ends before a fall; d = the obs deviation H periods ahead (hstep) or the apex keyframe."""
+    act = np.clip(act, -1.0, 1.0)                    # the action as applied (the model clips)
+    if a.target == 'hstep':
+        ok = alive[:, :-H] & alive[:, H:]
+        return obs[:, :-H][ok], obs[:, H:][..., DIMS][ok], act[:, :-H][ok]
+    O, D, A = [], [], []
+    n, T = obs.shape[:2]
+    for i in range(n):
+        st, vz = obs[i, :, 3] > 0.5, obs[i, :, 2]
+        apx = np.where(~st[1:] & (vz[:-1] > 0) & (vz[1:] <= 0))[0] + 1          # flight apexes
+        sts = np.where(st)[0]
+        if len(apx) == 0 or len(sts) == 0:
+            continue
+        t = np.arange(T)
+        s_next = sts[np.minimum(np.searchsorted(sts, t), len(sts) - 1)]         # the next stance period (>= t)
+        has_s = np.searchsorted(sts, t) < len(sts)
+        k = np.searchsorted(apx, s_next, side='right')                          # the first apex after it
+        ok = has_s & (k < len(apx))
+        ta = apx[np.minimum(k, len(apx) - 1)]
+        ok &= alive[i] & alive[i, ta]
+        d = np.stack([obs[i, ta, 0] + 0.5 * obs[i, ta, 2] ** 2 / C.GRAV, obs[i, ta, 1]], -1)
+        O.append(obs[i][ok]); D.append(d[ok]); A.append(act[i][ok])
+    if not O:
+        return np.zeros((0, obs.shape[-1])), np.zeros((0, 2)), np.zeros((0, 2))
+    return np.concatenate(O), np.concatenate(D), np.concatenate(A)
 
 
 def fit(params, X, Y, steps, lr, rng, mb=8192):
@@ -95,6 +127,23 @@ def fit(params, X, Y, steps, lr, rng, mb=8192):
     return params, float(l)
 
 
+def sim_check(src, idm, planner, rng, n=128, T=1000):
+    """IDM(o, P(o)) vs its source in DR sim: success / apex / speed (common.hop_metrics), the same lanes."""
+    G = C.GOAL_LO + (C.GOAL_HI - C.GOAL_LO) * rng.uniform(size=(n, 2))
+    k1, k2 = jax.random.split(jax.random.PRNGKey(123))
+    x0 = pj.start_states(k1, G, rng.uniform(0, 1, n))
+    p = pj.dr_params(k2, n, a.dr)
+    out = {}
+    for nm, fn in (('source', lambda o: pj.mlp(src, o)),
+                   ('fada', lambda o: pj.mlp(idm, jnp.concatenate([o, pj.mlp(planner, o)], -1)))):
+        r = jax.jit(lambda x0, g, p: pj.rollout(fn, T, x0, g, p))(x0, jnp.asarray(G), p)
+        ms = [C.hop_metrics(np.asarray(r['x'][i]), G[i], bool(r['failed_end'][i])) for i in range(n)]
+        out[nm] = dict(success=float(np.mean([m['success'] for m in ms])), fail=float(np.mean([m['failed'] for m in ms])),
+                       apex=float(np.nanmean([m['rms_apex'] if m['rms_apex'] is not None else np.nan for m in ms])),
+                       v_err=float(np.nanmean([abs(m['v_err']) if m['v_err'] is not None else np.nan for m in ms])))
+    return out
+
+
 def robot_param_arrays(keys):
     ps = [rp.robot_params(r) for r in keys]
     return {k: np.array([p[k] for p in ps]) for k in ps[0]}
@@ -102,11 +151,11 @@ def robot_param_arrays(keys):
 
 def write_arm(d, pols, trials, extra, t0):
     os.makedirs(d, exist_ok=True)
-    goals = C.test_goals(a.eval_goals)
+    goals = C.eval_goals(a.eval_goals)
     for r in ROBOTS:
-        fada_np.save(os.path.join(d, f'{r}_policy.npz'), pols[r].idm, pols[r].planner, DIMS, H)
-    runs = rp.evaluate({r: pols[r] for r in ROBOTS}, goals, ROBOTS, runs=a.eval_runs, seconds=a.eval_seconds, seed=701)
-    summ = dict(args=vars(a), method='fada', eval={r: rp.summarize(runs[r]) for r in ROBOTS}, runs=runs,
+        fada_np.save(os.path.join(d, f'{r}_policy.npz'), pols[r].idm, pols[r].planner, DIMS, H, target=a.target)
+    runs = rp.evaluate({r: pols[r] for r in ROBOTS}, goals, ROBOTS, runs=a.eval_runs, seconds=a.eval_seconds)
+    summ = dict(args=vars(a), method="fada", eval_set=C.EVAL_SET, eval={r: rp.summarize(runs[r]) for r in ROBOTS}, runs=runs,
                 real_trials={r: len(trials.get(r, [])) for r in ROBOTS}, goals_eval=goals.tolist(), trials=trials,
                 seconds=time.time() - t0, **extra)
     json.dump(summ, open(os.path.join(d, 'summary.json'), 'w'), indent=1)
@@ -140,9 +189,9 @@ def main():
             out = fly(x0, jnp.asarray(G), p, jnp.asarray(nz, jnp.float32))
             sim_seconds += a.lanes * a.T * C.DT
             o, d, act = pairs(np.asarray(out['obs']), np.asarray(out['a']), ~np.asarray(out['failed']))
-            if noisy:
+            if noisy or a.idm_clean:
                 IX.append(np.concatenate([o, d], -1)); IY.append(act)
-            else:
+            if not noisy:
                 PX.append(o); PY.append(d)
     PX, PY, IX, IY = map(np.concatenate, (PX, PY, IX, IY))
     print(json.dumps(dict(event='data', planner=len(PX), idm=len(IX), sim_hours=sim_seconds / 3600, t=time.time() - t0)),
@@ -158,7 +207,10 @@ def main():
                           idm_var=float(np.mean(np.var(IY, 0))), t=time.time() - t0)), flush=True)
     base = [(np.asarray(W), np.asarray(b)) for W, b in idm]
     pl_np = [(np.asarray(W), np.asarray(b)) for W, b in planner]
-    extra = dict(sim_hours=sim_seconds / 3600, planner_loss=lp, idm_loss=li)
+    extra = dict(sim_hours=sim_seconds / 3600, planner_loss=lp, idm_loss=li, target=a.target)
+    if a.sim_check:
+        extra['sim_check'] = sim_check(src, idm, planner, rng)
+        print(json.dumps(dict(event='sim_check', **extra['sim_check'])), flush=True)
     zs_pols = {r: fada_np.FADAPolicy(base, pl_np, DIMS, H) for r in ROBOTS}
     write_arm(f'{a.out}_zs', zs_pols, {}, extra, t0)
 
@@ -204,7 +256,8 @@ def main():
                     m = np.array([k[0] == r for k in keys])
                     out[m] = pols[r](o[m], x[m], g[m])
                 return out
-        res = rp.simulate(Mixed(), goals, x0, robot_param_arrays([k[0] for k in keys]), T)
+        nz = ou_noise(rng, len(keys), T, a.real_noise) if a.real_noise > 0 else None
+        res = rp.simulate(Mixed(), goals, x0, robot_param_arrays([k[0] for k in keys]), T, noise=nz)
         alive = ~res['failed']
         for n, (r, gi) in enumerate(keys):
             m = C.hop_metrics(res['x'][n], goals[n], res['failed_end'][n])

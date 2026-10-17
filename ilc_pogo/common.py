@@ -12,6 +12,8 @@ State x (6): [x, z, vx, vz, xf, stance]  (xf the pinned foot, stance 0 / 1)
 Action a (2), normalized to [-1, 1]: delta = D_OFF + D_SCALE a0 (m), phi = PHI_SCALE a1 (rad, used in flight).
 Goal g (2): [v*, h*], the forward speed (m/s) and the apex height of the body (m).
 """
+import os
+
 import numpy as np
 
 DT = 0.01                     # control period (100 Hz)
@@ -26,7 +28,13 @@ D_OFF, D_SCALE, PHI_SCALE = 0.04, 0.04, 0.6
 GOAL_LO = np.array([0.0, 0.55])
 GOAL_HI = np.array([1.5, 0.75])
 TRAIN_GOALS = np.array([[0.0, 0.58], [0.4, 0.70], [0.8, 0.62], [1.1, 0.72], [1.4, 0.65], [0.6, 0.74]])
-VAL_SEED, TEST_SEED = 301, 701
+VAL_SEED, TEST_SEED = 301, 1301
+# 701 was the first test seed; the hardware-stage defaults were first seen on it, so it is superseded (runs/hw/*).
+# Every real-stick evaluation scores the set named by POGO_EVAL_SET: 'val' (default; all tuning and selection) or
+# 'test' (the single frozen pass at the end, reeval.py).
+EVAL_SET = os.environ.get('POGO_EVAL_SET', 'val')
+assert EVAL_SET in ('val', 'test'), EVAL_SET
+EVAL_SEED = TEST_SEED if EVAL_SET == 'test' else VAL_SEED
 
 
 def goals_from_seed(n, seed):
@@ -36,6 +44,11 @@ def goals_from_seed(n, seed):
 
 def test_goals(n=8):
     return goals_from_seed(n, TEST_SEED)
+
+
+def eval_goals(n=8):
+    """The goals of the current evaluation set (POGO_EVAL_SET); the perturbed drops use EVAL_SEED as well."""
+    return goals_from_seed(n, EVAL_SEED)
 
 
 OBS_SCALE = np.array([0.1, 0.5, 1.0, 1.0, 0.1, 0.05, 0.5, 0.06])

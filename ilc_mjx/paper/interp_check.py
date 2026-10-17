@@ -23,6 +23,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--arms", nargs="+", default=["fixbox/drB_hw24"])
 ap.add_argument("--robots", nargs="+", default=["real_r1", "real_s1", "real_r4"])
 ap.add_argument("--step", type=float, default=0.025)
+ap.add_argument("--every", type=int, default=1, help="use every k-th update (it<k> -> it<k+1>) of each run")
 ap.add_argument("--gpu", default="1")
 ap.add_argument("--out", default="/home/henry/ilc_ws/log/dilc/plane/interp_check.json")
 a = ap.parse_args()
@@ -97,7 +98,7 @@ def main():
             dyn = env.dyn_arrays(np.tile(np.asarray(JumpEnv.dyn_from_cond(None, dx.NAMED[r]), float), (len(allg), 1)))
             mask = np.ones((env.Nc, 4), np.float32)
             mask[env.Ndc:, :2] = 0.0
-            for k0, k1 in zip(its[:-1], its[1:]):
+            for k0, k1 in list(zip(its[:-1], its[1:]))[::a.every]:
                 wb, wa = weights(f"{arm}/{r}/it{k0}/policy"), weights(f"{arm}/{r}/it{k1}/policy")
                 b, aa = run(env, wb, allg, dyn), run(env, wa, allg, dyn)
                 ob = jnp.asarray(b["obs"][:, :env.Nc], jnp.float32)

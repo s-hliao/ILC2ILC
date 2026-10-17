@@ -263,3 +263,165 @@ Success over the 6 robots, test goals (± about 6 points at n = 192).
 data-dominated fits (positivity cos 0.15–0.21), 56–60 % with a strong nominal prior, vs ours 80 / 87 % at 24 / 48.
 - 4x lanes (1024 per iteration, 250 sim hours, `drBlsLK20x4_s{0,1}`): 61 / 68 % zero-shot, 82 / 88 % after 24 trials.
   No better than 256 lanes: more simulation alone does not close the gap to PPO+DR's warm start.
+
+## 2026-10-17 round: baseline fixes, clean test set, seeds, budget (in progress; validation goals, seed 301)
+
+Protocol: every choice below is made on the validation goals (POGO_EVAL_SET=val, the default). The test seed is now
+1301; 701 is superseded (the hardware-stage defaults were seen on it). The test set is evaluated once, at the end
+(reeval.py). Outputs: runs/v3/ (scheduler_fix.py), table_v3.py (seeds, cluster-bootstrap CIs, ci.py), budget.py.
+
+**RMA, fixed.**
+- Cause: phase 2 regressed z on the teacher's own rollouts (off-policy). At deployment, small z errors move the
+  student into states the estimator never saw. With the oracle z the teacher reaches 94 %.
+- Fix: phase 2 on the student's own rollouts (DAgger, `--p2-onpolicy 1`, 200 iterations).
+- Val zero-shot: 35 % → 100 % on all six sticks (apex 0.3 cm). Action matching (`--p2-am`) and a wider phase-2 range
+  (`--p2-dr 1.5 / 2.0`) also give 100 %.
+- No leak (sanity check). The estimate of the leg offset is 1.68 vs the true 1.67, outside the DR range. On the mass /
+  spring sticks it recovers the identifiable k/m ratio, not m and k separately.
+- The old estimator was biased on every stick (e.g. z_hat k = −0.8 on the mass stick).
+
+**FADA, fixed.**
+- Cause: its source was the nominal-sim network (0 % zero-shot), and FADA reproduces its source. FADA's own recipe
+  uses a DR source, so the source is now PPO+DR.
+- Val zero-shot: 71–73 % vs 77 % for the source (inside the CI).
+- After 24 trials of LoRA adaptation:
+  - 4-step target: 92 %;
+  - next-apex target (`--target apex`, an identifiable keyframe; the pogo's actions act only at touchdown and in
+    stance): **96 %**.
+- OU noise on the real trials hurts: 78 % at rms 0.05, 42 % at 0.1.
+- Chosen: apex target, no noise. A sim check still shows FADA below its source in DR sim (22–27 % vs 42–45 %);
+  `--idm-clean` variants are queued.
+
+**Minimum hardware budget (budget.py, validation goals, 3 seeds, 6 goals × 1 trial (3 s) per iteration).**
+B\* is the smallest budget within 2 points of the plateau (the best budget ≥ 48 trials) and not significantly worse
+(paired cluster bootstrap).
+
+| arm | 6 | 12 | 18 | 24 | 36 | 48 | 72 | 96 | B\* |
+|---|---|---|---|---|---|---|---|---|---|
+| ours nominal | 67 | 84 | 92 | 93 | 96 | **97** | 97 | 97 | 36 trials (108 s) |
+| ours + DR | 80 | 87 | 86 | 90 | 91 | **92** | 91 | 92 | 24 trials (72 s) |
+| PPO+DR + our stage | 83 | 91 | 96 | 96 | 99 | **99** | 97 | 95 | 36 trials (108 s) |
+
+- 24 was not the right number: the curves are still rising for the nominal net and for PPO+DR.
+- All three plateau by 36–48 trials. More does not help; PPO+DR + stage drifts down at 72–96 (87 % on one seed).
+  36–48 is also an upper bound worth respecting.
+- Batch B (2 or 3 goals per iteration; 1.5 s trials) is running, to see whether the same result is reachable with fewer
+  real seconds.
+
+**Test-pass freeze (2026-10-17 07:23:36).**
+- Arms frozen as listed in `final_test.sh`, all chosen on the validation goals:
+  - Raibert; old RMA; RMA (on-policy phase 2, 3 seeds); FADA (apex target, 3 seeds, zs and 24 trials);
+  - ours nominal / ours + DR / PPO+DR + our stage, at 12 / 24 / 36 / 48 trials (3 seeds each);
+  - PPO on the sticks at 24–384 trials (3 seeds); per-goal ILC; RMA oracle.
+- Headline budget: 36 trials (B\* for nominal and PPO+DR; ours + DR B\* = 24). Batch B (val) is informative only and
+  does not change the list.
+- The test seed 1301 has not been evaluated by anything before this line.
+
+**Batch B: the shape of a trial (validation goals, 3 seeds; success at 12 / 24 / 48 trials).**
+
+| | 6 goals × 3 s (curve) | 3 goals per iteration | 2 goals per iteration | 6 goals × 1.5 s |
+|---|---|---|---|---|
+| ours nominal | 84 / 93 / **97** | 88 / 87 / 87 | 73 / 72 / 73 | 83 / 91 / 91 |
+| ours + DR | 87 / 90 / **92** | 82 / 83 / 82 | 83 / 82 / 79 | 78 / 83 / 81 |
+| PPO+DR + our stage | 91 / 96 / **99** | 93 / 85 / 83 | 88 / 85 / 81 | 87 / 92 / 90 |
+
+- **The number of distinct goals sets the ceiling. Trials only set how fast it is reached.**
+  - With 2–3 goals, the stage converges within 6–12 trials, but to a lower level (73–88 %).
+  - PPO+DR + stage then degrades with more trials (93 → 83 % with 3 goals): it fits the few flown goals at the expense
+    of the unflown test goals.
+- **Half-length trials (1.5 s, about 2 hops)** reach about 90 % in 18–24 trials (27–36 s of hopping), but plateau 6–8
+  points below the 3 s trials.
+- **The cheapest route to the best result is 6 goals × 3 s trials, about 36 trials (108 s of hopping per stick).**
+
+## Final test pass (seed 1301, frozen 2026-10-17 07:23; `results_table_test.txt`, `compare_test.py`)
+Six sticks × 8 test goals × 4 drops × 10 s, 3 seeds per arm, 95 % cluster-bootstrap CI over (robot, goal).
+
+| arm | zero-shot | 12 trials | 24 trials | **36 trials** | 48 trials |
+|---|---|---|---|---|---|
+| Raibert | 12.5 [4, 23] | | | | |
+| ours, nominal sim | 7.8 ± 3.8 | 87.0 | 94.6 | **97.9 ± 1.3** [94.6, 100] | 97.0 |
+| ours + DR | 71.2 ± 6.3 | 77.4 | 85.1 | **86.3 ± 9.4** [79.5, 92.5] | 86.8 |
+| PPO+DR + our stage | 78.5 ± 2.0 | 89.2 | 96.2 | **97.2 ± 2.1** [93.6, 100] | 99.3 |
+| PPO+DR | 78.5 ± 2.0 [67, 88] | | | | |
+| RMA, fixed (on-policy phase 2) | **99.3 ± 0.6** [98.1, 100] | | | | |
+| RMA, old (off-policy phase 2) | 34.9 | | | | |
+| RMA teacher with the true z (oracle) | 97.9 | | | | |
+| FADA, fixed (PPO+DR source, apex target) | 64.9 ± 4.1 | | 93.9 ± 3.6 [89.6, 97.4] | | |
+| PPO on the sticks (privileged critic) | 78.5 | | 78.5 | | 82.6 |
+
+PPO on the sticks continues at 96 / 192 / 384 trials: 87.2 / 93.2 / 95.8.
+
+Paired differences, percentage points [95 % CI]; \* = excludes 0:
+
+| comparison | difference |
+|---|---|
+| ours nominal @36 − PPO+DR zs | +19.4 [+10.2, +29.9] \* |
+| ours nominal @36 − PPO on the sticks @48 | +15.3 [+8.2, +23.6] \* |
+| ours nominal @36 − PPO on the sticks @384 | +2.1 [−0.7, +5.0] |
+| ours nominal @36 − RMA (fixed) zs | −1.4 [−4.3, +0.3] |
+| ours nominal @24 − FADA @24 | +0.7 [−7.3, +7.6] |
+| ours + DR @24 − PPO+DR zs | +6.6 [−2.1, +15.8] |
+| ours + DR @36 − ours nominal @36 | −11.6 [−18.6, −5.7] \* |
+| PPO+DR + stage @36 − RMA (fixed) zs | −2.1 [−4.9, +0.2] |
+| PPO+DR + stage @36 − ours nominal @36 | −0.7 [−4.2, +3.3] |
+| FADA @24 − PPO+DR zs | +15.5 [+5.0, +26.9] \* |
+
+**What the test pass supports (and does not).**
+- **The test pass reproduces the validation numbers within about 2 points everywhere** (e.g. ours nominal @36:
+  96.4 val / 97.9 test). The tuning did not overfit the validation goals.
+- **Ours from the nominal sim reaches 98 % in 36 trials (108 s of hopping per stick) from 8 % zero-shot.**
+  - That is +19 points over PPO+DR zero-shot and +15 over PPO fine-tuned on the sticks at a matched-or-larger budget
+    (48 trials).
+  - PPO on the sticks needs about 384 trials to come within CI (95.8 %).
+- **With the baselines fixed, ours is not better than the best baselines on this toy.**
+  - RMA's estimator, trained on its own rollouts, adapts zero-shot to every stick (99.3 %), including the
+    out-of-family ones. It is level with ours @36 within CI, while ours needs 36 trials.
+  - FADA with 24 trials is level with ours at 24.
+  - The honest claim is "matches the best sim-trained adaptive baselines without a DR family, a parameterized latent,
+    or an inverse model, from a nominal simulator, in ~100 s of real data". It is not "beats them".
+  - RMA succeeds here because every real perturbation is either a parameter it randomized or one whose effect a 1-hop
+    history reveals. The toy does not test unmodelled effects, where its latent has nothing to estimate.
+- **Our stage is policy-agnostic:** PPO+DR 78.5 → 97.2 % @36 (99.3 % @48).
+- **Ours + DR is the weakest of our variants** (86 % @36, 11.6 points below ours nominal). This is the known DR(B)
+  weak spot: one seed sits at 79 %.
+- **Per-goal ILC (test, its own 6 training goals, deterministic):** 12.5 / 12.5 / 17.4 / 22.9 % at 6 / 12 / 24 / 48
+  trials.
+- **Figures:** `src/paper/pogo/figures/fig1_methods_test.png` and `fig2_budget_test.png` (`figures_v3.py`).
+
+## Ours + DR diagnosis (2026-10-17, after the test pass; validation goals only)
+
+**Where it fails.**
+- Mostly the heavy and soft sticks, both inside its own DR family, plus the offset stick.
+- On the heavy / soft sticks the misses are at the high-apex goal (0.52, 0.74): the apex is about 4.5 cm short.
+- The nominal net reaches 100 % on the same sticks after the stage.
+- **Ruled out:**
+  - Saturation: thrust and leg angle stay inside their limits.
+  - A weak DR sim stage: our DR net scores 57 % on the sim-DR metric vs PPO+DR's 41 %.
+  - The step direction: positivity median cos 0.8–0.85.
+
+**The stage converges slower on the DR net.**
+- On the heavy stick the training error shrinks about ×0.6 per iteration, against about ×0.2 for the nominal net.
+- |measured change| / |predicted change| is 0.28–0.37 (nominal net 0.43–0.73).
+
+**The refit realizes only part of each GN step.** hw_stage now logs `realize`: the fraction of the step the refit
+applies on its own trials.
+- Default refit (800 Adam steps, lr 1e-4, age decay 0.5): 0.8 at iteration 0, falling to 0.13–0.4 by iteration 3. Old
+  targets dominate the loss.
+- **A stronger refit raises it but does not fix ours + DR** (`drfix`, 36 trials, seeds 0 / 2; success at 12 / 24 / 36
+  trials):
+
+| refit | s0 | s2 | realized (median) |
+|---|---|---|---|
+| default | 88 / 90 / 90 | 82 / 84 / 87 | 0.36–0.40 |
+| 3000 steps | 89 / 88 / 94 | 82 / 83 / 82 | 0.44–0.48 |
+| lr 3e-4 | 87 / 90 / 90 | 82 / 88 / 88 | 0.39–0.44 |
+| 3000 steps + lr 3e-4 | 90 / 87 / 84 | 90 / 90 / 89 | 0.50–0.51 |
+| (nominal net s2, default) | | 83 / 92 / 95 | 0.48 |
+
+- s2 stays at 78 % on the heavy and soft sticks with every refit.
+- The training-goal error there does converge (0.004 at the nearby training goal (0.6, 0.74)). The correction just
+  does not carry over to the validation goal (0.52, 0.74) for the DR net, while it does for the nominal net.
+- **Remaining hypothesis: goal generalization of the DR net's correction, not the step or the refit.** Next tests:
+  - a 7th training goal near the high-apex corner;
+  - the adaptive trust region (proposed) that replaces the fixed step knobs.
+- No new test pass: nothing was adopted.
