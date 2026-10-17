@@ -2,8 +2,8 @@
 # the f1tenth_system stack (patched: scripts/apply_hw_patches.sh), the natnet_ros2 client, the VESC IMU cleanup + ZUPT,
 # optitrack_node (NatNet pose -> /optitrack/odom) and the robot_localization EKF (config/mocap.yaml) -> /odometry/filtered
 # in the cg frame.
-#   ros2 launch ilc_f1tenth_hw opti_launch.py server_ip:=<Motive PC> client_ip:=<this car> mocap_topic:=/f1tenth/pose
-# (+ drive_relay.py, the brake watchdog, unless drive_relay:=false). Remote running: source scripts/dds_env.sh car first.
+#   ros2 launch ilc_f1tenth_hw opti_launch.py server_ip:=<Motive PC> client_ip:=<this car> mocap_topic:=/dl_f1tenth/pose
+# Onboard policy publishes directly to /drive. Relay is disabled by default.
 import os
 
 from ament_index_python.packages import get_package_share_directory
@@ -20,13 +20,13 @@ def generate_launch_description():
     natnet_launch = os.path.join(get_package_share_directory('natnet_ros2'), 'launch', 'natnet_ros2.launch.py')
     ekf_config = os.path.join(get_package_share_directory('ilc_f1tenth_hw'), 'config', 'mocap.yaml')
     args = [
-        DeclareLaunchArgument('server_ip', default_value='172.26.119.139', description='the Motive (OptiTrack) PC'),
-        DeclareLaunchArgument('client_ip', default_value='172.26.112.71', description='this car'),
-        DeclareLaunchArgument('mocap_topic', default_value='/f1tenth/pose',
+        DeclareLaunchArgument('server_ip', default_value='172.26.30.22', description='the Motive (OptiTrack) PC'),
+        DeclareLaunchArgument('client_ip', default_value='172.26.50.69', description='this car'),
+        DeclareLaunchArgument('mocap_topic', default_value='/dl_f1tenth/pose',
                               description='NatNet rigid-body pose topic: /<rigid body name in Motive>/pose'),
         DeclareLaunchArgument('yaw_offset', default_value='-1.5707963267948966',
                               description='mocap -> ROS yaw offset (rad), found per mocap space'),
-        DeclareLaunchArgument('drive_relay', default_value='true',
+        DeclareLaunchArgument('drive_relay', default_value='false',
                               description='also run drive_relay.py (/mpc/drive -> /drive + the brake watchdog) ON THE CAR: with '
                                           'the network on the laptop (remote running) the watchdog must sit next to the VESC'),
     ]

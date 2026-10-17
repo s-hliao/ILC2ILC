@@ -120,7 +120,7 @@ class OptitrackSubscriber(Node):
             rclpy.init()
         super().__init__('optitrack_bridge_sub')
 
-        self.declare_parameter('mocap_topic', '/f1tenth/pose')
+        self.declare_parameter('mocap_topic', '/dl_f1tenth/pose')
         mocap_topic = self.get_parameter('mocap_topic').get_parameter_value().string_value
 
         # --- filter tuning: EMA + windowed spike clamp on vx, vy, omega ---
@@ -199,7 +199,7 @@ class OptitrackSubscriber(Node):
 
     def mocap_callback(self, msg):
         timestamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-        position = np.array([-msg.pose.position.x, msg.pose.position.z, msg.pose.position.y])
+        position = np.array([-msg.pose.position.x, -msg.pose.position.y, msg.pose.position.z])
 
         q_orig = np.array([
             msg.pose.orientation.x,
@@ -212,7 +212,7 @@ class OptitrackSubscriber(Node):
         R_orig = quat_to_rot(q_orig)
 
 
-        theta = self.get_parameter('yaw_offset').value   # found empirically per mocap space
+        theta = np.pi/2  # found empirically per mocap space
         B = np.array([
             [ np.cos(theta), -np.sin(theta), 0],
             [ np.sin(theta),  np.cos(theta), 0],
@@ -222,8 +222,8 @@ class OptitrackSubscriber(Node):
         # Axis permutation matrix
         P = np.array([
             [-1, 0, 0],
-            [ 0, 0, 1],
-            [ 0, 1, 0]])
+            [ 0, -1, 0],
+            [ 0, 0, 1]])
 
         # Transform rotation matrix
         R_new = B @ P @ R_orig      # not P @ R_orig @ P.T

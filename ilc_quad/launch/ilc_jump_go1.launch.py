@@ -1,6 +1,6 @@
 """ILC jumping on a real Go1: the unitree_legged_sdk bridge and the ILC node.
 
-    ros2 launch ilc_quad ilc_jump_go1.launch.py pose_topic:=/optitrack/go1/pose pose_type:=pose
+    ros2 launch ilc_quad ilc_jump_go1.launch.py pose_topic:=/optitrack/dl_quad/pose pose_type:=pose
     ros2 service call /start_trial std_srvs/srv/Trigger      # once per trial
     ros2 service call /damp std_srvs/srv/Trigger             # any time: go limp
 

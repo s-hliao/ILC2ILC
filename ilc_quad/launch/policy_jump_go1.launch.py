@@ -2,7 +2,7 @@
 policy_jump_node (IlcJumpNode flying the policy, no learning; each jump saved as an episode for deploy.py).
 
     python3 policy_jump_node.py prepare --policy DIR --goal 0.5 0 --out /tmp/ref.npz
-    ros2 launch ilc_quad policy_jump_go1.launch.py pose_topic:=/optitrack/go1/pose policy_dir:=DIR \
+    ros2 launch ilc_quad policy_jump_go1.launch.py pose_topic:=/optitrack/dl_quad/pose policy_dir:=DIR \
         reference_file:=/tmp/ref.npz jump_dx:=0.5 jump_dz:=0.0 episode_dir:=DIR/../real episode_tag:=go1
     ros2 service call /start_trial std_srvs/srv/Trigger      # one jump
     ros2 service call /damp std_srvs/srv/Trigger             # any time: go limp
