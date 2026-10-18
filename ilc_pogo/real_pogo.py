@@ -11,6 +11,19 @@ Robots (ROBOTS; 'ax:<key>=<value>' builds a single-axis robot on top of real_nom
   real_act     + thrust gain x0.75 (a weak actuator)
   real_offset  + leg-angle calibration offset +0.05 rad (outside the DR family's +-0.03)
   real_prog    + progressive spring, k (1 + 1.5 c / l0) (outside the DR family: a different spring law)
+
+Unmodelled-dynamics suite (UNMODELLED; 2026-10-18): effects the nominal model has no parameter for (not in the DR
+family either). Each on top of real_nom; the nominal sim (common.substep, pogo_jax) is unchanged, and with these keys at
+their defaults (0) the real substep below reduces exactly to common.substep.
+  real_dead    thrust dead zone 6 mm (a command delta < dz gives no thrust; above, delta - dz) after a backlash
+               (mechanical play) of 6 mm on the thrust actuator; thrust range 0-80 mm
+  real_bias    constant sensor bias on the policy's observed state: height +2 cm, vx +0.1 m/s, vz +0.1 m/s (the
+               policy sees the biased state; the trial logs (x, err) and the scoring use the true state, as mocap)
+  real_lag     first-order thrust actuator lag, tau 20 ms (2 control periods; stance lasts ~160 ms)
+  real_ground  compliant ground: a spring-damper under the foot (kg 15 kN/m, bg 150 N s/m; massless foot), the foot
+               sinks in stance and the leg force acts from the sunk foot
+  real_legm    leg mass 1 kg at the foot (unsprung; the body stays 10 kg): pinned in stance, at liftoff the body must
+               drag it up (a plastic collision: the body's velocity x m / (m + mf)); its swing in flight is neglected
 """
 import numpy as np
 
@@ -18,7 +31,10 @@ import common as C
 from common import NOMINAL, NX, DT, features, errors, failed, substep, hop_metrics
 
 SUB_REAL = 100
-BASE = dict(NOMINAL, b=15.0)
+REAL_ONLY = dict(dz=0.0, bl=0.0, tau=0.0, bz=0.0, bvx=0.0, bvz=0.0, kg=0.0, bg=0.0, mf=0.0)
+#   dz / bl: thrust dead zone / backlash (m), tau: thrust lag (s), bz / bvx / bvz: sensor bias on z / vx / vz,
+#   kg / bg: ground stiffness / damping under the foot (kg 0 = rigid), mf: leg (foot) mass (kg)
+BASE = dict(NOMINAL, b=15.0, **REAL_ONLY)
 ROBOTS = {
     'real_nom': {},
     'real_mass': dict(m=1.2),
@@ -28,6 +44,15 @@ ROBOTS = {
     'real_prog': dict(kp=('add', 1.5)),
 }
 DEFAULT_ROBOTS = list(ROBOTS)
+UNMODELLED = {
+    'real_dead': dict(dz=('set', 0.006), bl=('set', 0.006)),
+    'real_bias': dict(bz=('set', 0.02), bvx=('set', 0.1), bvz=('set', 0.1)),
+    'real_lag': dict(tau=('set', 0.02)),
+    'real_ground': dict(kg=('set', 15000.0), bg=('set', 150.0)),
+    'real_legm': dict(mf=('set', 1.0)),
+}
+UNMODELLED_ROBOTS = list(UNMODELLED)
+ROBOTS.update(UNMODELLED)                         # robot_params knows them; DEFAULT_ROBOTS stays the original six
 MULT = ('m', 'k', 'gth', 'l0')
 
 
@@ -60,23 +85,29 @@ def simulate(policy, goals, x0, params, T, noise=None, ff=None):
     x = np.asarray(x0, np.float64).copy()
     n = len(x)
     pol.reset(n)
-    p = {k: np.broadcast_to(np.asarray(v, np.float64), (n,)) for k, v in params.items()}
+    p = {k: np.broadcast_to(np.asarray(v, np.float64), (n,)) for k, v in dict(REAL_ONLY, **params).items()}
     xs = np.zeros((n, T + 1, NX))
     O, MU, A, E = (np.zeros((n, T, d)) for d in (len(features(x[:1], goals[:1], np)[0]), 2, 2, 2))
     F = np.zeros((n, T), bool)
     f = np.zeros(n, bool)
     EV = [[] for _ in range(n)]                       # per run: (period, fraction of the period, 1 touchdown / 0 liftoff)
     h = DT / SUB_REAL
+    real = any(np.any(p[k] != 0) for k in REAL_ONLY)  # any unmodelled effect in the batch -> the real substep
+    bias = np.stack([np.zeros(n), p['bz'], p['bvx'], p['bvz'], np.zeros(n), np.zeros(n)], -1)
+    aux = dict(yb=None, dl=None, zf=np.zeros(n), zfd=np.zeros(n))
     for t in range(T):
         xs[:, t] = x
-        o = features(x, goals, np)
-        mu = pol(o, x, goals)
+        xo = x + bias                                  # what the robot's sensors report to the policy
+        o = features(xo, goals, np)
+        mu = pol(o, xo, goals)
         a = mu + (0 if noise is None else noise[:, t]) + (0 if ff is None else ff[:, t])
         O[:, t], MU[:, t], A[:, t], E[:, t], F[:, t] = o, mu, a, errors(x, goals, np), f
+        if real:
+            dbl = thrust_chain(a, p, aux)
         xn = x
         for j in range(SUB_REAL):
             st0 = xn[:, 5]
-            xn = substep(xn, a, p, h, np)
+            xn = substep_real(xn, a, dbl, p, h, aux) if real else substep(xn, a, p, h, np)
             ch = np.where((xn[:, 5] != st0) & ~f)[0]
             for i in ch:                              # the mode signature: event, its control period and sub-step
                 EV[i].append((t, (j + 1) / SUB_REAL, int(xn[i, 5] > 0.5)))
@@ -85,6 +116,55 @@ def simulate(policy, goals, x0, params, T, noise=None, ff=None):
         f = fn
     xs[:, T] = x
     return dict(x=xs, obs=O, mu=MU, a=A, err=E, failed=F, failed_end=f, events=EV)
+
+
+def thrust_chain(a, p, aux):
+    """Once per control period: the commanded thrust delta through the actuator's backlash (play bl: the output moves
+    only when the command pushes against it) and dead zone (dz) -> the thrust the lag (substep_real) then follows."""
+    delta, _ = C.unnorm(a, np)
+    if aux['yb'] is None:
+        aux['yb'] = delta.copy()
+    aux['yb'] = np.clip(aux['yb'], delta - 0.5 * p['bl'], delta + 0.5 * p['bl'])
+    return np.maximum(aux['yb'] - p['dz'], 0.0)
+
+
+def substep_real(x, a, dbl, p, h, aux):
+    """common.substep plus the unmodelled effects (UNMODELLED): the thrust lag (tau), the compliant ground under the
+    foot (kg, bg: the foot at height zf <= 0, massless) and the leg mass (mf) at liftoff. With those keys 0 it computes
+    exactly common.substep (numpy: the straight-through saltation terms are 0 there)."""
+    _, phi = C.unnorm(a, np)
+    phi = phi + p['phi_off']
+    if aux['dl'] is None:
+        aux['dl'] = dbl.copy()
+    lag = p['tau'] > 0
+    aux['dl'] = np.where(lag, aux['dl'] + h / np.where(lag, p['tau'], 1.0) * (dbl - aux['dl']), dbl)
+    delta = aux['dl']
+    zf, zfd = aux['zf'], aux['zfd']
+    X, Z, VX, VZ, XF, ST = (x[..., i] for i in range(6))
+    dx, dzl = X - XF, Z - zf
+    L = np.sqrt(dx ** 2 + dzl ** 2)
+    Ls = np.maximum(L, 1e-6)
+    Ld = (dx * VX + dzl * (VZ - zfd)) / Ls
+    comp = np.maximum(p['l0'] - L, 0.0)
+    F = p['k'] * (1.0 + p['kp'] * comp / p['l0']) * (p['l0'] + p['gth'] * delta - L) - p['b'] * Ld
+    F = np.maximum(F, 0.0) * ST
+    ax = F * dx / Ls / p['m']
+    az = F * dzl / Ls / p['m'] - C.GRAV
+    VX, VZ = VX + h * ax, VZ + h * az
+    X, Z = X + h * VX, Z + h * VZ
+    soft = (p['kg'] > 0) & (ST > 0.5)                 # the massless foot: ground force -kg zf - bg zfd = leg force (z)
+    zfd = np.where(soft, (-p['kg'] * zf - F * dzl / Ls) / np.where(p['bg'] > 0, p['bg'], 1.0), 0.0)
+    zf = np.where(soft, np.minimum(zf + h * zfd, 0.0), 0.0)
+    td = (ST < 0.5) & (Z - p['l0'] * np.cos(phi) <= 0.0) & (VZ < 0)
+    Ln = np.sqrt((X - XF) ** 2 + (Z - zf) ** 2)
+    lo = (ST > 0.5) & (Ln >= p['l0'] + p['gth'] * delta) & (Ld > 0)
+    XF = np.where(td, X + p['l0'] * np.sin(phi), XF)
+    drag = p['m'] / (p['m'] + p['mf'])                # liftoff: the body picks up the leg mass
+    VX, VZ = np.where(lo, VX * drag, VX), np.where(lo, VZ * drag, VZ)
+    zf, zfd = np.where(td | lo, 0.0, zf), np.where(td | lo, 0.0, zfd)
+    aux['zf'], aux['zfd'] = zf, zfd
+    ST = np.where(td, 1.0, np.where(lo, 0.0, ST))
+    return np.stack([X, Z, VX, VZ, XF, ST], -1)
 
 
 def signature(res, i, a_lim=1.0):

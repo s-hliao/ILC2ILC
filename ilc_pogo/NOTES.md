@@ -579,3 +579,68 @@ Paired differences on seed 2301 (percentage points [95 % CI]):
   given the same real data, and improves any starting policy (PPO+DR → 97–98 %). On this toy the fixed RMA and FADA
   baselines reach the same or better without our stage.
 - Test seeds 1301 and 2301 are now both spent.
+
+## Unmodelled-dynamics robots (2026-10-18, machine ube; validation goals, 3 seeds; `scheduler_unmod.py`, runs/v5, `table_unmod.py`)
+
+**Question.** Do RMA / FADA degrade on robots whose difference from the sim is NOT a parameter of the nominal model or
+the DR family, where our hardware stage still converges?
+
+**Five new robots** (`real_pogo.UNMODELLED`, each on top of real_nom; the nominal sim is unchanged; with the new keys at
+0 the real substep is bit-identical to common.substep, checked on all six old robots):
+- `real_dead`: thrust backlash 6 mm, then a dead zone of 6 mm (thrust range 0–80 mm);
+- `real_bias`: the policy's observed state is biased by height +2 cm, vx +0.1 m/s, vz +0.1 m/s.
+  - The trial logs (x, err) and the scoring use the true state (mocap).
+  - The offsets equal the success tolerances (2 cm, 0.1 m/s), so a feedback policy that trusts its sensors fails by
+    construction.
+- `real_lag`: first-order thrust lag, tau 20 ms;
+- `real_ground`: a spring-damper under a massless foot (15 kN/m, 150 N s/m);
+- `real_legm`: a 1 kg leg mass at the foot. At liftoff the body drags it up (a plastic collision); its swing in flight
+  is neglected.
+
+**Success %** (8 validation goals × 4 drops per robot, 3 seeds pooled; the 95 % cluster-bootstrap CI is over the 5
+robots' (robot, goal) clusters):
+- the real_nom column is the same arm in the existing runs (v3 / v4: same goals and drops);
+- "ours + 36" reads 90.8 % at 12 trials and 98.3 % at 24.
+
+| arm | dead | bias | lag | ground | leg mass | 5 robots [CI] | real_nom |
+|---|---|---|---|---|---|---|---|
+| ours nominal, zero-shot | 0 | 0 | 0 | 0 | 0 | 0.0 | 4.2 |
+| **ours nominal + 36 trials** | 100 | 99 | 100 | 100 | 100 | **99.8 [99.4, 100]** | 100 |
+| PPO+DR, zero-shot | 80 | 0 | 100 | 86.5 | 37.5 | 60.8 [46.5, 74.6] | 100 |
+| **PPO+DR + ours 36 trials** | 98 | 100 | 100 | 100 | 100 | **99.6 [98.8, 100]** | 100 |
+| RMA (fixed, rmaR1) | 100 | 0 | 100 | 100 | 94 | 78.8 [65.8, 90.0] | 100 |
+| FADA (fixed, F2), zero-shot | 62.5 | 0 | 92 | 58 | 29 | 48.3 [34.8, 61.9] | 100 |
+| FADA (fixed, F2) + 24 trials | 92 | 57 | 100 | 76 | 21 | 69.2 [57.3, 80.4] | 99.0 |
+| PPO on the robots, 48 trials | 84 | 0 | 100 | 92 | 37.5 | 62.7 [48.5, 76.7] | 100 |
+
+Paired differences vs ours nominal + 36 (5 robots):
+
+| arm | difference [CI] |
+|---|---|
+| RMA | −21.0 [−33.8, −9.6] |
+| FADA + 24 | −30.6 [−42.5, −19.8] |
+| PPO on the robots, 48 trials | −37.1 [−51.5, −23.3] |
+| PPO+DR zero-shot | −39.0 [−53.1, −25.2] |
+| PPO+DR + ours | −0.2 [−1.2, +0.6] |
+
+At 12 trials, PPO+DR + ours is ahead of ours nominal: +8.8 [+1.7, +17.3], mostly on bias.
+
+**Reading.**
+- **Our stage converges on every unmodelled robot**, from either starting network: 99.6–99.8 % at 36 trials, with no
+  rollbacks.
+  - It measures the trial error on the robot, so it corrects even the sensor bias, which no sim-side model can see.
+  - The bias is the slowest robot: 62.5 % at 12 trials, 95 % at 24, 99 % at 36.
+- **RMA degrades only where the difference is outside anything its estimator could infer.** Dead zone, lag, ground and
+  leg mass stay at 94–100 %: these effects are small enough at the controller's level that the DR-robust policy absorbs
+  them.
+  - Bias takes it to 0 %. This is the significant gap: RMA is 21 points below ours [10, 34].
+- **FADA degrades broadly:**
+  - 48 % zero-shot (100 % on real_nom);
+  - 69 % after 24 trials. Leg mass gets worse with adaptation (29 → 21 %), and the bias recovers only to 57 %.
+- **PPO on the robots at 48 trials does not move from PPO+DR zero-shot** (62.7 vs 60.8 %): too few trials for PPO, as
+  in the data-matching study.
+- **Honest scope:**
+  - Our advantage over RMA here comes from one robot, the sensor bias, chosen at the tolerance.
+  - On the four dynamics robots, RMA zero-shot equals ours after 36 trials.
+  - A suite with larger dead zone / lag / leg mass would be needed to show RMA failing on unmodelled dynamics proper.
+  - The PPO+DR, FADA and PPO-on-robot gaps are robust across robots.
