@@ -2,7 +2,10 @@
 """reeval.py ARM [ARM ...] --runs 12: re-evaluate finished arms with more runs (tighter confidence intervals), from the
 per-car networks the arm saved (zero-shot arms: its starting policy; the LQR arm: the plans' LQR; the per-track ILC:
 not handled here). Same protocol as hw_stage.evaluate (spread starts, perturbation, chained laps, reserved seeds from
---seed, distinct from the hardware stage's own 701). -> runs/hw/ARM/eval_big.json"""
+--seed, distinct from the hardware stage's own 701). -> runs/hw/ARM/eval_big.json
+  --tag T        write eval_big<T>.json / eval_big_adaptive<T>.json (another seed without overwriting: e.g. --seed 301 --tag _val)
+  --rungs-from A a baseline without a ladder of its own flies and is scored on the plan rungs ladder arm A settled on per
+                 car (the idealized reference: what a perfect rung choice would give it, with no real laps)"""
 import argparse
 import json
 import os
@@ -40,18 +43,18 @@ def load(path):
     return pol
 
 
-def adaptive(d, summ):
+def adaptive(d, summ, tag='', rungs_from=None):
     """Goal-fallback arms: each evaluation plan scored on the variant the car's hardware stage settled on for the
     nearest trained goal of the same track (by target sideslip): eval_big_adaptive.json."""
     args = json.load(open(os.path.join(d, 'args.json')))
     sfx = args.get('fallback_suffix') or ''
-    if not sfx:
+    rungs = rungs_from or (json.load(open(os.path.join(d, 'summary.json'))).get('rungs') if sfx else None)
+    if not sfx and rungs is None:
         return
-    rungs = json.load(open(os.path.join(d, 'summary.json'))).get('rungs')
     if rungs is not None:                             # a ladder arm: each plan on its track's rung (all sideslips)
         adap = {c: {n: v.get(n + rungs.get(c, {}).get(n.split('_b')[0], ''), v.get(n)) for n in EVAL if n in v}
                 for c, v in summ.items()}
-        json.dump(adap, open(os.path.join(d, 'eval_big_adaptive.json'), 'w'), indent=1)
+        json.dump(adap, open(os.path.join(d, f'eval_big_adaptive{tag}.json'), 'w'), indent=1)
         return
     sw = json.load(open(os.path.join(d, 'summary.json'))).get('switched', {})
     beta = lambda n: int(n.split('_b')[-1])
@@ -64,7 +67,7 @@ def adaptive(d, summ):
             g = min(goals, key=lambda g: abs(beta(g) - beta(n))) if goals else None
             use_fb = g is not None and g in sw.get(c, {}) and (n + sfx) in v and beta(n) > 0
             adap[c][n] = v[n + sfx] if use_fb else v[n]
-    json.dump(adap, open(os.path.join(d, 'eval_big_adaptive.json'), 'w'), indent=1)
+    json.dump(adap, open(os.path.join(d, f'eval_big_adaptive{tag}.json'), 'w'), indent=1)
 
 
 def main():
@@ -73,17 +76,22 @@ def main():
     ap.add_argument('--runs', type=int, default=12)
     ap.add_argument('--laps', type=float, default=5.0)
     ap.add_argument('--seed', type=int, default=1701)
+    ap.add_argument('--tag', default='')
+    ap.add_argument('--rungs-from', default='')
     a = ap.parse_args()
+    rf = json.load(open(os.path.join(HERE, 'runs/hw', a.rungs_from, 'summary.json')))['rungs'] if a.rungs_from else None
     for arm in a.arms:
         d = os.path.join(HERE, 'runs/hw', arm)
-        out_f = os.path.join(d, 'eval_big.json')
+        out_f = os.path.join(d, f'eval_big{a.tag}.json')
         if os.path.exists(out_f):
-            adaptive(d, json.load(open(out_f)))
+            adaptive(d, json.load(open(out_f)), a.tag, rf)
             continue
         args = json.load(open(os.path.join(d, 'args.json')))
         sfx = args.get('fallback_suffix') or ''
         ev_names = [n for n in EVAL if n in (args.get('eval_plans') or EVAL)]   # a per-track network: its own track's plans
-        rungs = json.load(open(os.path.join(d, 'summary.json'))).get('rungs') if sfx else None
+        rungs = rf or (json.load(open(os.path.join(d, 'summary.json'))).get('rungs') if sfx else None)
+        if rf is not None:
+            sfx = sfx or ','.join(sorted({x for c in rf.values() for x in c.values() if x}))
         ladder = [x for x in sfx.split(',') if x]
         exists = lambda n: os.path.exists(os.path.join(bank.PLAN_DIR, n + '.npz'))
         if rungs is not None:                          # a ladder arm: per car, the plans and its own rung's variants
@@ -120,7 +128,7 @@ def main():
                             mean_abs_beta=float(np.mean([m['mean_abs_beta'] for m in ms if not m['failed']])) if any(not m['failed'] for m in ms) else None,
                             n=len(ms)) for n, ms in v.items()} for c, v in ev.items()}
         json.dump(summ, open(out_f, 'w'), indent=1)
-        adaptive(d, summ)
+        adaptive(d, summ, a.tag, rf)
         print(arm, 'done', flush=True)
 
 

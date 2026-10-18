@@ -1,5 +1,56 @@
 # ILC2Real on the F1TENTH: continuous drift on the LLA-MPC car
 
+## Car comparison redone with the task objective (validation, 2026-10-17)
+
+**Protocol.**
+- `car_redo.sh` builds the arms; `table_redo.py` makes the table (`runs/hw/redo_val_table.txt`).
+- Baselines use OUR objective (`ppo_dr.py --reward task`: e_y + pace) and the SAME plan bank as the headline network
+  (PL8 + `_mu80` / `_mu60`, 24 plans). RMA's phase 2 is fixed: on-policy, a_{t-1} history, H 40, action matching.
+- 3 seeds per arm; 8 cars: the 5 plus friction ×0.9 / 0.7 / 0.6.
+- Scored by `reeval.py` (12 runs × 5 chained laps) on the VALIDATION seed 301 (tag `_val`). Seed 1701 (every earlier
+  number) is spent.
+- "on our rungs" = the baseline flies and is scored on the plan rungs our ladder settled on per car
+  (`--rungs-from v3drBtL_s<k>_ladR_lap10`): the idealized reference, with no real laps of its own.
+
+**Results** (b25 = both 25° drift plans; mean ± sd over seeds; the last 8 columns are per-car b25 success, %):
+
+| arm | b25 success | crash | all plans | nom | mass | mu | act | lag | ×0.9 | ×0.7 | ×0.6 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| ours zero-shot | 40.8 ± 4.0 | 45.8 | 49.9 | 58 | 90 | 0 | 78 | 50 | 50 | 0 | 0 |
+| **ours + 10-lap ladder** | **89.9 ± 14.2** | **1.9** | **94.9** | 100 | 86 | 83 | 99 | 83 | 100 | 81 | 88 |
+| PPO+DR (task) zero-shot | 49.8 ± 9.3 | 28.1 | 55.3 | 67 | 69 | 46 | 92 | 64 | 61 | 0 | 0 |
+| PPO+DR (task) on our rungs | 79.5 ± 10.0 | 8.3 | 87.0 | 83 | 69 | 81 | 92 | 100 | 78 | 83 | 50 |
+| PPO+DR (task) + our ladder | 85.9 ± 1.1 | 7.5 | 86.2 | 100 | 96 | 89 | 89 | 96 | 100 | 68 | 50 |
+| RMA (task) zero-shot | 39.1 ± 3.5 | 31.6 | 52.1 | 50 | 51 | 38 | 74 | 50 | 50 | 0 | 0 |
+| RMA (task) on our rungs | 72.0 ± 2.3 | 11.8 | 84.4 | 65 | 51 | 67 | 74 | 99 | 83 | 88 | 50 |
+
+- Ours + ladder per seed: 100 / 69.8 / 100 % b25 (s1 is the known weak sim seed).
+- PPO+DR + our ladder per seed: 84.4 / 86.5 / 87.0 %.
+- The validation numbers reproduce the earlier seed-1701 ones for our ladder arms (100 / 70.8 / 99.5 %).
+
+**What it shows.**
+- **On the 8-car set, nobody succeeds zero-shot** (39–50 % b25). No method flies the ×0.7 / ×0.6 cars without a
+  re-planned reference. The earlier 5-car zero-shot result (task RMA 77.5 % vs ours 70 %) does not carry over to the
+  harder set with the bigger 24-plan bank.
+- **The ladder stage is what makes the low-friction cars work, for any network.** It takes ours 40.8 → 89.9 % and
+  PPO+DR 49.8 → 85.9 %.
+- **Ours + ladder vs the best baseline.**
+  - On 2 of 3 seeds ours reaches 100 % b25 with 0 crashes, which no baseline arm reaches on any seed (best 87 %).
+  - The 3-seed means overlap: 89.9 ± 14.2 vs PPO+DR + our ladder 85.9 ± 1.1.
+  - Ours crashes less (1.9 vs 7.5 %) and does better on all plans (94.9 vs 86.2 %).
+- **The baselines given our rungs for free (no real laps): 72–80 %.** They are below ours + ladder, and below PPO+DR +
+  our ladder. Our ILC updates add on top of the rung choice: PPO+DR on our rungs 79.5 → with our ladder stage 85.9.
+- **The ×0.6 car is the hardest for the baselines** (50 % with rungs or ladder; ours 88 %).
+- **Honest claim (validation):** our ladder stage generalizes across networks. Ours + ladder is the best arm on 2 of
+  3 seeds and matches the best baseline + our ladder on the 3-seed mean, with fewer crashes. The seed spread (s1)
+  remains the weakness.
+
+**Proposed frozen test pass (not run).**
+- Re-evaluate exactly these 21 arm × seed combinations once, on a fresh, never-used reeval seed:
+  `reeval.py <arms> --seed 2701 --tag _test`, plus `--rungs-from` for the two "on our rungs" rows. Then
+  `table_redo.py --tag _test`.
+- About 3 h on 16 CPU workers. Nothing is selected on the test result.
+
 ## Baseline diagnosis: the RL baselines optimized a different objective (2026-10-17)
 
 **Finding.**
