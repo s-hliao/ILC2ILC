@@ -110,6 +110,31 @@ int main() {
     CHECK(joint_past_limit(q, 0.2) == -1, "standing pose within limits");
     q[11] = -0.888 + 0.25;                   // RR calf over-extended past -0.888 by 0.25 > 0.20
     CHECK(joint_past_limit(q, 0.2) == 11, "calf past limit");
+    std::array<double, JOINT_CMD_LEN> cmd{};
+    cmd[11] = -1.8;                           // valid calf target, back into range
+    cmd[2 * NU + 11] = 20.0;
+    CHECK(command_recovers_limits(q, cmd, 0.2), "inward position command permits recovery");
+    cmd[11] = -0.5;                           // raw outward target is clipped to RANGE_HI, still inward from current q
+    CHECK(command_recovers_limits(q, cmd, 0.2), "clipped target permits recovery");
+    cmd[2 * NU + 11] = 0.0;
+    cmd[3 * NU + 11] = 2.0;
+    CHECK(command_recovers_limits(q, cmd, 0.2), "pure damping over an out-of-range joint is accepted");
+    cmd[4 * NU + 11] = 1.0;
+    CHECK(!command_recovers_limits(q, cmd, 0.2), "feedforward torque without a position servo is not recovery");
+    cmd[4 * NU + 11] = 0.0;
+    cmd[NU + 11] = 1.0;
+    CHECK(!command_recovers_limits(q, cmd, 0.2), "damping toward a nonzero velocity is not recovery");
+    cmd[NU + 11] = 0.0;
+    cmd[2 * NU + 11] = 20.0;
+    cmd[11] = -0.5;
+    q[11] = -0.888 - 0.5;                     // inside the range: an outward target is not checked here
+    CHECK(!command_recovers_limits(q, cmd, 0.2), "nothing out of range -> not a recovery");
+    q[11] = -1.6;
+    q[3] = 1.13244;                           // measured folded Go1 FR hip
+    cmd = {};
+    cmd[3] = q[3];                            // sanitize() clips this target to RANGE_HI
+    cmd[2 * NU + 3] = 1.0;
+    CHECK(command_recovers_limits(q, cmd, 0.2), "folded Go1 hip can move back into range");
   }
 
   // 6. contact hysteresis, zero-velocity

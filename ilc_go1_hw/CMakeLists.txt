@@ -22,7 +22,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
 else()
   set(SDK_ARCH amd64)
 endif()
-find_library(UNITREE_SDK_LIB NAMES unitree_legged_sdk
+find_library(UNITREE_SDK_LIB NAMES unitree_legged_sdk unitree_legged_sdk_${SDK_ARCH}
              PATHS ${UNITREE_SDK_DIR}/lib/cpp/${SDK_ARCH} ${UNITREE_SDK_DIR}/lib/${SDK_ARCH} ${UNITREE_SDK_DIR}/lib
                    ${UNITREE_SDK_DIR}/build NO_DEFAULT_PATH)
 if(NOT UNITREE_SDK_LIB)

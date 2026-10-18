@@ -44,8 +44,8 @@ using namespace go1hw;
 class Go1LowLevel {
  public:
   explicit Go1LowLevel(ros::NodeHandle& nh, ros::NodeHandle& pnh)
-      : udp_(sdk::LOWLEVEL, pnh.param("local_port", 8090), pnh.param<std::string>("robot_ip", "192.168.123.10").c_str(),
-             pnh.param("robot_port", 8007)),
+      : udp_(pnh.param("local_port", 8090), pnh.param<std::string>("robot_ip", "192.168.123.10").c_str(),
+             pnh.param("robot_port", 8007), sdk::LOW_CMD_LENGTH, sdk::LOW_STATE_LENGTH),
         safe_(sdk::LeggedType::Go1) {
     rate_hz_ = pnh.param("rate_hz", 500.0);
     power_level_ = pnh.param("power_level", 10);
@@ -132,8 +132,6 @@ class Go1LowLevel {
     }
     ros::Time now = ros::Time::now();
     ++tick_;
-    checkLimits(q);
-
     // joints + foot forces
     sensor_msgs::JointState js;
     js.header.stamp = now;
@@ -214,27 +212,31 @@ class Go1LowLevel {
       }
     }
 
-    fillCommand();
+    fillCommand(q);
     safe_.PowerProtect(cmd_, state_, power_level_);
     udp_.SetSend(cmd_);
     udp_.Send();
   }
 
-  void checkLimits(const std::array<double, NU>& q) {
-    int bad = joint_past_limit(q, limit_margin_);
-    if (bad >= 0 && fault_.empty()) {
-      fault_ = joint_names()[bad] + "=" + std::to_string(q[bad]) + " past its limit";
-      ROS_ERROR("damping latched: %s; /clear_fault to release", fault_.c_str());
-    }
-  }
-
-  void fillCommand() {
+  void fillCommand(const std::array<double, NU>& q) {
     std::array<double, JOINT_CMD_LEN> c;
     bool fresh;
     {
       std::lock_guard<std::mutex> lk(mtx_);
       c = jcmd_;
       fresh = have_cmd_ && (ros::WallTime::now() - cmd_time_).toSec() < cmd_timeout_;
+    }
+    int bad = joint_past_limit(q, limit_margin_);
+    bool recovering = bad >= 0 && fresh && command_recovers_limits(q, c, limit_margin_);
+    // A folded Go1 can start just beyond the simulation-derived state range.
+    // Stay damped while no command is present, but allow pure damping or a
+    // clipped position target that moves every offending joint inward.  Any other command
+    // while outside the margin still latches the original safety fault.
+    if (bad >= 0 && fresh && !recovering && fault_.empty()) {
+      fault_ = joint_names()[bad] + "=" + std::to_string(q[bad]) + " past its limit";
+      ROS_ERROR("damping latched: %s; /clear_fault to release", fault_.c_str());
+    } else if (recovering) {
+      ROS_WARN_THROTTLE(1.0, "joint outside state limit; accepting only damping or inward recovery commands");
     }
     bool damp = !fault_.empty() || !fresh;
     if (damp != was_damping_) {
