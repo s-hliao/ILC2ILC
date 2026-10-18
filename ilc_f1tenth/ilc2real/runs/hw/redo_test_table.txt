@@ -1,0 +1,9 @@
+reeval tag _test; b25 = both 25 deg drift plans; mean +- sd over seeds 0-2
+arm                         | n | b25 succ      | crash        | all plans    |    nom   mass     mu    act    lag ax:mu= ax:mu= ax:mu=
+ours zero-shot              | 3 |  40.1 +-  4.2 |  45.5 +-  4.0 |  49.7 +-  2.7 |     57     90      0     74     50     50      0      0
+ours + 10-lap ladder        | 3 |  91.1 +- 12.5 |   0.5 +-  0.7 |  95.1 +-  6.4 |    100     85     83     99     83    100     83     96
+PPO+DR (task) zero-shot     | 3 |  48.6 +-  6.9 |  29.7 +-  2.3 |  55.3 +-  2.1 |     64     68     46     93     61     57      0      0
+PPO+DR (task) on our rungs  | 3 |  80.0 +-  9.3 |   8.9 +-  5.2 |  87.3 +-  1.9 |     81     68     82     93    100     79     88     50
+PPO+DR (task) + our ladder  | 3 |  85.9 +-  1.5 |   7.8 +-  1.9 |  86.0 +-  3.8 |    100     88     90     94     96    100     68     51
+RMA (task) zero-shot        | 3 |  38.5 +-  3.5 |  33.7 +-  8.9 |  52.2 +-  7.3 |     50     56     31     72     50     50      0      0
+RMA (task) on our rungs     | 3 |  71.2 +-  2.1 |  11.5 +-  3.4 |  84.5 +-  2.2 |     62     56     67     72    100     81     81     51

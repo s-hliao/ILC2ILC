@@ -135,3 +135,29 @@ def add_jobs(S):
                   f'runs/{n}/policy_pick.npz', [f'runs/{n}/policy_final.npz'], 'gpu')
             hw(f'drNomInit_s{s}_zs', f'runs/{n}/policy_pick.npz', '--iters 0')
             hw(f'drNomInit_s{s}_curve', f'runs/{n}/policy_pick.npz', '--iters 8 --eval-at 2 4 6')
+
+    if 'horizon' in STAGE:
+        # 2026-10-18: the hardware stage trains on 3 s trials (~6 hops) from the goal's UNPERTURBED apex but is scored on
+        # 10 s runs from perturbed drops; the offset stick's failures are a slow drift after hop ~6 and a second (period-2)
+        # gait reached only from perturbed starts -- neither visible to training. Longer trials and perturbed training
+        # starts, on the validation goals; T1000P at 12 trials = 120 s of hopping ~ the default's 36 x 3 s = 108 s.
+        NETS = {'nom': 'runs/nom_s{s}/policy_pick.npz', 'drNomInit': 'runs/drNomInit_s{s}/policy_pick.npz'}
+        ARMS_H = {'T500': '--T 500 --iters 6 --eval-at 2 4', 'P': '--train-pert 1.0 --iters 6 --eval-at 2 4',
+                  'T500P': '--T 500 --train-pert 1.0 --iters 6 --eval-at 2 4',
+                  'T1000P': '--T 1000 --train-pert 1.0 --iters 6 --eval-at 1 2 4'}
+        for net, pat in NETS.items():
+            for arm, args in ARMS_H.items():
+                for s in (0, 1, 2):
+                    hw(f'{net}_s{s}_{arm}', pat.format(s=s), args)
+
+    if 'drnomT' in STAGE:
+        # ours + DR, sim side of the horizon finding: the DR sim stage from the nominal net (drNomInit's recipe) on 6 s
+        # training rollouts instead of 3 s (slow drifts after ~6 hops become visible to the sim stage), then the sim-only
+        # stopping rule; the hardware stage follows in 'drnomT_hw' with the protocol the 'horizon' stage picks
+        for s in (0, 1, 2):
+            n, init = f'drNomInitT600_s{s}', f'runs/nom_s{s}/policy_pick.npz'
+            S.job(n, f'{S.ENV} {S.PY} -u sim_train.py --out runs/{n} --init {init} --dr 1.0 --iters 40 --accept 2 '
+                  f'--fbk-refresh 20 --T 600 --seed {s} --gpu {{gpu}} > logs/{n}.log 2>&1', f'runs/{n}/policy_final.npz', [init], 'gpu')
+            S.job(f'val:{n}', f'{S.ENV} CUDA_VISIBLE_DEVICES={{gpu}} {S.PY} -u sim_validate.py runs/{n} > logs/val_{n}.log 2>&1',
+                  f'runs/{n}/policy_pick.npz', [f'runs/{n}/policy_final.npz'], 'gpu')
+            hw(f'drNomInitT600_s{s}_zs', f'runs/{n}/policy_pick.npz', '--iters 0')
