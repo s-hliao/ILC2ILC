@@ -45,11 +45,36 @@
   3 seeds and matches the best baseline + our ladder on the 3-seed mean, with fewer crashes. The seed spread (s1)
   remains the weakness.
 
-**Proposed frozen test pass (not run).**
-- Re-evaluate exactly these 21 arm × seed combinations once, on a fresh, never-used reeval seed:
-  `reeval.py <arms> --seed 2701 --tag _test`, plus `--rungs-from` for the two "on our rungs" rows. Then
-  `table_redo.py --tag _test`.
-- About 3 h on 16 CPU workers. Nothing is selected on the test result.
+**Frozen test pass (seed 2701, 2026-10-18 02:36; `car_redo_test.sh`, `runs/hw/redo_test_table.txt`).** Every arm
+and seed as above, re-evaluated once on a fresh reeval seed; nothing was selected on it.
+
+| arm | b25 success | crash | all plans | ×0.6 car |
+|---|---|---|---|---|
+| ours zero-shot | 40.1 ± 4.2 | 45.5 | 49.7 | 0 |
+| **ours + 10-lap ladder** | **91.1 ± 12.5** (seeds 100.0 / 73.4 / 100.0) | **0.5** | **95.1** | 96 |
+| PPO+DR (task) zero-shot | 48.6 ± 6.9 | 29.7 | 55.3 | 0 |
+| PPO+DR (task) on our rungs | 80.0 ± 9.3 | 8.9 | 87.3 | 50 |
+| PPO+DR (task) + our ladder | 85.9 ± 1.5 (seeds 84.4 / 88.0 / 85.4) | 7.8 | 86.0 | 51 |
+| RMA (task) zero-shot | 38.5 ± 3.5 | 33.7 | 52.2 | 0 |
+| RMA (task) on our rungs | 71.2 ± 2.1 | 11.5 | 84.5 | 51 |
+
+- **The test pass reproduces validation within about 2 points on every row**, unlike the pogo's two test seeds, which
+  differed by about 7 points. The car comparison is stable.
+- **The claims hold on test:**
+  - nobody succeeds zero-shot on the 8 cars;
+  - our ladder stage makes the low-friction cars work for any network;
+  - ours + ladder is the best arm: 100 % on 2 of 3 sim seeds, 91.1 % mean, 0.5 % crashes, 95 % on all plans;
+  - PPO+DR + our ladder is at 85.9 % with 7.8 % crashes;
+  - baselines given our rungs for free reach 71–80 %;
+  - the ×0.6 car separates the methods (ours 96 %, the baselines 50–51 %).
+- **The weakness stays the sim seed spread** (s1).
+- **Protocol note:**
+  - The b25 plan files were translated for the lab room (commit 7b5d9a6: +0.25 m x; figfast also +0.3 m y) after the
+    validation pass.
+  - The test script first re-scored one validation arm with the translated plans. It reproduced validation exactly
+    (max |Δ success| 0.0): the car's errors are plan-relative.
+  - The first launch of the test pass had started on the translated plans before this check existed. It was killed
+    seconds in, and its partial outputs were deleted unread.
 
 ## Baseline diagnosis: the reward was the problem (2026-10-17; `car_baseline_fix.sh`, run on matcha)
 
