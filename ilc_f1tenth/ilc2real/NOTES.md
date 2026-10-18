@@ -56,7 +56,7 @@ Our headline network `v3drBt` optimizes e_y and pace only (`TASK_SCALE`).
 | `lad_tr` (radius from 0.05) | 66 / 61 / 56 | 52 / 68 / 63 | 33 / 18 / 21 | 12 / 15 / 15 | −3 / −15 / −11 |
 | `lad_tr_r20` (radius from 0.20) s0 / s2 | 50 / 61 | 63 / 54 | 19 / 24 | 16 / 16 | (1 sample each) |
 
-(lad_tr_r20 s1 hung in its worker pool at iteration 3 and was restarted.)
+(lad_tr_r20 s1 hung in its worker pool at iteration 3 twice and was abandoned; the pool hang is not debugged.)
 
 **The trust region on top of the recipe's damping** (`car_trd.sh`: beta 0.5, delta 0.05, anchor 1, the fixed refit;
 only the radius adapts, replacing the fixed cap and the progress rollback):
