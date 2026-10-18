@@ -475,3 +475,53 @@ against matcha's validation curves of 96.4 / 91.1 / 98.8 %. ube runs JAX 0.4.35 
   - It is faster at 12 trials (+6 on the nominal net).
   - It is 8-12 points lower at 36: dropping the older trials forgets what they fixed.
   - Dropped from batch 2.
+
+**Batch 2: sensitivity to the step size** (success % at 12 / 24 / 36 trials; seeds pooled):
+
+| arm | nominal | ours + DR | PPO+DR |
+|---|---|---|---|
+| fixed cap 0.025 | **44** / 90 / 94.1 | 84 / 89 / 89.9 | 91 / 96 / 99.3 |
+| fixed cap 0.05 | 84 / 92 / 96.4 | 86 / 87 / 87.8 | 91 / 96 / 99.0 |
+| fixed cap 0.10 (default) | 84 / 93 / 96.0 | 87 / 89 / 91.5 | 91 / 96 / 99.0 |
+| fixed cap 0.20 | 84 / 93 / 96.0 | 87 / 90 / 91.3 | 91 / 96 / 99.1 |
+| trust region, r0 0.025 | **55** / 90 / 94.1 | 84 / 89 / 88.9 | 91 / 96 / 99.3 |
+| trust region, r0 0.10 | 84 / 91 / 94.6 | 87 / 90 / 89.9 | 91 / 96 / 99.1 |
+| trust region, r0 0.40 | 84 / 91 / 94.4 | 87 / 89 / 89.8 | 91 / 96 / 99.0 |
+
+**What this says.**
+- **On the pogo the step size is not a tuned knob once beta = 1.**
+  - The full GN step sizes itself. Its rms is mostly below 0.05.
+  - A cap anywhere in 0.05-0.20 (4x) gives identical runs, and all arms agree within ±2 points at 36 trials.
+  - The cap is a safeguard, not a tuning parameter.
+- **Only a too-small cap binds, and only early.** At 0.025 the nominal net is at 44 % after 12 trials (84 % otherwise).
+  - The trust region started at 0.025 recovers part of it (55 %).
+  - It grows its radius slowly because rho is rarely > 0.75 (median 0.5-0.7: the model over-predicts the reduction
+    by about 1.5-2x).
+  - Started large (0.40), the trust region behaves like the default. It rejects about 1 step per run.
+- **The knobs that differ between domains are beta (pogo 1.0, car 0.5, quad 0.3) and the trust region toward the old
+  network (car / quad on).** The car and quad runs test exactly those: recipe vs beta 1 + trust region, no anchor.
+- **For the pogo the defensible statement:**
+  - one rule (full GN step, beta 1, LM trust region with textbook constants, any r0 >= 0.05) matches the hand-picked
+    default within CI on all three starting networks;
+  - the reported pogo numbers do not depend on a tuned step size.
+  - Ours + DR stays at about 90 % with every step rule: its gap is not a step-size problem (see the drfix / drgrid
+    sections).
+
+**Ours + DR started from the nominal sim network** (`drNomInit`, scheduler_tr.py stage drnom; validation goals).
+- The DR sim stage as drBlsLK20 (line search + lagged feedback, 40 iterations) from `nom_s<k>/policy_pick`, not BC.
+- Then the sim-only stopping rule (picks: it25, it25, it5) and the default hardware stage.
+
+| | zero-shot | @12 | @24 | @36 | per seed @36 | heavy / soft sticks @36 |
+|---|---|---|---|---|---|---|
+| drNomInit | 54.3 (73 / 60 / 29) | 84.4 | 92.5 | **94.3** [88, 99] | 97 / 91 / 95 | 97 / 97 |
+| drLK20 (current ours + DR) | 74.1 (77 / 73 / 72) | 86.8 | 89.4 | 91.5 [86, 96] | 89 / 98 / 87 | 91 / 91 |
+| (ours nominal, fix10) | 6 | 84 | 93 | 96.0 | 97 / 96 / 95 | 100 / 100 |
+
+- **After the hardware stage it is the best DR variant so far:** 94.3 %, and the heavy / soft sticks rise from 91 to 97 %.
+  This is within CI of drLK20, but it moves the known weak spot.
+- **It is worse zero-shot (54 vs 74 %).** Seed 2's stopping rule picked iteration 5 (29 % zero-shot); the sim-only rule
+  cannot see that early snapshots transfer worse.
+- **Reading:** the DR stage from BC finds a network the real-trial stage corrects less well. Starting the DR stage from
+  the nominal-sim network keeps the structure the hardware stage works well with (the nominal net's 96 %) and adds some
+  robustness.
+- The trade-off: zero-shot vs after-the-stage. Neither ours + DR variant beats ours nominal after 36 trials.
