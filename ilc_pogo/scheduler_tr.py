@@ -28,6 +28,8 @@ ARMS = {
 
 
 def add_jobs(S):
+    if 'drnom' in STAGE:
+        add_drnom(S)
     for st in sorted(STAGE):
         for arm, args in ARMS.get(st, {}).items():
             for net, pat in NETS.items():
@@ -37,3 +39,20 @@ def add_jobs(S):
                     S.job(f'hw:{name}', f'{S.ENV} {S.PY} -u hw_stage.py --policy {pol} --out runs/v4/{name} --iters 6 '
                           f'--eval-at 2 4 {args} --gpu {{gpu}} > logs/v4_{name}.log 2>&1', f'runs/v4/{name}/summary.json',
                           [pol], 'cpu')
+
+
+def add_drnom(S):
+    """stage 'drnom': ours + DR with the DR sim stage started from the NOMINAL sim network (policy_pick of nom_s<k>)
+    instead of BC: same line search + lagged feedback as drBlsLK20, 40 iterations, the sim-only stopping rule, then the
+    default hardware stage (36 trials, validation goals) and zero-shot."""
+    for s in (0, 1, 2):
+        n, init = f'drNomInit_s{s}', f'runs/nom_s{s}/policy_pick.npz'
+        S.job(n, f'{S.ENV} {S.PY} -u sim_train.py --out runs/{n} --init {init} --dr 1.0 --iters 40 --accept 2 '
+              f'--fbk-refresh 20 --seed {s} --gpu {{gpu}} > logs/{n}.log 2>&1', f'runs/{n}/policy_final.npz', [init], 'gpu')
+        S.job(f'val:{n}', f'{S.ENV} CUDA_VISIBLE_DEVICES={{gpu}} {S.PY} -u sim_validate.py runs/{n} > logs/val_{n}.log 2>&1',
+              f'runs/{n}/policy_pick.npz', [f'runs/{n}/policy_final.npz'], 'gpu')
+        pk = f'runs/{n}/policy_pick.npz'
+        for arm, args in (('zs', '--iters 0'), ('fix10', '--iters 6 --eval-at 2 4')):
+            S.job(f'hw:{arm}_drNomInit_s{s}', f'{S.ENV} {S.PY} -u hw_stage.py --policy {pk} --out runs/v4/{arm}_drNomInit_s{s} '
+                  f'{args} --gpu {{gpu}} > logs/v4_{arm}_drNomInit_s{s}.log 2>&1', f'runs/v4/{arm}_drNomInit_s{s}/summary.json',
+                  [pk], 'cpu')

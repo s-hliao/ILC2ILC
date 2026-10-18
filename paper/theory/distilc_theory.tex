@@ -267,6 +267,32 @@ logs this: positive in 97\% of trial pairs for the nominal-sim network, median 0
 cosine predicts the hardware stage's gain (Spearman 0.63); the 180-degree control ($\Ghat\to-\Ghat$) gives 0\% success.
 A sign-wrong model is exactly the case where Assumption~\ref{as:pos} fails, and the method fails, as predicted.
 \end{remark}
+\begin{remark}[Positivity and the step size across the three domains]\label{rem:posdomains}
+The ratio $\rho_k=(J_k-J_{k+1})/(J_k-\hat J_{k+1})$ of measured to predicted cost reduction (a Levenberg--Marquardt trust
+region's acceptance ratio) is the cost-level counterpart of Assumption~\ref{as:pos}. To first order
+$\rho_k\approx\ip{e}{Me}/\nW{\Ghat\Delta v}^2$, so $\rho_k>0$ along the iterates is what the assumption delivers, and
+$\rho_k$ bounded away from one measures how far $M$ is from the identity. Measured with one rule in all three domains
+(the full step $\beta=1$ inside an adaptive radius, textbook constants; validation goals):
+\begin{itemize}
+\item \emph{Pogo stick.} $\rho$ has median $0.5$--$0.7$ and positivity cosine $0.88$. The full step is safe, and a cap
+  anywhere in $[0.05,0.20]$ (rms, normalized action) gives identical runs: the step size is not a tuned quantity.
+\item \emph{Car.} With $\beta=1$ and no proximal term, $\rho$ has median $-3$ to $-15$. Full steps the nominal model predicts
+  to help crash the car, and success falls from $100/67/100\%$ to $56$--$66\%$. The recipe's $\beta=0.5$ with a proximal
+  weight is the condition $\beta_k\le\mu/\Gamma^2$ of Theorems~\ref{thm:local}--\ref{thm:stoch} with a small positivity
+  margin $\mu$, not a free parameter. A trust region can estimate this bound from $\rho$, but only by spending trials (here:
+  crashes) the real budget does not have.
+\item \emph{Quadruped.} $\rho<0$ in $52\%$ of the per-goal steps with single jumps. Measured directly: the
+  jump-to-jump spread of the cost (median s.d.\ $3.0$) is the size of the predicted improvement per step (median
+  $2.7$). On 5-jump means, $\rho$ has median $0.24$ and is still negative for $37\%$ of the goals. The landing
+  sensitivity over-predicts the improvement about fourfold and has the wrong sign for a third of the goals: a positivity
+  margin near zero, on top of the noise of Theorem~\ref{thm:stoch}. Neither averaging jumps at equal budget nor 60
+  jumps instead of 24 changes the outcome. With any step rule the hardware stage moves the validation score by 1--2
+  points out of 21, not significantly.
+\end{itemize}
+Positivity is therefore a property of the domain and the network, checkable per trial pair. It holds with a large
+margin on the pogo stick and with a small margin on the car (hence the conservative gain). On the quadruped it is
+near zero at the cost level: there the model, not the step rule, limits the hardware stage.
+\end{remark}
 
 \begin{theorem}[Local linear convergence]\label{thm:local}
 Let Assumptions~\ref{as:smooth}--\ref{as:pos} hold; let $c_J:=\sup_{\cN}\n{J^\top(\Theta+\rho I)^{-1}}$,

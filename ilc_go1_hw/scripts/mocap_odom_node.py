@@ -196,7 +196,7 @@ def main():
             tf.transform.rotation = ps.pose.orientation
             br.sendTransform(tf)
 
-    topic = gp("mocap_topic", "/vrpn_client_node/go1/pose")
+    topic = gp("mocap_topic", "/vrpn_client_node/dl_quad/pose")
     rospy.Subscriber(topic, PoseStamped, on_pose, queue_size=1, tcp_nodelay=True)
     rospy.loginfo("mocap_odom: %s (up %s, yaw offset %.3f, offset %s, latency %.4f s) -> mocap/pose, mocap/odom",
                   topic, proc.up_axis, float(gp("yaw_offset", 0.0)), list(proc.offset), latency)

@@ -51,6 +51,95 @@
   `table_redo.py --tag _test`.
 - About 3 h on 16 CPU workers. Nothing is selected on the test result.
 
+## Baseline diagnosis: the reward was the problem (2026-10-17; `car_baseline_fix.sh`, run on matcha)
+
+**Finding.** PPO+DR and RMA were rewarded on the plan's full drift state (`sim_jax.ERR_SCALE`: e_y, e_psi, vx, vy, r).
+Our headline network `v3drBt` optimizes e_y and pace only (`TASK_SCALE`).
+- On the multi-body cars the figfast_b25 drift plan cannot be tracked in full state.
+- Every full-state tracker crashes there on every car, the unperturbed one included, and the plan's own LQR as well.
+- RMA also had two smaller bugs: phase 2 was off-policy, and its history was one period ahead of deployment (a_t vs
+  a_{t-1}).
+
+**Zero-shot, 5 cars** (b25 success (crash rate); all base plans):
+
+| arm | square b25 | figfast b25 | all plans | crashes |
+|---|---|---|---|---|
+| ours `v3drBt_s0` | 80 % (0) | 60 % (0) | 80 % | 0 % |
+| PPO+DR, track reward (old) | 55 % (30) | 0 % (100) | 54 % | 31 % |
+| **PPO+DR, task reward** (`--reward task`) | 100 % (0) | 40 % (45) | 79 % | 6 % |
+| RMA, track reward (old) | 90 % (5) | 0 % (100) | 64 % | 23 % |
+| RMA, track reward + phase-2 fix (on-policy, H 40) | 90 % (0) | 10 % (85) | 65 % | 22 % |
+| **RMA, task reward + phase-2 fix** | 80 % (0) | 75 % (0) | **81 %** | **1 %** |
+| plan LQR | 80 % (0) | 0 % (90) | 52 % | 27 % |
+
+**What this changes.**
+- With the same objective as ours, the RL baselines are no longer broken.
+  - RMA zero-shot is level with our network zero-shot (81 vs 80 %, 1 vs 0 % crashes).
+  - PPO+DR is close (79 %), but still crashes on figfast.
+- The RMA estimator fix alone is worth about 1 point here; the objective was the problem.
+- **Every car comparison from before this section used the mis-specified baselines and must be redone with the task
+  reward:** the RMA / PPO zero-shot rows, the data-matching study (ppo_real_car / exact oracles) and the coverage
+  suite. The claim that ours beats the RL baselines zero-shot on the car does not survive. What remains to test is
+  our hardware stage vs these fixed baselines at the real budget.
+
+## LM trust region (2026-10-17, machine ube; `car_tr.sh`, runs/tr)
+
+**Question.** Can one adaptive step rule replace the ladder recipe's hand-set step knobs (beta 0.5, delta 0.05, cap
+0.05, trust region toward the old network w 1, progress rollback)?
+
+**The rule** (`hw_stage.py --tr 1`):
+- the full GN step (beta 1, no anchor) inside an LM trust radius;
+- rho = measured / predicted reduction of the ILC cost J, per goal against that goal's last kept trial (goals cycle);
+- the prediction is for the realized change: J(f) = J − (2f − f²)(J − J_pred);
+- rho < 0.25 halves the radius; rho < 0 or a new crash rejects the step; rho > 0.75 doubles it (max 0.4);
+- the newest trials are refit to convergence.
+
+**Setup.**
+- The 10-lap ladder recipe (`car_ladder.sh` + revert): 8 cars, the 3 ladder sim seeds.
+- Scored rung-aware, as reeval.py: each car on the plan rung it settled on.
+- Plans regenerated on ube (`gen_plans.sh`; `_mu60` by analogy with `_mu80`: `--mu-plan 0.6`).
+- **ube reproduces matcha:** the recipe gives b25 100 / 67 / 100 % (s0 / s1 / s2), against matcha's 100 / 65.6–74 /
+  99.5 %.
+
+| arm | b25 success | all plans | crashes | rollbacks / run | rho (median) |
+|---|---|---|---|---|---|
+| `lad` (recipe) s0 / s1 / s2 | **100 / 67 / 100** | 100 / 88 / 100 | 0 / 6 / 0 | 5 / 10 / 4 | – |
+| `lad_tr` (radius from 0.05) | 66 / 61 / 56 | 52 / 68 / 63 | 33 / 18 / 21 | 12 / 15 / 15 | −3 / −15 / −11 |
+| `lad_tr_r20` (radius from 0.20) s0 / s2 | 50 / 61 | 63 / 54 | 19 / 24 | 16 / 16 | (1 sample each) |
+
+(lad_tr_r20 s1 hung in its worker pool at iteration 3 twice and was abandoned; the pool hang is not debugged.)
+
+**The trust region on top of the recipe's damping** (`car_trd.sh`: beta 0.5, delta 0.05, anchor 1, the fixed refit;
+only the radius adapts, replacing the fixed cap and the progress rollback):
+
+| arm | b25 success | all plans | crashes | rollbacks / run | rho (median) |
+|---|---|---|---|---|---|
+| `lad` (recipe, fixed cap 0.05) s0 / s1 / s2 | 100 / 67 / 100 | 100 / 88 / 100 | 0 / 6 / 0 | 5 / 10 / 4 | – |
+| `lad_trd` (radius from 0.05) | 98 / 64 / 98 | 99.5 / 84 / 99.5 | 0 / 6.5 / 0 | 9 / 13 / 11 | 0.61 / 0.02 / −0.31 |
+| `lad_trd_r20` (radius from 0.20) | 100 / 75 / 94 | 100 / 89 / 94 | 0 / 2 / 0 | 9 / 13 / 13 | 0.55 / −1.2 / −1.0 |
+
+**Reading.**
+- **On the car the full GN step is harmful, and the trust region cannot save it.**
+  - With beta 1 and no anchor, steps that the nominal Jacobians predict to help crash the car (rho −3 to −15).
+  - Each rejection costs a crash, out of a 10-lap budget, and pushes the ladder down a rung: even the unperturbed car
+    ends on `_mu60` plans.
+  - The radius halves after each crash, but too late. The real budget has no room for the trial-and-error the trust
+    region needs.
+- **The recipe's beta 0.5 and the trust region toward the old network are doing real work on the car.** The pogo's
+  conclusion (with beta 1, the step size is not a knob) does not transfer.
+- **The honest statement:**
+  - one LM rule with textbook constants does NOT replace the car's step settings;
+  - a conservative gain (beta 0.5 plus the anchor) is needed because the model's predicted cost change is wrong in
+    sign for many full steps.
+- **With the damping kept, the trust region does replace the fixed cap.**
+  - It is level with the recipe on every seed, within one or two runs.
+  - It is insensitive to where the radius starts: 0.05 and 0.20 give the same results.
+  - It rejects more steps (9-13 vs 4-10 rollbacks): it pays for its own size estimate in trials.
+- **The car's knobs, after this:**
+  - beta 0.5 and the anchor are needed, because the model's sign is unreliable for full steps (small positivity margin,
+    theory remark rem:posdomains);
+  - the cap is not a tuned number: an adaptive radius from either start gives the same car.
+
 ## Baseline diagnosis: the RL baselines optimized a different objective (2026-10-17)
 
 **Finding.**
