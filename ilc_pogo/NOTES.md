@@ -525,3 +525,57 @@ against matcha's validation curves of 96.4 / 91.1 / 98.8 %. ube runs JAX 0.4.35 
   the nominal-sim network keeps the structure the hardware stage works well with (the nominal net's 96 %) and adds some
   robustness.
 - The trade-off: zero-shot vs after-the-stage. Neither ours + DR variant beats ours nominal after 36 trials.
+
+## Second frozen test pass, seed 2301 (2026-10-18 00:46; `final_test_2301.sh`, `results_table_test2301.txt`)
+
+**Why.** Ours + DR started from the NOMINAL sim network (`drNomInit`, ube's side result) was chosen on validation:
+- 94.3 % [88, 99] at 36 trials, against drLK20's 91.1 % (paired +3.1 [−1.4, +7.6]);
+- its heavy / soft sticks are at 91–100 %;
+- but it is weaker zero-shot: 54 % against 74 %.
+
+Its networks came in from ube with the merge (same recipe and code); only the hardware stage ran on matcha. Seed 1301
+was spent, so this pass uses a fresh seed (2301) for drNomInit and every headline arm.
+
+**Results** (test seed 2301; 3 seeds; success % [95 % cluster CI]; in brackets the first test pass, seed 1301):
+
+| arm | zero-shot | after real trials |
+|---|---|---|
+| ours, nominal sim | 6.2 (7.8) | **90.8** [85, 96] @36 (97.9) |
+| ours + DR, from nominal net (drNomInit) | 50.9 | **86.8** [78, 94] @36, seeds 89 / 83 / 89 |
+| ours + DR (drLK20) | 69.4 (71.2) | 81.9 [76, 88] @36 (86.3), seeds 84 / 97 / 65 |
+| PPO+DR + our stage | 77.8 (78.5) | **98.3** [96, 100] @36 (97.2) |
+| RMA, fixed | **97.6** [95, 100] (99.3) | |
+| FADA, fixed | 62.8 (64.9) | **98.6** [97, 100] @24 (93.9) |
+| PPO on the sticks | | 79.9 @48 (82.6), 95.1 @384 (95.8) |
+| Raibert | 14.6 (12.5) | |
+
+Paired differences on seed 2301 (percentage points [95 % CI]):
+
+| comparison | difference |
+|---|---|
+| drNomInit @36 − drLK20 @36 | +4.9 [−3.0, +12.5] |
+| drNomInit @36 − PPO+DR zero-shot | +9.0 [+1.9, +17.4] \* |
+| drNomInit @36 − RMA | −10.8 [−18.1, −4.9] \* |
+| ours nominal @36 − RMA | −6.8 [−11.6, −2.8] \* |
+| ours nominal @36 − PPO on the sticks @48 | +10.9 [+4.9, +18.1] \* |
+
+**Reading.**
+- **The first test pass flattered ours.** On a second fresh seed, ours nominal @36 is 90.8 %, not 97.9 %. The
+  difference between the two test seeds (about 7 points for our arms, ≤ 2 for RMA / PPO+DR + stage) is real
+  test-set variance at 192 runs per seed. That is why a single test seed is not enough.
+- **Across both test seeds**, the fixed baselines are better than ours on the pogo:
+  - RMA zero-shot 99.3 / 97.6 %;
+  - FADA @24 93.9 / 98.6 %;
+  - PPO+DR + our stage 97.2 / 98.3 %;
+  - ours nominal @36 97.9 / 90.8 %.
+
+  On seed 2301, RMA beats ours nominal significantly (−6.8 points).
+- **What holds on both seeds:**
+  - ours beats PPO+DR zero-shot and PPO fine-tuned on the sticks at a matched budget;
+  - our stage on top of PPO+DR is among the best arms (97–98 %).
+- **drNomInit vs drLK20.** drNomInit is better and far more consistent across sim seeds (89 / 83 / 89 vs 84 / 97 /
+  65), but not significantly (+4.9 [−3.0, +12.5]). Ours + DR remains below ours nominal (−4.0 [−8.2, 0.0]).
+- **Honest pogo claim:** the hardware stage turns a nominal-sim network (6 %) into 91–98 % in 36 real trials, beats RL
+  given the same real data, and improves any starting policy (PPO+DR → 97–98 %). On this toy the fixed RMA and FADA
+  baselines reach the same or better without our stage.
+- Test seeds 1301 and 2301 are now both spent.

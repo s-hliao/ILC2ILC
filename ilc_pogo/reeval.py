@@ -43,7 +43,8 @@ def main():
                    real_trials=s.get('real_trials', {}), positivity=s.get('positivity', {}),
                    source=src, seconds=time.time() - t0,
                    time=time.strftime('%Y-%m-%d %H:%M:%S'))
-        json.dump(out, open(os.path.join(d, f'summary_{C.EVAL_SET}.json'), 'w'), indent=1)
+        tag = os.environ.get('POGO_EVAL_TAG', '')                        # e.g. 2301: summary_test2301.json
+        json.dump(out, open(os.path.join(d, f'summary_{C.EVAL_SET}{tag}.json'), 'w'), indent=1)
         print(d, C.EVAL_SET, json.dumps({r: round(v['success'], 3) for r, v in out['eval'].items()}), flush=True)
 
 

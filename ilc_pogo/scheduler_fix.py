@@ -122,3 +122,16 @@ def add_jobs(S):
             hw(f'drLK20_s{s}_grid9', f'runs/drBlsLK20_s{s}/policy_pick.npz', f'{G9} --iters 4 --eval-at 2')
         hw('nom_s2_grid9', 'runs/nom_s2/policy_pick.npz', f'{G9} --iters 4 --eval-at 2')
         hw('ppo_dr_s2_grid9', 'runs/ppo_dr_s2/policy_final.npz', f'{G9} --iters 4 --eval-at 2')
+
+    if 'drnom' in STAGE:
+        # ours + DR with the DR sim stage started from the NOMINAL sim network instead of BC (ube 2026-10-17 side result:
+        # 94.3 vs 91.5 % at 36 trials): the drBlsLK20 sim recipe (line search, lagged feedback), 40 iterations, the
+        # sim-only stopping rule, then zero-shot and the default hardware stage (36 trials) on the validation goals
+        for s in (0, 1, 2):
+            n, init = f'drNomInit_s{s}', f'runs/nom_s{s}/policy_pick.npz'
+            S.job(n, f'{S.ENV} {S.PY} -u sim_train.py --out runs/{n} --init {init} --dr 1.0 --iters 40 --accept 2 '
+                  f'--fbk-refresh 20 --seed {s} --gpu {{gpu}} > logs/{n}.log 2>&1', f'runs/{n}/policy_final.npz', [init], 'gpu')
+            S.job(f'val:{n}', f'{S.ENV} CUDA_VISIBLE_DEVICES={{gpu}} {S.PY} -u sim_validate.py runs/{n} > logs/val_{n}.log 2>&1',
+                  f'runs/{n}/policy_pick.npz', [f'runs/{n}/policy_final.npz'], 'gpu')
+            hw(f'drNomInit_s{s}_zs', f'runs/{n}/policy_pick.npz', '--iters 0')
+            hw(f'drNomInit_s{s}_curve', f'runs/{n}/policy_pick.npz', '--iters 8 --eval-at 2 4 6')

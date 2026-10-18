@@ -28,7 +28,8 @@ D_OFF, D_SCALE, PHI_SCALE = 0.04, 0.04, 0.6
 GOAL_LO = np.array([0.0, 0.55])
 GOAL_HI = np.array([1.5, 0.75])
 TRAIN_GOALS = np.array([[0.0, 0.58], [0.4, 0.70], [0.8, 0.62], [1.1, 0.72], [1.4, 0.65], [0.6, 0.74]])
-VAL_SEED, TEST_SEED = 301, 1301
+VAL_SEED, TEST_SEED = 301, int(os.environ.get('POGO_TEST_SEED', 1301))
+# 1301: the first clean test pass (2026-10-17 07:23, spent); a later frozen pass sets POGO_TEST_SEED to a fresh seed
 # 701 was the first test seed; the hardware-stage defaults were first seen on it, so it is superseded (runs/hw/*).
 # Every real-stick evaluation scores the set named by POGO_EVAL_SET: 'val' (default; all tuning and selection) or
 # 'test' (the single frozen pass at the end, reeval.py).
