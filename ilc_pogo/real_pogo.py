@@ -24,6 +24,8 @@ their defaults (0) the real substep below reduces exactly to common.substep.
                sinks in stance and the leg force acts from the sunk foot
   real_legm    leg mass 1 kg at the foot (unsprung; the body stays 10 kg): pinned in stance, at liftoff the body must
                drag it up (a plastic collision: the body's velocity x m / (m + mf)); its swing in flight is neglected
+Harsher suite (HARSH): dead zone + backlash 12 / 20 mm, lag 40 / 60 ms, ground 6 kN/m + 60 N s/m / 3 kN/m + 30 N s/m,
+leg mass 2 / 3 kg (real_<effect>2 / 3).
 """
 import numpy as np
 
@@ -52,7 +54,16 @@ UNMODELLED = {
     'real_legm': dict(mf=('set', 1.0)),
 }
 UNMODELLED_ROBOTS = list(UNMODELLED)
+# the harsher suite (2026-10-18): the four dynamics effects at two levels each, set a priori (not tuned on any method)
+HARSH = {
+    'real_dead2': dict(dz=('set', 0.012), bl=('set', 0.012)), 'real_dead3': dict(dz=('set', 0.020), bl=('set', 0.020)),
+    'real_lag2': dict(tau=('set', 0.04)), 'real_lag3': dict(tau=('set', 0.06)),
+    'real_ground2': dict(kg=('set', 6000.0), bg=('set', 60.0)), 'real_ground3': dict(kg=('set', 3000.0), bg=('set', 30.0)),
+    'real_legm2': dict(mf=('set', 2.0)), 'real_legm3': dict(mf=('set', 3.0)),
+}
+HARSH_ROBOTS = list(HARSH)
 ROBOTS.update(UNMODELLED)                         # robot_params knows them; DEFAULT_ROBOTS stays the original six
+ROBOTS.update(HARSH)
 MULT = ('m', 'k', 'gth', 'l0')
 
 

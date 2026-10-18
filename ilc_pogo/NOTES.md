@@ -645,6 +645,61 @@ At 12 trials, PPO+DR + ours is ahead of ours nominal: +8.8 [+1.7, +17.3], mostly
   - A suite with larger dead zone / lag / leg mass would be needed to show RMA failing on unmodelled dynamics proper.
   - The PPO+DR, FADA and PPO-on-robot gaps are robust across robots.
 
+### Harsher suite (2026-10-18; `POGO_UNMOD_SUITE=harsh`, runs/v6, `table_unmod.py --suite harsh`)
+
+**Setup.**
+- The four dynamics effects at two levels each, set before any run (not tuned on a method):
+  - dead zone + backlash 12 / 20 mm;
+  - lag 40 / 60 ms;
+  - ground 6 kN/m + 60 N s/m / 3 kN/m + 30 N s/m;
+  - leg mass 2 / 3 kg.
+- No bias robot: it was already at 0 % for every zero-shot policy.
+- Same arms, goals and seeds as the first suite.
+
+| arm | dead2 | dead3 | lag2 | lag3 | ground2 | ground3 | legm2 | legm3 | 8 robots [CI] |
+|---|---|---|---|---|---|---|---|---|---|
+| ours nominal, zero-shot | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0.0 |
+| ours nominal + 36 (12 / 24 / 36: 41.1 / 64.8 / 69.3) | 100 | 55 | 95 | 96 | 8 | 0 | 100 | 100 | **69.3 [59.1, 79.0]** |
+| PPO+DR, zero-shot | 2 | 0 | 92 | 62.5 | 19 | 0 | 12.5 | 0 | 23.4 [13.8, 34.1] |
+| PPO+DR + ours 36 (12 / 24 / 36: 63.8 / 70.7 / 73.0) | 87.5 | 86.5 | 98 | 79 | 33 | 0 | 100 | 100 | **73.0 [63.2, 82.7]** |
+| RMA (fixed) | 100 | 88.5 | 99 | 97 | 100 | 29 | 31 | 17 | **70.2 [59.6, 80.0]** |
+| FADA (fixed), zero-shot | 0 | 0 | 83 | 50 | 9 | 0 | 12.5 | 2 | 19.7 [11.1, 29.2] |
+| FADA (fixed) + 24 | 100 | 83 | 100 | 62.5 | 17 | 0 | 17 | 5 | 48.0 [36.6, 59.5] |
+| PPO on the robots, 48 trials | 0 | 0 | 92 | 62.5 | 22 | 0 | 12.5 | 3 | 24.0 [14.3, 34.5] |
+
+Paired differences vs ours nominal + 36:
+
+| arm | difference [CI] |
+|---|---|
+| RMA | +0.9 [−13.0, +14.7] |
+| PPO+DR + ours | +3.8 [−1.7, +9.4] |
+| FADA + 24 | −21.2 [−33.2, −9.4] |
+| PPO on the robots | −45.3 [−57.6, −33.2] |
+
+**Reading.**
+- **RMA and our stage fail on different robots.** Overall they tie (70 vs 69 %).
+  - **Leg mass (2–3 kg):** RMA collapses to 17–31 %; ours converges to 100 %, with J falling 6.75 → 0.08 over 6
+    iterations and positivity cos 0.82.
+    - The leg mass is a momentum loss at liftoff. No parameter in RMA's z (mass, spring, thrust gain, ...) reproduces it,
+      so the estimator's best guess is wrong.
+    - It is a smooth, repeatable effect the trial error sees directly.
+  - **Soft ground:** RMA is at 100 % (6 kN/m) and 29 % (3 kN/m); ours is at 8 % and 0 %.
+    - **6 kN/m: our stage is still converging** at 36 trials. J goes 6.8 → 2.8 and is still falling; positivity cos
+      0.64; apex 6.5 cm, speed error 0.23 m/s.
+    - **3 kN/m: it makes no progress.** J stays at 25.4, cos is 0.14, and the speed error is 1.2 m/s. The nominal
+      Jacobians no longer predict this robot, because the stance on a soft ground is a different hop. This is the
+      positivity failure the theory names.
+    - RMA's DR-robust policy tolerates the softer stance at zero-shot. Its z (stiffness, damping) can partly mimic a
+      series spring.
+  - **Dead zone 20 mm and lag 60 ms:** RMA 89–97 %; ours 55–96 %. Starting from PPO+DR helps ours on the dead zone (86.5 %).
+- **FADA and PPO on the robots stay far behind**, by 21 and 45 points.
+- **Starting the stage from PPO+DR is faster:** +22.7 [+13.2, +32.9] points at 12 trials. By 36 trials it is level.
+- **The honest statement:**
+  - our stage is not uniformly better than a well-trained RMA on unmodelled dynamics;
+  - it wins where the effect is outside what the estimator's parameters can express but the nominal Jacobians still
+    predict the change (leg mass, bias);
+  - it loses where the effect changes the hop enough to break positivity (very soft ground).
+
 ## Perturbed training starts (2026-10-18, matcha; validation goals, 3 seeds, 36 trials; stages `horizon`, `pfix`, `pfix2`, `drnomT` in `scheduler_fix.py`)
 
 **Why.** The hardware stage trained on 3 s trials from each goal's UNPERTURBED apex, but every arm is scored on 10 s
