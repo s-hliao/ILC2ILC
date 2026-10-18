@@ -150,6 +150,25 @@ def add_jobs(S):
                 for s in (0, 1, 2):
                     hw(f'{net}_s{s}_{arm}', pat.format(s=s), args)
 
+    if 'pfix' in STAGE:
+        # 2026-10-18: the 'horizon' perturbed arms redraw the training starts every iteration, so rollback / new-fall
+        # compare the new and the kept network on different starts (T1000P: mass / spring stuck at 62 % from it4 on,
+        # every later step rejected). --pert-fixed 1: one perturbed start per goal, kept across iterations (the ILC
+        # repeated-initial-condition assumption); otherwise the 'horizon' arms unchanged.
+        NETS = {'nom': 'runs/nom_s{s}/policy_pick.npz', 'drNomInit': 'runs/drNomInit_s{s}/policy_pick.npz'}
+        ARMS_F = {'PF': '--train-pert 1.0 --pert-fixed 1 --iters 6 --eval-at 2 4',
+                  'T600PF': '--T 600 --train-pert 1.0 --pert-fixed 1 --iters 6 --eval-at 2 4',
+                  'T1000PF': '--T 1000 --train-pert 1.0 --pert-fixed 1 --iters 6 --eval-at 2 4'}
+        for net, pat in NETS.items():
+            for arm, args in ARMS_F.items():
+                for s in (0, 1, 2):
+                    hw(f'{net}_s{s}_{arm}', pat.format(s=s), args)
+    if 'pfix2' in STAGE:
+        # the fixed perturbed-start protocol for the other arm that uses our hardware stage (fairness), on validation
+        for arm, args in {'PF': '--train-pert 1.0 --pert-fixed 1 --iters 6 --eval-at 2 4',
+                          'T600PF': '--T 600 --train-pert 1.0 --pert-fixed 1 --iters 6 --eval-at 2 4'}.items():
+            for s in (0, 1, 2):
+                hw(f'ppo_dr_s{s}_{arm}', f'runs/ppo_dr_s{s}/policy_final.npz', args)
     if 'drnomT' in STAGE:
         # ours + DR, sim side of the horizon finding: the DR sim stage from the nominal net (drNomInit's recipe) on 6 s
         # training rollouts instead of 3 s (slow drifts after ~6 hops become visible to the sim stage), then the sim-only

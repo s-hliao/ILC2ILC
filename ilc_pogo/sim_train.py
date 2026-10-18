@@ -244,7 +244,7 @@ for it in range(a.iters):
     out = fly_policy(params, x0, G, p, noise)
     SIM_SECONDS += a.lanes * a.T * C.DT
     chain = (out['x_end'], out['failed_end'])
-    CH = 256                                                  # the GN step in lane chunks (GPU memory)
+    CH = max(16, int(256 * (300 / a.T) ** 2))                # the GN step in lane chunks (GPU memory: G is (2T)x(2T) per lane)
     if a.fbk_refresh and it % a.fbk_refresh == 0:
         params_K = params
     pK = params_K if a.fbk_refresh else params

@@ -61,6 +61,9 @@ ap.add_argument('--fit-realize', type=float, default=0.0, help='>0: refit to con
                 'fixed --steps)')
 ap.add_argument('--fit-max-steps', type=int, default=8000)
 ap.add_argument('--crash-rollback', type=int, default=1)
+ap.add_argument('--pert-fixed', type=int, default=0, help='1: the perturbed training starts are drawn once per goal and '
+                'kept for every iteration (the repeated-initial-condition ILC assumption: the rollback / new-fall checks then '
+                'compare the new and the kept network on the same starts); 0: redrawn each iteration')
 ap.add_argument('--train-pert', type=float, default=0.0, help='drop perturbation of the training trials (0: the goal\'s '
                 'clean drop, the same start every iteration)')
 ap.add_argument('--eval-runs', type=int, default=4)
@@ -233,7 +236,7 @@ def main():
     pb = batch_params(names)
     rows = [np.arange(k * len(GOALS), (k + 1) * len(GOALS)) for k in range(len(ROBOTS))]
     for it in range(a.iters):
-        x0 = rp.start_states(Gb, a.train_pert, np.random.default_rng(a.seed + it if a.train_pert > 0 else a.seed))
+        x0 = rp.start_states(Gb, a.train_pert, np.random.default_rng(a.seed + it if a.train_pert > 0 and not a.pert_fixed else a.seed))
         pol = GroupPolicy([[(np.asarray(W), np.asarray(b)) for W, b in params[r]] for r in ROBOTS], rows)
         res = rp.simulate(pol, Gb, x0, pb, a.T)
         NS = max(a.fit_samples - 1, 0)

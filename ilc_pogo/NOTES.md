@@ -699,3 +699,97 @@ Paired differences vs ours nominal + 36:
   - it wins where the effect is outside what the estimator's parameters can express but the nominal Jacobians still
     predict the change (leg mass, bias);
   - it loses where the effect changes the hop enough to break positivity (very soft ground).
+
+## Perturbed training starts (2026-10-18, matcha; validation goals, 3 seeds, 36 trials; stages `horizon`, `pfix`, `pfix2`, `drnomT` in `scheduler_fix.py`)
+
+**Why.** The hardware stage trained on 3 s trials from each goal's UNPERTURBED apex, but every arm is scored on 10 s
+runs from perturbed drops. On the second test pass, ours's failures were almost all on the offset stick at high-apex
+goals. Two mechanisms were invisible to training:
+- a slow drift after about hop 6;
+- a period-2 gait that is reached only from perturbed starts.
+
+**Arms.**
+- `--T 500/600/1000`: longer trials.
+- `--train-pert 1.0`: training drops perturbed like the evaluation drops.
+- `--pert-fixed 1` (new): one perturbed start per (robot, goal), drawn once and kept for every iteration. This is the
+  ILC repeated-initial-condition assumption.
+
+| arm (36 trials unless noted) | ours + DR (drNomInit) | ours nominal | PPO+DR + stage | drNomInit offset stick |
+|---|---|---|---|---|
+| default (unperturbed, 3 s) | 94.3 | 96.4 | 98.8 | 72 |
+| P: perturbed, redrawn each iteration | 97.2 | 91.5 | | 88 |
+| T500P | 95.5 | 89.1 | | 78 |
+| T1000P | 95.1 | 88.5 | | 95 |
+| **PF: perturbed, fixed per goal** | **99.5 [98.4, 100]** (97.6 @24) | 95.3 | 98.8 [97.2, 100] | **97** |
+| T600PF | 99.5 [98.6, 100] | 92.7 | 98.4 | 98 |
+| T1000PF | 96.4 | 88.7 | | 97 |
+| RMA zero-shot (reference) | 99.8 | | | 99 |
+
+**Reading.**
+- **Redrawing the perturbed starts every iteration breaks the rollback.** The new-vs-kept cost and new-fall checks then
+  compare networks on different starts.
+  - Lucky draws accept bad steps, and unlucky draws reject the fixes. T1000P had 11–13 rollbacks per 3 seeds; its
+    mass / spring sticks are frozen at 62 % from it4 on.
+  - With fixed starts: 0 rollbacks, and the offset stick goes from 72 to 97 %.
+- **10 s trials hurt the mass / spring sticks** even with fixed starts and no rollbacks (nominal net 67 %). 3 s trials
+  (36 × 3 s = 108 s of hopping per robot) are kept; 6 s ties at twice the real seconds.
+- **Ours + DR now gains the most from the stage:** 54 % zero-shot → 99.5 %. That level ties RMA zero-shot (99.8) and is
+  ≥ PPO+DR + stage. Ours nominal does not benefit (95.3 vs 96.4).
+- **The sim side does not help.** A DR sim stage on 6 s rollouts (`drNomInitT600`, after fixing a GPU-memory crash:
+  the GN step now runs in lane chunks scaled by (300/T)²) gives 54.2 % zero-shot, the same as the 3 s version (54.3).
+  - In DR sim, both reach only ~40 % success (the stopping rule's numbers), against PPO+DR's 93 % in-family.
+  - Our DR sim stage barely learns the randomization. Ours + DR's result comes from the hardware stage.
+- **Frozen 2026-10-18 ~16:20, before any test run:**
+  - the protocol is PF (3 s, fixed perturbed starts, 6 goals × 6 iterations) for every arm that uses our stage;
+  - the test pass runs on a fresh seed, 3301 (`final_test_3301.sh`).
+
+## Third frozen test pass, seed 3301 (2026-10-18 16:20–16:46; `final_test_3301.sh`, `results_table_test3301.txt`)
+
+The protocol was frozen on validation (previous section). This is a fresh test seed; 1301 and 2301 are spent.
+
+| arm | zero-shot | after real trials |
+|---|---|---|
+| **ours + DR (drNomInit), PF protocol** | 48.8 | **97.6** [94.8, 99.8] @36, seeds 99 / 95 / 98 |
+| ours + DR, old protocol | | 91.5 [84.5, 97.0] @36 |
+| ours nominal, PF / old | 7.6 | 90.8 / 89.8 @36 |
+| ours + DR (drLK20), old | | 85.4 @36 |
+| PPO+DR + our stage, PF / old | 73.6 | 97.2 / 97.4 @36 |
+| RMA, fixed | **98.6** [96.5, 100] | |
+| FADA, fixed | 65.5 | 95.1 [91.7, 97.9] @24 |
+| PPO on the sticks | | 79.5 @48, 94.4 @384 |
+| Raibert | 10.4 | |
+
+Paired differences for ours + DR PF @36 (percentage points [95 % CI]; \* = significant):
+
+| comparison | difference |
+|---|---|
+| − RMA | −1.0 [−3.3, +1.2] |
+| − PPO+DR + stage | +0.3 [−3.0, +3.3] |
+| − FADA @24 | +2.4 [−1.7, +6.4] |
+| − ours + DR, old protocol | +6.1 [+2.1, +10.8] \* |
+| − ours nominal PF | +6.8 [+2.3, +12.2] \* |
+| − drLK20 | +12.2 [+6.9, +17.9] \* |
+| − PPO+DR zero-shot | +24.0 [+14.1, +34.5] \* |
+| − PPO on the sticks @48 | +18.1 [+10.1, +26.9] \* |
+| − PPO on the sticks @384 (10× the trials) | +3.1 [+0.3, +6.4] \* |
+
+Per robot, ours + DR PF: act 100, mass 99, nom 100, offset 90, prog 100, spring 97. For comparison, RMA's offset stick
+is at 92 and its other sticks at 100.
+
+**Reading.**
+- **The validation fix holds on a fresh test seed.**
+  - Ours + DR rises from 86.8 (seed 2301, old protocol) / 91.5 (seed 3301, old protocol) to 97.6 %.
+  - It is consistent across sim seeds (99 / 95 / 98).
+- **Ours + DR is now statistically tied with the best baselines:**
+  - RMA, −1.0 [−3.3, +1.2];
+  - PPO+DR + our stage;
+  - FADA.
+
+  It is not significantly better than any of them. It is significantly better than every other arm, including PPO
+  fine-tuned on the sticks with 10× the real trials.
+- **The protocol fix matters only for the DR network.** Ours nominal: 90.8 PF vs 89.8 old. PPO+DR + stage: 97.2 vs
+  97.4.
+- **Pogo claim, updated.** The hardware stage takes a weak DR network (49 % zero-shot) to the level of a well-trained
+  RMA (98–99 %) in 36 real trials, using no privileged information about the robot. On this toy it ties RMA / FADA; it
+  does not beat them.
+- Test seeds 1301, 2301 and 3301 are now all spent.
