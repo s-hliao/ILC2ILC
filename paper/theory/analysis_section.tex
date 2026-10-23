@@ -1,0 +1,55 @@
+% analysis_section.tex (2026-10-18): short analysis paragraphs for the paper, condensed from distilc_theory.tex
+% (full statements and proofs -> appendix). Citations: analysis_refs.bib.
+
+\paragraph{Assumptions about goal continuity.}
+Let $g'$ be an unflown goal at distance $d$ from a flown goal $g$, with both rollouts visiting the same sequence of
+contact events. We assume that, within this mode sequence, the real error and the sensitivities are Lipschitz in the
+goal, $\|\mbf{e}_{g'}-\mbf{e}_g\|\le L_e d$ and $\|\mbf{G}_{g'}-\mbf{G}_g\|\le L_G d$. This follows from continuous
+dependence on parameters for smooth dynamics \citep[Ch.~3]{khalil2002nonlinear} and from piecewise differentiability
+for hybrid systems with transversal events \citep{burden2016pwd}, and it fails across mode boundaries (e.g.\ flat
+vs.\ box landings). It holds when the sim-to-real discrepancy is robot-wide (gain, mass, friction, delay) rather than
+specific to one goal.
+
+\paragraph{Assumptions about initial state perturbation and basins of convergence.}
+Initial states $\mbf{x}_0\sim p_0(\cdot\mid g)$ and sensing enter the measured error as zero-mean noise of bounded
+variance. Unlike classical ILC, which needs repeated initial conditions \citep{heinzinger1992stability}, the policy's
+feedback rejects part of each perturbation within the rollout. The analysis is local: it needs a neighbourhood of the
+current policy in which actions do not saturate and the mode sequence is fixed, and an initial error small enough to
+lie in the basin of convergence. Placing the policy in that basin is the role of the simulation stage. Rollouts that
+change contact sequence or fall leave it; their errors are masked and worse updates are rolled back.
+
+\paragraph{Proof of convergence under assumptions.}
+A parameter change acts on the closed loop like an additive correction, so to first order the error evolves as
+$\mbf{e}^{(i+1)}=(\mbf{I}-\beta\mbf{M})\mbf{e}^{(i)}$, with $\mbf{M}=\mbf{G}_{\mathrm{real}}\mbf{S}\hat{\mbf{L}}$:
+the step requested by the nominal model,
+$\hat{\mbf{L}}=(\mbf{G}^\top\mbf{Q}\mbf{G}+\lambda\mbf{I})^{-1}\mbf{G}^\top\mbf{Q}$, realized by the network refit
+$\mbf{S}$, and passed through the true closed loop $\mbf{G}_{\mathrm{real}}$. We assume \emph{positivity},
+$\mbf{e}^\top\mbf{Q}\mbf{M}\mbf{e}\ge\mu\|\mbf{e}\|_{\mbf{Q}}^2$ and $\|\mbf{M}\|_{\mbf{Q}}\le\Gamma$: the nominal
+correction reduces the real error to first order. It holds, for example, for multiplicative model errors of any size,
+$\mbf{G}_{\mathrm{real}}=\mbf{P}\mbf{G}$ with $\mbf{P}+\mbf{P}^\top\succ0$ \citep{harte2005inverse}, and it is the
+approximate-model ILC condition \citep{bristow2006survey}. Then, for $\beta\le\mu/\Gamma^2$,
+$\|(\mbf{I}-\beta\mbf{M})\mbf{e}\|_{\mbf{Q}}^2\le(1-2\beta\mu+\beta^2\Gamma^2)\|\mbf{e}\|_{\mbf{Q}}^2\le(1-\beta\mu)\|\mbf{e}\|_{\mbf{Q}}^2$,
+and with the Taylor remainder bounded on the neighbourhood the error converges linearly. With trial noise and
+decreasing step sizes, convergence is almost sure by the Robbins--Siegmund theorem \citep{robbins1971convergence}.
+Moreover, if the network can realize any correction and $\mbf{G}$ has full row rank, the update stops only when
+$\hat{\mbf{L}}\mbf{e}=\mbf{0}$, i.e.\ $\mbf{e}=\mbf{0}$: the fixed points are zeros of the \emph{real} error,
+whatever the gap $\hat f\neq f$. The model error affects the rate, not the limit (Appendix~\ref{app:theory}).
+
+\paragraph{Why we don't use fitted value functions.}
+Deep off-policy ILC \citep{gurumurthy2023deepilc} fits a critic to a value-gradient loss propagated through
+approximate simulator Jacobians. We regress onto the ILC step instead, for three reasons. Holding the next action
+fixed makes the critic's target the open-loop gradient, which for a feedback policy was uncorrelated with the exact
+closed-loop gradient in our simulator ($r=0.00$), while training on closed-loop targets diverged, since the targets
+depend on the actor's gains that follow the critic \citep[Sec.~11.3]{sutton2018rl}. The exact closed-loop step is
+already available from $\mbf{G}$, so a learned approximation only adds error. And a fitted critic moves the fixed
+points to the zeros of its own approximation, reintroducing the model bias that the measured residual removes
+\citep{abbeel2006inaccurate}.
+
+\paragraph{Why single corrections correct a neighbourhood of goals.}
+To first order, the refit changes the policy at every input, not only at the targets:
+$\delta\pi(\mbf{x},g)=\Theta\big((\mbf{x},g),\mcal{D}\big)\big(\Theta(\mcal{D},\mcal{D})+\rho\mbf{I}\big)^{-1}\mbf{v}^\star$,
+where $\Theta$ is the empirical neural tangent kernel \citep{jacot2018ntk,lee2019wide}. A correction measured at goal
+$g_j$ therefore also moves the policy at goals the kernel couples to $g_j$. Under the continuity assumptions above and
+positivity at $g_j$, this movement reduces the error at an unflown goal within a radius set by $L_e$, $L_G$ and the
+kernel's decay. Across mode boundaries there is no such guarantee, and convergence is guaranteed only at the flown
+goals.

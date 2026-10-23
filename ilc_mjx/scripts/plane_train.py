@@ -128,7 +128,7 @@ def log(s):
 bank = json.load(open(a.bank))
 shutil.copy(a.bank, os.path.join(a.out, "policy", "bank.json"))
 shutil.copy(a.bank, os.path.join(a.out, "bank.json"))
-env = JumpEnv(bank, Config(est_window=a.est_window))
+env = JumpEnv(bank, Config(est_window=a.est_window, mu=float(bank.get("mu", 0.6))))   # bank "mu": its plans' friction cone
 N, Nc = env.N, env.Nc
 sx = np.asarray(bank["sx"], float)
 swing = np.asarray(env.swing)

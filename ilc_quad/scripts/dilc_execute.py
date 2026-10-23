@@ -194,6 +194,10 @@ for _n in ("real_r1", "real_s1", "real_r4", "real_r5"):
         NAMED[f"{_n}_{_g}"] = _only_group(NAMED[_n], _g)      # (underscore: real_r4m is already a robot)
 del _n, _g
 
+# friction twin (2026-10-23): real_r5 with nominal ground friction 1.0 (its 0.59 slips on the 0.6 plans: the positivity
+# diagnosis, log/dilc/plane/quad_r5_split.py) -- everything else, timing and sensing included, as real_r5
+NAMED["real_r5mu1"] = NAMED["real_r5"] + " --friction 1.0"
+
 def conditions(spec: str, seed: int = 0) -> list[tuple[str, str]]:
     """'challenging', 'all', 'dr:N' (N randomized), a comma list of names, or a file of
     name|args lines (conds_async.txt)."""
@@ -793,11 +797,15 @@ def run_jump(bank: GoalBank, g, cond: str, seed: int, driver_kw: dict, land_time
             "--reference-file", ref_path,
             "--param", "phases:=[" + ",".join(str(int(v)) for v in cfg["phases"]) + "]",
             "--param", f"margin:={cfg['margin']}", "--param", f"land_time:={land_time}"]
+    if "mu" in cfg:                    # a plan made for another friction cone (2026-10-23): the node must assume it too
+        argv += ["--param", f"mu:={cfg['mu']}"]
     argv += [x for p_ in os.environ.get("DILC_NODE_PARAMS", "").split() for x in ("--param", p_)]   # run --node-param
     if menagerie_root:
         argv += ["--menagerie-root", menagerie_root]
     if box is not None:
         argv += ["--box", str(box["x_front"]), str(box["height"])]
+    if WORLD_BOX.get("box") is not None and WORLD_BOX["box"] != box:     # aimed: the world keeps the true goal's box
+        argv += ["--world-box", str(WORLD_BOX["box"]["x_front"]), str(WORLD_BOX["box"]["height"])]
     argv += shlex.split(strip_seed(cond)) + ["--seed", str(int(seed))]
     args = lockstep.build_parser().parse_args(argv)
 
@@ -1423,6 +1431,36 @@ def _run_one(job):
                 os.remove(fh.name)
 
 
+WORLD_BOX = {}                               # run_jump's world box when the command is aimed (set per jump)
+
+
+def aim_features(g):
+    """the aim map's features of goal g = (x, h): landing-x rows [flat, box, box (x - 0.55), box (h - 0.10)],
+    landing-h rows [box, box (h - 0.10)] (flat goals keep h = 0)"""
+    x, h = float(g[0]), float(g[1])
+    b = float(h > 0)
+    return np.array([1 - b, b, b * (x - 0.55), b * (h - 0.10)]), np.array([b, b * (h - 0.10)])
+
+
+def aim_goal(g, cname):
+    """The aim-off ILC (2026-10-23): the goal commanded for world goal g on robot `cname` -- g + the robot's learned
+    offset map (DILC_AIM: a json {cond: {"tx": [4], "th": [2]}}, aim_features), clipped into the plan bank's
+    range (x <= 0.65, box h in [0.05, 0.20]; never further out than g itself on the near side). No DILC_AIM: g."""
+    path = os.environ.get("DILC_AIM", "")
+    g = np.asarray(g, float)
+    if not path:
+        return g
+    m = json.load(open(path)).get(cname)
+    if not m:
+        return g
+    fx, fh = aim_features(g)
+    x = g[0] + float(fx @ np.asarray(m["tx"], float))
+    h = g[1] + float(fh @ np.asarray(m["th"], float))
+    x = float(np.clip(x, min(g[0], 0.40 if g[1] == 0 else 0.50), 0.65))
+    h = 0.0 if g[1] == 0 else float(np.clip(h, min(g[1], 0.05), 0.20))
+    return np.array([x, h])
+
+
 def _run_one_inner(job):
     (policy_dir, member, g, cname, cond, seed, mode, land_time, root, ilc_U_path,
      ref_file, save_dir) = job
@@ -1435,7 +1473,9 @@ def _run_one_inner(job):
     else:                                  # baselines need the bank only, no trained policy
         bank, actor = _cached(("bank", policy_dir), lambda: GoalBank(
             json.load(open(os.path.join(policy_dir, "bank.json"))))), None
+    g_true, g = g, aim_goal(g, cname)        # DILC_AIM: the commanded goal (reference + network input); the world's box and the score stay g_true
     ref, box, extrap = bank.reference(g)
+    WORLD_BOX["box"] = bank.reference(g_true)[1]
     kw = dict(window=bank.cfg["est_window"])
     if ref_file:
         ref = dict(np.load(ref_file))
@@ -1464,6 +1504,7 @@ def _run_one_inner(job):
                                             reference=(ref, box, extrap), menagerie_root=root,
                                             reference_file=ref_file)
     maker = _cached(("maker", policy_dir), lambda: EpisodeMaker(bank, root))
+    g_aim, g = g, g_true
     ep = maker.make(g, ref, drv.X, drv.U, log["X"], fell, rec)
     info = dict(zip(INFO_COLS, (float(v) for v in ep["info"])))
     cost = float(-(ep["rc"][:, 2].sum()))
@@ -1473,7 +1514,7 @@ def _run_one_inner(job):
                  **ep, **{f"rec_{k}": v for k, v in rec.items()})
     return dict(mode=mode, member=member if mode == "policy" else "", goal=list(map(float, g)),
                 cond=cname, seed=seed,
-                extrapolated=extrap, landing_cost=-cost, wall=time.time() - t0, **info,
+                extrapolated=extrap, landing_cost=-cost, wall=time.time() - t0, **info, aim=list(map(float, g_aim - g)),
                 passed=bool(abs(info["ex"]) <= 0.01 and abs(info["ez"]) <= 0.02
                             and abs(info["eth"]) <= math.radians(2.0) and not info["fell"]))
 

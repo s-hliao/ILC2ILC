@@ -244,6 +244,8 @@ class Reality:
 
 def run(args) -> list[dict]:
     box = dict(x_front=args.box[0], height=args.box[1]) if args.box else None
+    if getattr(args, "world_box", None):    # the aim-off ILC (2026-10-23): the world's box is the true goal's, the plan's (--box) the commanded one's
+        box = dict(x_front=args.world_box[0], height=args.world_box[1])
     ground = dict(kp=args.ground[0], kd=args.ground[1]) if args.ground else None
     payload = dict(mass=args.payload) if args.payload else None
     root = args.menagerie_root or default_menagerie_root()
@@ -379,6 +381,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="CoM displacement, m")
     ap.add_argument("--box", type=float, nargs=2, metavar=("X_FRONT", "HEIGHT"),
                     help="box front face (m ahead of the standing CoM) and height")
+    ap.add_argument("--world-box", type=float, nargs=2, metavar=("X_FRONT", "HEIGHT"),
+                    help="the simulated world's box when it differs from the plan's --box (an aimed command)")
     ap.add_argument("--ground", type=float, nargs=2, metavar=("KP", "KD"),
                     help="ground stiffness N/m and damping N s/m per foot (sim only)")
     ap.add_argument("--payload", type=float, default=0.0, help="kg on the trunk (sim only)")

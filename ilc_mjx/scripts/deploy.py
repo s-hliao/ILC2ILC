@@ -263,7 +263,7 @@ gname = lambda g: f"{g[0]:.3f}" + (f",{g[1]:.3f}" if g[1] else "")  # for the lo
 gfile = lambda g: f"{g[0]:.4f}" + (f"_{g[1]:.4f}" if g[1] else "")  # for file names (flat: as before)
 
 bank = json.load(open(os.path.join(a.policy, "bank.json")))
-env = JumpEnv(bank, Config(est_window=a.est_window))
+env = JumpEnv(bank, Config(est_window=a.est_window, mu=float(bank.get("mu", 0.6))))   # bank "mu": its plans' friction cone
 if a.select != "fixed":                          # the candidates: the valid plane's grid
     a.goals = [gkey(g) for g in env.plane_grid(a.cand_step)]
 Nc, Ndc = env.Nc, env.Ndc
