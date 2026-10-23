@@ -27,7 +27,11 @@ A copy in the paper layout (pogo/ car/ quadruped/ x figures/ videos/ + tables.md
 ## Animated flow fields (one frame per stage iteration, 1.2 s each; same style as the static portraits)
 - pogo/flow_anim_pogo.{mp4,gif}: sim pi0 vs the offset / mass sticks under pi_k, k = 0..6 (ours, seed 0); *_first.png / *_last.png.
 - quad/flow_anim_quad.{mp4,gif}: sim pi0 vs the 4 robots under pi_k, k = 0..4 (ours+DR start, seed 9001; logged fields).
-- car: no animation (its field barely moves; use car/portrait_*.png + field_err.png / task_err.png).
+- car: the 0.5 s state field (portrait_*.png) is NOT the map the stage corrects: its gap is mostly in the drift states (vy, r), which the stage's cost (e_y + pace) never asks for, so it barely moves. The lap-level checkpoint return map is the one the stage corrects:
+- car/fig_car_returnmap.png (454 KB): the car's trial-level field (analogue of pogo's apex map / the quad's goal field) in (e_y / 0.10 m, speed error / 0.30 m/s); orange loop = the repeating error (mean state at 8 checkpoints/lap, per track), arrows = smoothed segment map, star = plan; ours seed 0, pi_0..pi_5 re-flown from the 3 validation starts (seed 301) x 2 laps. Repeating error 0.70 -> 0.52 (real_nom), 0.58 -> 0.30 (real_mu), 0.72 -> 0.57 (real_lag); all 8 cars 0.55 -> 0.44; the axle-friction cars ax:mu=0.6/0.7/0.9 do not contract (their gain is the ladder rung). Script: log/dilc/flows/car/car_returnmap.py.
+- car/fig_car_returnmap.png: THE car flow field -- the lap-level checkpoint map in the task coordinates (lateral error, speed error; tolerance units) smoothed from the actual trials; the repeating error orbit contracts toward the plan: real_mu 0.58 -> 0.30, real_nom 0.70 -> 0.52, real_lag 0.72 -> 0.57, all 8 cars 0.55 -> 0.44 (ax:mu=0.7 / 0.9 do not contract).
+- car/fig_car_localmap.png: the same map FLOWN around the actual trials (multi-body car started from a 3x3 grid of (lateral, speed) offsets at each checkpoint state of the trial, one segment ahead); mean distance of the next checkpoint state: real_nom 0.62 -> 0.53, real_mu 0.52 -> 0.46, real_lag 0.69 -> 0.61 tol (modest, 12-15 %).
+- (why the 0.5 s portraits barely move: that field is all 5 error states vs sim pi_0's; most of the gap is in sideslip / yaw rate, which the stage's cost (lateral error + pace) never targets -- the stage corrects the lap-level task map, above.)
 
 ## Scripts (all in media/): make_tables.py, video_quad.py, video_pogo.py, car_fly.py + video_car.py, flow_anim.py
 
