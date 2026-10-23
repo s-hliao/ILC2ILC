@@ -86,3 +86,6 @@ A copy in the paper layout (pogo/ car/ quadruped/ x figures/ videos/ + tables.md
     178117  quad/table_quad.png
       1495  quad/tables.md
 ```
+
+- car/fig_car_xyfield.png: the car's correction field in its own x-y space on the figure-8 (multi-body car started 6/12 cm off the racing line at 44 points, offset after 1 s; orange = the stage's actual figure-8 trials, iterations 1 and 3). The local feedback field is the same at every iteration (offset kept 0.31-0.34 of the start on real_nom, 0.41-0.43 on real_mu): the stage changes the lap, not the local steering response.
+- tables.pptx (one native PowerPoint table per slide: copy a table into your deck), tables.html (open in a browser, select, copy, paste), tables_tsv/*.tsv (tab-separated): all 6 tables, built by tables_to_ppt.py from */tables.md.
