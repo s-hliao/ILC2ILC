@@ -1,10 +1,12 @@
 # ilc_go1_hw: the Go1 hardware layer in ROS 1
 
-State estimation and low-level I/O for a real Go1, on the robot's own computer (ROS 1: melodic or noetic). This is the
-counterpart of the car's `ilc_f1tenth_hw`:
+Low-level I/O for a real Go1, on the robot's own computer (ROS 1: melodic or noetic). This is the
+robot-side counterpart of the car's `ilc_f1tenth_hw`:
 - a low-level interface with the simulation's safety layer;
-- a motion-capture node with the car's filtering;
-- a robot_localization EKF.
+- 500 Hz joint, IMU, contact, leg-odometry, and zero-velocity data for the workstation estimator.
+
+The car's unicast `natnet_ros2` receiver and `robot_localization` EKF run on the ROS 2 workstation, so the roughly
+500 Hz mocap stream never makes an unnecessary round trip through the Go1's Wi-Fi link.
 
 On top of the car's layer it uses what a legged robot has and a car does not:
 - **joint angles and rates (leg odometry):** the stance feet's kinematics give the trunk velocity;
@@ -20,10 +22,9 @@ order, units and safety rules as `ilc_quad/scripts/go1_bridge.py`.
 |---|---|
 | `include/ilc_go1_hw/go1_core.h` | the robot-independent core (no ROS, no SDK; unit-tested off the robot): joint order, names, MJCF limits; leg kinematics and Jacobian; leg odometry; contact hysteresis; zero-velocity detector; quaternion-order detection; command clipping |
 | `src/go1_lowlevel_node.cpp` | `unitree_legged_sdk` 3.8 low-level UDP <-> ROS topics (below), 500 Hz |
-| `scripts/mocap_odom_node.py` | VRPN / NatNet rigid-body pose -> `mocap/pose` (the tracked point, z-up) and `mocap/odom` (the trunk origin plus a filtered finite-difference body twist). The car's `optitrack_node`, in 3-D |
-| `config/ekf.yaml` | robot_localization EKF: mocap pose, leg odometry, ZUPT, IMU rates and accelerations -> `trunk/odometry` |
+| `scripts/mocap_odom_node.py`, `config/ekf.yaml` | optional onboard-estimation fallback; the default estimator is in `ilc_quad` on the workstation |
 | `config/go1_hw.yaml` | every parameter (safety values = `go1_bridge.py`'s) |
-| `launch/go1_hw.launch` | low-level node + VRPN client + mocap node + IMU frame + EKF |
+| `launch/go1_hw.launch` | low-level sensor/actuator node + IMU frame; `use_onboard_ekf:=true` enables the fallback estimator |
 | `scripts/joint_cmd_relay.py`, `scripts/ros1_bridge.sh` | the link to the ROS 2 controller (workstation side) |
 | `test/` | `test_go1_core.cpp` (kinematics vs MuJoCo, Jacobian, leg odometry, quaternion order on recorded Go1 data, commands, contacts) and `test_mocap_processor.py` |
 | `scripts/gen_fk_reference.py` | regenerates `test/fk_reference.h` from the Menagerie `go1.xml` (the controllers' model) |
@@ -48,7 +49,7 @@ order, units and safety rules as `ilc_quad/scripts/go1_bridge.py`.
 | `joint_cmd` (remapped to `joint_cmd_r`) | `std_msgs/Float64MultiArray` | `[q, dq, kp, kd, tau] x 12`, field-major, canonical; executed on the motor drivers as `tau + kp (q - q_meas) + kd (dq - dq_meas)` |
 | `clear_fault` | `std_srvs/Trigger` | release a latched joint-limit fault |
 
-### Published by `mocap_odom_node.py`, the EKF, and the IMU frame
+### Published on the workstation by `ilc_quad`'s NatNet processor and EKF
 
 | topic | type | content |
 |---|---|---|
@@ -60,7 +61,9 @@ TF `trunk -> imu_link` is the identity (the MJCF's IMU site).
 
 **Safety** (independent of the controller, identical to `go1_bridge.py`):
 - **watchdog:** no `joint_cmd` for 50 ms → damping;
-- **joint limits:** a joint more than 0.20 rad past its MJCF range → damping, latched until `clear_fault`;
+- **joint limits:** a joint more than 0.20 rad past its MJCF range → damping, latched until `clear_fault`
+  while out of range only pure damping (kp = τ = 0, dq = 0) or a position target back into the range is accepted
+  (a folded Go1's hips sit at about ±1.13 rad), anything else latches;
 - **clipping:** q to the range, kp to [0, 100], kd to [0, 10], τ to 23.7 / 23.7 / 35.55 N m. kp = 0 sends Unitree's "no
   position target", likewise kd = 0;
 - **power:** the SDK's `PowerProtect` at level 10;
@@ -88,7 +91,7 @@ The joint angles also give the whole-body CoM. The controller computes that itse
 
 ```bash
 ls /opt/ros                       # melodic (Ubuntu 18.04, Python 2.7) or noetic (20.04): both supported
-sudo apt install ros-$ROS_DISTRO-robot-localization ros-$ROS_DISTRO-vrpn-client-ros
+sudo apt install ros-$ROS_DISTRO-robot-localization
 # unitree_legged_sdk v3.8.x built (its lib/cpp/<arch>/libunitree_legged_sdk.a); the Pi / Nano is arm64
 mkdir -p ~/go1_ws/src && cp -r ilc_go1_hw ~/go1_ws/src/ && rm ~/go1_ws/src/ilc_go1_hw/COLCON_IGNORE
 cd ~/go1_ws && catkin_make -DUNITREE_SDK_DIR=$HOME/Unitree/sdk/unitree_legged_sdk && source devel/setup.bash
@@ -99,16 +102,27 @@ Off-robot test (any machine, no ROS):
 
 ## Run
 
-**Robot.** Put it in low-level mode: from standing, L2+A (lie down), L2+B (damp), L1+L2+Start. Then:
+**Robot.** Put it in low-level mode: from standing, L2+A (lie down), L2+B (damp), L1+L2+Start. Then start the ROS 1
+hardware publisher:
 ```bash
-roslaunch ilc_go1_hw go1_hw.launch mocap_server:=<Motive PC> mocap_body:=go1
+roslaunch ilc_go1_hw go1_hw.launch
 ```
 
-**Workstation (ROS 2 controller), once per session:**
+**Workstation (ROS 2 controller and EKF), once per session.** Start the bidirectional ROS bridge, then the same unicast
+NatNet client used by the car together with the local EKF. `client_ip` is this workstation's address on the Motive
+network, not the Go1 Ethernet address:
 ```bash
+git submodule update --init natnet_ros2
 bash scripts/ros1_bridge.sh <go1 ip> <workstation ip>      # ros1_bridge in docker (noetic + foxy)
+ros2 launch ilc_quad natnet_go1.launch.py server_ip:=172.26.30.22 client_ip:=<workstation mocap IP>
 python3 scripts/joint_cmd_relay.py                          # in the ilc_quad container (ROS 2)
 ```
+`natnet_ros2` publishes `/<Motive rigid-body name>/pose` at every Motive frame; neither the launch nor the bridge
+throttles it. With Motive configured near 500 Hz, check `ros2 topic hz /dl_go1/pose` on the workstation. The Go1
+publishes `joint_states`, `imu`, and joint-derived `leg_odom` at 500 Hz; the bridge carries those to the workstation.
+`go1_sensor_restamp.py` puts the bridged sensor stamps in the workstation clock domain before the 500 Hz EKF consumes
+them. Mocap remains local and its configured `pose_latency` is subtracted from the measurement timestamp.
+
 Then run the controller as in `src/ilc_mjx/HARDWARE.md`, with
 `pose_topic:=/mocap/pose pose_type:=pose pose_latency:=<END-TO-END latency> mocap_offset:=[x, y, z]`.
 
@@ -139,8 +153,9 @@ and for a controller retrained on it.
    - The lag that best aligns the differentiated mocap pitch with gyro y is the mocap latency. Set it as `pose_latency`.
    - For the controller, measure the same thing on the WORKSTATION after the bridge. Its `pose_latency` is end-to-end,
      and the simulated robots assumed 4-10 ms.
-5. **Clocks.** The EKF runs on the robot with the robot's clock: nothing to sync. The controller dates mocap frames by
-   their receipt time, so it needs no clock sync either, only the end-to-end latency above.
+5. **Clocks.** The workstation restamps bridged Go1 sensors on receipt, while local NatNet frames use the workstation
+   clock. Tight clock synchronization with the robot is therefore not required for the EKF; network jitter still
+   appears as sensor timing noise, so use wired Ethernet when possible.
 
 ## What is tested and what is not
 
@@ -151,5 +166,5 @@ and for a controller retrained on it.
   - the mocap processor: trunk origin, body twist, and the Y-up conversion on a synthetic spinning trunk;
   - the node compiles against stand-ins of the ROS 1 and SDK 3.8 APIs (`-fsyntax-only`);
   - launch and YAML files parse.
-- **Not tested:** a build on the robot with the real SDK, the EKF on real data, the bridge's latency, and the contact
-  thresholds. Do the calibration above before the first flight, with `power_level` low for a first stand.
+- **Not tested:** the workstation EKF on live robot/mocap data, the bridge's latency, and the contact thresholds. Do the
+  calibration above before the first flight, with `power_level` low for a first stand.

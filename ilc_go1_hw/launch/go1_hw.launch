@@ -1,11 +1,10 @@
-<!-- The Go1's hardware layer (ROS 1, on the robot's computer). The low-level node, the mocap client + trunk odometry,
-     the static IMU frame and the EKF. The jump controller (ROS 2, ilc_quad) talks to it through ros1_bridge
-     (scripts/ros1_bridge.sh): joint_cmd in; joint_states, foot_contacts, mocap/pose out. -->
+<!-- The Go1's ROS 1 hardware layer. By default it publishes joints, IMU and
+     leg-derived velocity for the workstation EKF. The old onboard estimation
+     path remains available as an explicit fallback. -->
 <launch>
-  <arg name="mocap_server" default="192.168.1.100" doc="Motive PC (VRPN server)"/>
-  <arg name="mocap_body" default="dl_quad" doc="the trunk's rigid-body name in Motive"/>
-  <arg name="use_vrpn" default="true"/>
-  <arg name="use_ekf" default="true"/>
+  <arg name="mocap_topic" default="/dl_go1/pose"
+       doc="NatNet PoseStamped topic from the workstation (bridged ROS 2 -> ROS 1)"/>
+  <arg name="use_onboard_ekf" default="false"/>
   <arg name="cmd_topic" default="joint_cmd_r" doc="joint_cmd for a ROS 1 controller"/>
   <arg name="lowlevel" default="true" doc="false: estimation only (e.g. the robot in sport mode, for tests)"/>
 
@@ -17,24 +16,14 @@
     <remap from="joint_cmd" to="$(arg cmd_topic)"/>
   </node>
 
-  <node if="$(arg use_vrpn)" pkg="vrpn_client_ros" type="vrpn_client_node" name="vrpn_client_node" output="screen">
-    <param name="server" value="$(arg mocap_server)"/>
-    <param name="port" value="3883"/>
-    <param name="update_frequency" value="240.0"/>
-    <param name="frame_id" value="world"/>
-    <param name="use_server_time" value="false"/>
-    <param name="broadcast_tf" value="false"/>
-    <rosparam param="trackers" subst_value="true">[$(arg mocap_body)]</rosparam>
-  </node>
-
-  <node pkg="ilc_go1_hw" type="mocap_odom_node.py" name="mocap_odom" output="screen">
-    <param name="mocap_topic" value="/vrpn_client_node/$(arg mocap_body)/pose"/>
+  <node if="$(arg use_onboard_ekf)" pkg="ilc_go1_hw" type="mocap_odom_node.py" name="mocap_odom" output="screen">
+    <param name="mocap_topic" value="$(arg mocap_topic)"/>
   </node>
 
   <!-- the IMU site is the trunk origin (Menagerie go1.xml) -->
   <node pkg="tf2_ros" type="static_transform_publisher" name="trunk_to_imu" args="0 0 0 0 0 0 trunk imu_link"/>
 
-  <node if="$(arg use_ekf)" pkg="robot_localization" type="ekf_localization_node" name="ekf_trunk" output="screen">
+  <node if="$(arg use_onboard_ekf)" pkg="robot_localization" type="ekf_localization_node" name="ekf_trunk" output="screen">
     <rosparam command="load" file="$(find ilc_go1_hw)/config/ekf.yaml"/>
     <remap from="odometry/filtered" to="trunk/odometry"/>
   </node>

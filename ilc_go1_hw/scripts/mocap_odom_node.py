@@ -6,8 +6,8 @@ Ported from the car's hardware layer (ilc_f1tenth_hw/scripts/optitrack_node.py, 
 axis handling and the same causal velocity filter (a windowed spike clamp, then a dt-normalized EMA), for a 3-D jumping
 trunk instead of a planar car.
 
-    subscribes  <mocap_topic>   geometry_msgs/PoseStamped of the trunk's rigid body (vrpn_client_ros:
-                                /vrpn_client_node/<body>/pose, or mocap_optitrack: /mocap_node/<body>/pose)
+    subscribes  <mocap_topic>   geometry_msgs/PoseStamped of the trunk's rigid body (normally the workstation's
+                                natnet_ros2 /<body>/pose, carried into ROS 1 by ros1_bridge)
     publishes   mocap/pose      geometry_msgs/PoseStamped, the TRACKED point in a z-up world (frame `world_frame`) --
                                 what the jump controller reads (pose_type:=pose); it applies its own mocap_offset and
                                 pose_latency, exactly as in simulation
@@ -153,6 +153,7 @@ def main():
     gp = lambda n, d: rospy.get_param("~" + n, d)
     world, trunk = gp("world_frame", "world"), gp("trunk_frame", "trunk")
     latency = float(gp("pose_latency", 0.0))
+    use_source_stamp = bool(gp("use_source_stamp", False))
     proc = MocapProcessor(gp("up_axis", "z"), float(gp("yaw_offset", 0.0)), gp("mocap_offset", [0.0, 0.0, 0.0]),
                           float(gp("vel_ema_tau", 0.02)), float(gp("vel_spike_pct", 15.0)),
                           float(gp("vel_spike_window", 0.3)), float(gp("max_gap", 0.1)))
@@ -163,10 +164,14 @@ def main():
     br = tf2_ros.TransformBroadcaster() if gp("publish_tf", False) else None
 
     def on_pose(msg):
-        stamp = msg.header.stamp if msg.header.stamp.to_sec() > 0 else rospy.Time.now()
+        receipt_stamp = rospy.Time.now()
+        source_stamp = msg.header.stamp if msg.header.stamp.to_sec() > 0 else receipt_stamp
+        # NatNet runs on the workstation, so its ROS stamp may be in a different clock domain. Keep its frame interval
+        # for finite differences, but date the EKF measurement in the robot's clock unless clocks are explicitly synced.
+        stamp = source_stamp if use_source_stamp else receipt_stamp
         o = msg.pose.orientation
-        p, origin, q, twist = proc.update(stamp.to_sec(), [msg.pose.position.x, msg.pose.position.y,
-                                                           msg.pose.position.z], [o.x, o.y, o.z, o.w])
+        p, origin, q, twist = proc.update(source_stamp.to_sec(), [msg.pose.position.x, msg.pose.position.y,
+                                                                  msg.pose.position.z], [o.x, o.y, o.z, o.w])
         ps = PoseStamped()
         ps.header.stamp, ps.header.frame_id = stamp, world
         ps.pose.position.x, ps.pose.position.y, ps.pose.position.z = p
@@ -196,10 +201,11 @@ def main():
             tf.transform.rotation = ps.pose.orientation
             br.sendTransform(tf)
 
-    topic = gp("mocap_topic", "/vrpn_client_node/dl_quad/pose")
+    topic = gp("mocap_topic", "/dl_go1/pose")
     rospy.Subscriber(topic, PoseStamped, on_pose, queue_size=1, tcp_nodelay=True)
-    rospy.loginfo("mocap_odom: %s (up %s, yaw offset %.3f, offset %s, latency %.4f s) -> mocap/pose, mocap/odom",
-                  topic, proc.up_axis, float(gp("yaw_offset", 0.0)), list(proc.offset), latency)
+    rospy.loginfo("mocap_odom: %s (up %s, yaw offset %.3f, offset %s, latency %.4f s, %s stamps) -> mocap/pose, mocap/odom",
+                  topic, proc.up_axis, float(gp("yaw_offset", 0.0)), list(proc.offset), latency,
+                  "source" if use_source_stamp else "robot receipt")
     rospy.spin()
 
 

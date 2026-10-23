@@ -227,4 +227,33 @@ inline int joint_past_limit(const std::array<double, NU>& q, double margin) {
   return -1;
 }
 
+// True when every joint currently outside the state limit is either passive
+// (no position servo, no feedforward torque, damping only toward zero
+// velocity) or has an active position target directed back into the model
+// range.  This permits recovery from Unitree's folded pose, whose hip angles
+// can lie just outside the MJCF range, and lets a controller stream pure
+// damping over a folded leg, without permitting an outward command.  `cmd` is
+// field-major [q, dq, kp, kd, tau], as received from ROS.
+inline bool command_recovers_limits(const std::array<double, NU>& q,
+                                    const std::array<double, JOINT_CMD_LEN>& cmd,
+                                    double margin) {
+  bool recovering = false;
+  for (int i = 0; i < NU; ++i) {
+    int j = i % 3;
+    bool below = q[i] < RANGE_LO[j] - margin;
+    bool above = q[i] > RANGE_HI[j] + margin;
+    if (!below && !above) continue;
+    recovering = true;
+    double kp = cmd[2 * NU + i], kd = cmd[3 * NU + i], tau = cmd[4 * NU + i];
+    if (kp <= 0.0) {                            // no position servo: accept only pure damping
+      if (tau != 0.0 || (kd > 0.0 && cmd[NU + i] != 0.0)) return false;
+      continue;
+    }
+    double target = std::fmin(std::fmax(cmd[i], RANGE_LO[j]), RANGE_HI[j]);
+    if (below && target <= q[i]) return false;
+    if (above && target >= q[i]) return false;
+  }
+  return recovering;
+}
+
 }  // namespace go1hw

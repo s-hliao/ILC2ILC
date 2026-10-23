@@ -1,0 +1,57 @@
+ekf_trunk:
+  ros__parameters:
+    frequency: 500.0
+    sensor_timeout: 0.05
+    two_d_mode: false
+    transform_time_offset: 0.0
+    transform_timeout: 0.0
+    print_diagnostics: true
+    publish_tf: true
+
+    map_frame: map
+    odom_frame: world
+    base_link_frame: trunk
+    world_frame: world
+
+    # Absolute 6-DoF pose from the local NatNet receiver.
+    odom0: /mocap/odom
+    odom0_config: [true, true, true,
+                   true, true, true,
+                   false, false, false,
+                   false, false, false,
+                   false, false, false]
+    odom0_queue_size: 20
+    odom0_differential: false
+    odom0_relative: false
+    odom0_pose_rejection_threshold: 8.0
+
+    # Body velocity computed onboard from joint angles/rates and IMU gyro.
+    twist0: /ekf/leg_odom
+    twist0_config: [false, false, false,
+                    false, false, false,
+                    true, true, true,
+                    false, false, false,
+                    false, false, false]
+    twist0_queue_size: 20
+    twist0_rejection_threshold: 4.0
+
+    # Zero-velocity updates while the feet indicate a stationary stance.
+    twist1: /ekf/zupt
+    twist1_config: [false, false, false,
+                    false, false, false,
+                    true, true, true,
+                    false, false, false,
+                    false, false, false]
+    twist1_queue_size: 5
+
+    # Fuse rates and acceleration, not the Unitree attitude estimate.
+    imu0: /ekf/imu
+    imu0_config: [false, false, false,
+                  false, false, false,
+                  false, false, false,
+                  true, true, true,
+                  true, true, true]
+    imu0_queue_size: 30
+    imu0_differential: false
+    imu0_remove_gravitational_acceleration: true
+    imu0_linear_acceleration_rejection_threshold: 6.0

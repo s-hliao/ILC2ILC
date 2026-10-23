@@ -20,6 +20,8 @@ force-based ILC, flown against the simulator or a real Go2 (see
 | `scripts/ilc_jump_lockstep.py` | The same ILC node against in-process MuJoCo, lockstep and faster than realtime, for tests and sweeps. |
 | `scripts/go1_bridge.py` | unitree_legged_sdk (v3.8, UDP) bridge making a real Go1 look like `sim_node`. |
 | `scripts/go2_bridge.py`, `ilc_quad/go2_lowcmd.py` | unitree_ros2 bridge making a real Go2 look like `sim_node`. |
+| `launch/natnet_go1.launch.py` | workstation-side unicast NatNet receiver, Go1 sensor restamper, and 500 Hz EKF. |
+| `launch/go1_stand_perturb.launch.py` | operator-gated hardware stand test for the simulated `crouch`, `tall`, `noseup`, and `nosedn` stance offsets. |
 | `launch/ilc_jump_{sim,go1,go2}.launch.py` | ILC bring-up for each backend. |
 
 `ament_cmake`: the `ilc_quad/` module is installed by `ament_python_install_package`, and
@@ -93,6 +95,45 @@ on landing. Clip against `QuadModel.joint_range`.
 **200 Hz is rejected** (2.5 steps), because a control period that isn't a whole
 number of physics steps lets the reference index and the simulation drift apart
 over a run.
+
+## Go1 stand perturbation test
+
+`go1_stand_perturb.launch.py` reproduces the simulated initial-stance cases
+`crouch`, `tall`, `noseup`, and `nosedn` on hardware. It does not move on launch.
+Keep the onboard Go1 hardware node, ROS 1 bridge, and NatNet estimator running,
+support the robot so it cannot fall, then launch:
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
+ros2 launch ilc_quad go1_stand_perturb.launch.py
+```
+
+With an operator physically supporting the trunk and at the emergency stop,
+explicitly start the capture -> symmetric preload -> slow nominal-rise sequence,
+advance one perturbation at a time, return home, or damp:
+
+```bash
+ros2 service call /stand/start std_srvs/srv/Trigger '{}'
+ros2 service call /stand/next std_srvs/srv/Trigger '{}'
+ros2 service call /stand/nominal std_srvs/srv/Trigger '{}'
+ros2 service call /stand/damp std_srvs/srv/Trigger '{}'
+ros2 service call /stand/status std_srvs/srv/Trigger '{}'
+```
+
+The staged rise captures and stiffens the measured folded pose, moves all four
+legs to `[hip, thigh, calf] = [0, 1.2, -2.0]`, and then rises to the simulated
+nominal stance. This is a low-level joint-space approximation of the setup phase,
+not the factory Sports/Recovery controller; do not use it to self-right a fallen
+robot. The final stand gain is the simulation value (60), reached gradually.
+The node latches damping if joint state or mocap becomes stale, trunk tilt exceeds
+20 degrees, or any joint exceeds 8 rad/s. Payload, friction, ground, and block
+conditions from the simulation repository are physical test setups; this node does
+not pretend to create those by modifying motor commands.
+
+The default joint-state timeout is 0.30 s because the ROS 1 dynamic bridge can
+batch the otherwise 450--500 Hz stream; the Go1-side command watchdog remains at
+0.05 s and independently damps the motors if commands stop arriving.
 
 ## Setup
 

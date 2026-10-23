@@ -15,7 +15,7 @@ go1_lowlevel:
   contact_off: 40.0
   min_contacts: 2                # leg odometry needs this many stance feet
   leg_odom_sigma: 0.05           # m/s, one foot
-  leg_odom_decimation: 2         # publish every 2nd cycle (250 Hz)
+  leg_odom_decimation: 1         # publish every control cycle (500 Hz)
   zupt_max_dq: 0.05
   zupt_max_gyro: 0.05
   zupt_hold_cycles: 50           # 0.1 s still before ZUPT
@@ -26,11 +26,12 @@ go1_lowlevel:
   trunk_frame: trunk
 
 mocap_odom:
-  mocap_topic: /vrpn_client_node/dl_quad/pose
+  mocap_topic: /dl_go1/pose      # natnet_ros2 on workstation, bridged into ROS 1
   up_axis: z                     # z: Motive streams Z-up; y: Motive's default Y-up (the car's conversion)
   yaw_offset: 0.0
   mocap_offset: [0.0, 0.0, 0.0]  # the rigid body's origin in the trunk frame (m): measure it
   pose_latency: 0.006            # s, measured (README, "Latency"); the controller's pose_latency must match
+  use_source_stamp: false        # false avoids requiring workstation and robot clocks to be synchronized
   vel_ema_tau: 0.02
   vel_spike_pct: 15.0
   vel_spike_window: 0.3

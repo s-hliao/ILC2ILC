@@ -28,6 +28,9 @@ install(PROGRAMS
   scripts/dilc_execute.py
   scripts/policy_jump_node.py
   scripts/hw_session.py
+  scripts/mocap_odom_ros2.py
+  scripts/go1_sensor_restamp.py
+  scripts/go1_stand_perturb.py
   DESTINATION lib/${PROJECT_NAME}
 )
 # ilc_jump_lockstep.py loads it from next to itself
