@@ -164,6 +164,19 @@ class JumpEnv:
             A = np.stack([np.ones(self.W), h], 1)
             L = np.linalg.solve(A.T @ A, A.T)        # (2, W): a, b
             self.est_a, self.est_b = jnp.asarray(L[0], jnp.float32), jnp.asarray(L[1], jnp.float32)
+        # async DR (sample_async): the estimator's buffer also holds the DMAX ticks a delayed mocap has not delivered
+        # yet; per pose delay d the line through the frames it has (those of the last est_window s, the newest d
+        # ticks missing), evaluated now (dilc_execute.Estimator). d = 0 is the line above.
+        self.DMAX = 8
+        self.Wb = self.W + self.DMAX if self.W else 0
+        if self.W:
+            Ld = np.zeros((self.DMAX + 1, 2, self.Wb))
+            for d in range(self.DMAX + 1):
+                n = max(self.W - d, 2)
+                h = -TICK * np.arange(d + n - 1, d - 1, -1)
+                A = np.stack([np.ones(n), h], 1)
+                Ld[d, :, self.Wb - d - n:self.Wb - d] = np.linalg.solve(A.T @ A, A.T)
+            self.est_ad, self.est_bd = jnp.asarray(Ld[:, 0], jnp.float32), jnp.asarray(Ld[:, 1], jnp.float32)
 
     # -- goals ------------------------------------------------------------------------------
     def weights(self, goals):
@@ -366,10 +379,15 @@ class JumpEnv:
                         geom_friction=p["geom_friction"], dof_frictionloss=p["dof_frictionloss"])
         return self.mjx.step(mx, dx)
 
-    def _fly_sample(self, dx, k, u, ref, contact, p=None, with_hit=False):
-        """One TO sample's ticks; with_hit: also whether a leg or the trunk touched the box at any of them."""
+    def _fly_sample(self, dx, k, u, ref, contact, p=None, with_hit=False, u_hold=None):
+        """One TO sample's ticks; with_hit: also whether a leg or the trunk touched the box at any of them. u_hold:
+        the command the motors keep until u reaches them (async DR: p's act_dl ticks into the sample, or the whole
+        sample if p drops it)."""
+        timed = u_hold is not None and p is not None and "act_dl" in p
+
         def tick(dx, i):
-            dx = self._step(dx, self._command(dx, k, i, u, ref, contact), p, ref)
+            u_i = jnp.where((i < p["act_dl"][k]) | p["drop"][k], u_hold, u) if timed else u
+            dx = self._step(dx, self._command(dx, k, i, u_i, ref, contact), p, ref)
             return dx, ((self._hit_geom(dx), self._pose3(dx)) if with_hit else None)
         dx, ex = jax.lax.scan(tick, dx, jnp.arange(self.tps))
         return (dx, ex[0].max(), ex[1]) if with_hit else dx
@@ -397,6 +415,25 @@ class JumpEnv:
                          curve.astype(float), np.where(curve, rng.uniform(0.85, 1.0, B), 1.0),
                          np.where(fr, rng.uniform(0.5, 0.8, B), 1.0), rng.uniform(0.0, 0.3, B),
                          np.where(pay, rng.uniform(0.0, 2.0, B), 0.0)], 1)
+
+    def sample_async(self, B, rng):
+        """The timing / mocap part of dilc_execute.sample_condition for B jumps (merged into dyn_arrays' dict; DIAG
+        §13: these break the hardware stage's convergence): an actuation delay U(1, 10) ms plus a jitter U(0, 3) ms
+        per contact sample (the policy's new force command reaches the motors that many ticks into its sample, the
+        last one held until then), commands dropped w.p. U(0, 4 %) (held for the whole sample), and the mocap: 15 %
+        bad (15 ms late, noise 2 mm / 10 mrad at 120 Hz), else U(4, 10) ms late with 0.5 mm / 3 mrad at 240 Hz. The
+        frame noise goes on every tick's pose, scaled up by sqrt(ticks per frame) for the estimator's line to see
+        the same averaging. Not modelled: the frame rate itself, the joint / foot sensing (they did not matter)."""
+        nt = self.Nc
+        dl = rng.uniform(0.001, 0.010, B)[:, None] + rng.uniform(0.0, 0.003, (B, nt))
+        drop = rng.random((B, nt)) < rng.uniform(0.0, 0.04, B)[:, None]
+        bad = rng.random(B) < 0.15
+        pd = np.where(bad, 0.015, rng.uniform(0.004, 0.010, B))
+        tpf = np.sqrt(np.where(bad, 1 / 120, 1 / 240) / TICK)
+        sd = np.stack([np.where(bad, 0.002, 0.0005)] * 2 + [np.where(bad, 0.01, 0.003)], 1) * tpf[:, None]
+        return dict(act_dl=jnp.asarray(np.clip(np.round(dl / TICK), 0, self.tps), jnp.int32),
+                    drop=jnp.asarray(drop), pose_dl=jnp.asarray(np.clip(np.round(pd / TICK), 0, self.DMAX), jnp.int32),
+                    pose_noise=jnp.asarray(rng.standard_normal((B, nt, self.tps, 3)) * sd[:, None, None], jnp.float32))
 
     def dyn_from_cond(self, args: str):
         """The raw params (8,) of one ilc_quad condition string (its dynamics part)."""
@@ -713,12 +750,19 @@ class JumpEnv:
         srb = jax.vmap(self.srb)
         nc = 1 + 4 + 6 if fd else 1
 
+        timed = dyn is not None and "act_dl" in dyn       # async DR (sample_async)
+        Wb = self.Wb if timed else self.W
+
         def contact_sample(carry, k):
-            dx, hist, prev_a, key, hit, pbuf = carry
+            dx, hist, prev_a, key, hit, pbuf, du = carry
             x = srb(dx, shift)
             clr = jax.vmap(self._clearance)(dx, ref)
             x_obs = x
-            if self.W:                               # the robots' estimate: a line through the last W ticks
+            if self.W and timed:                     # the estimate with the mocap's delay: the frames it has by now
+                pa = jnp.einsum("bw,bwi->bi", self.est_ad[dyn["pose_dl"]], pbuf)
+                pb = jnp.einsum("bw,bwi->bi", self.est_bd[dyn["pose_dl"]], pbuf)
+                x_obs = jnp.concatenate([pa[:, :2] + shift, pa[:, 2:3], pb], 1)
+            elif self.W:                             # the robots' estimate: a line through the last W ticks
                 pa = jnp.einsum("w,bwi->bi", self.est_a, pbuf)
                 pb = jnp.einsum("w,bwi->bi", self.est_b, pbuf)
                 x_obs = jnp.concatenate([pa[:, :2] + shift, pa[:, 2:3], pb], 1)
@@ -733,11 +777,18 @@ class JumpEnv:
             a = jax.vmap(lambda o_, kk: self.actor(w, o_, kk if stochastic else None))(o, keys) + a_off[:, k]
             u, a_st = jax.vmap(lambda a_, r: self._forces(a_, k, r))(a, ref)
             fz = dx.geom_xpos[:, self.feet_geoms, 2]                          # (B, 4) the feet's height
+            # async DR: the command held until u arrives -- the last one that arrived (its correction on this
+            # sample's reference; none on a swing leg)
+            u_hold = ref["u_ref"][:, k] + jnp.where(self.swing[k], 0.0, du)
+            du_next = u - ref["u_ref"][:, k]
+            if timed:
+                du_next = jnp.where(dyn["drop"][:, k, None], du, du_next)
             if not fd:
-                dx, h, ps = jax.vmap(lambda d, u_, r, p: self._fly_sample(d, k, u_, r, True, p, True))(dx, u, ref, dyn)
+                dx, h, ps = jax.vmap(lambda d, u_, r, p, uh: self._fly_sample(d, k, u_, r, True, p, True, uh))(
+                    dx, u, ref, dyn, u_hold)
                 if self.W:
-                    pbuf = jnp.concatenate([pbuf, ps], 1)[:, -self.W:]
-                return (dx, hist, a_st, key, hit, pbuf), (x, u, a_st, o, mu, jnp.zeros((B, 0, 6)), jnp.zeros((B, 0, 6)), fz, h, clr)
+                    pbuf = jnp.concatenate([pbuf, ps + dyn["pose_noise"][:, k] if timed else ps], 1)[:, -Wb:]
+                return (dx, hist, a_st, key, hit, pbuf, du_next), (x, u, a_st, o, mu, jnp.zeros((B, 0, 6)), jnp.zeros((B, 0, 6)), fz, h, clr)
             # the jump and its ten copies, side by side: copy 0 the jump itself
             da = jnp.concatenate([jnp.zeros((1, 4)), self.cfg.eps_a * jnp.eye(4), jnp.zeros((6, 4))])
             uc, _ = jax.vmap(lambda a_, r: jax.vmap(lambda d_: self._forces(a_ + d_, k, r))(da))(a, ref)
@@ -749,13 +800,13 @@ class JumpEnv:
             dxc = jax.vmap(jax.vmap(pert, (0, 0)), (0, None))(dxc, idx)
             s0 = jax.vmap(jax.vmap(lambda d: self.srb(d, jnp.zeros(2))))(dxc)
             refc = jax.tree_util.tree_map(lambda v: jnp.repeat(v[:, None], nc, 1), ref)
-            dxc, hc, psc = jax.vmap(jax.vmap(lambda d, u_, r, p: self._fly_sample(d, k, u_, r, True, p, True),
-                                             (0, 0, 0, None)))(dxc, uc, refc, dyn)
+            dxc, hc, psc = jax.vmap(jax.vmap(lambda d, u_, r, p, uh: self._fly_sample(d, k, u_, r, True, p, True, uh),
+                                             (0, 0, 0, None, None)))(dxc, uc, refc, dyn, u_hold)
             s1 = jax.vmap(jax.vmap(lambda d: self.srb(d, jnp.zeros(2))))(dxc)
             dx = jax.tree_util.tree_map(lambda v: v[:, 0], dxc)
             if self.W:                               # copy 0 is the jump itself: its ticks' poses
-                pbuf = jnp.concatenate([pbuf, psc[:, 0]], 1)[:, -self.W:]
-            return (dx, hist, a_st, key, hit, pbuf), (x, u, a_st, o, mu, s0, s1, fz, hc[:, 0], clr)
+                pbuf = jnp.concatenate([pbuf, psc[:, 0] + dyn["pose_noise"][:, k] if timed else psc[:, 0]], 1)[:, -Wb:]
+            return (dx, hist, a_st, key, hit, pbuf, du_next), (x, u, a_st, o, mu, s0, s1, fz, hc[:, 0], clr)
 
         def flight_sample(carry, k):
             dx, hit = carry
@@ -766,9 +817,10 @@ class JumpEnv:
 
         hist0 = jnp.zeros((B, H + 1, 6))
         # the estimator's buffer: the stance's pose (it stood still) for every one of its W ticks
-        pbuf0 = jnp.repeat(jax.vmap(self._pose3)(dx0)[:, None], max(self.W, 1), 1)
-        (dx, hist, prev_a, _, hit, _), (Xc, U, A_st, O, MU, S0, S1, FZ, HC, CC) = jax.lax.scan(
-            contact_sample, (dx0, hist0, jnp.zeros((B, 4)), key, jnp.zeros(B, bool), pbuf0), jnp.arange(self.Nc))
+        pbuf0 = jnp.repeat(jax.vmap(self._pose3)(dx0)[:, None], max(Wb, 1), 1)
+        (dx, hist, prev_a, _, hit, _, _), (Xc, U, A_st, O, MU, S0, S1, FZ, HC, CC) = jax.lax.scan(
+            contact_sample, (dx0, hist0, jnp.zeros((B, 4)), key, jnp.zeros(B, bool), pbuf0, jnp.zeros((B, 4))),
+            jnp.arange(self.Nc))
         x_nc = srb(dx, shift)
         err = jnp.clip((x_nc - ref["x_ref"][:, self.Nc]) / self.sx, -20.0, 20.0)
         hist = jnp.concatenate([err[:, None], hist[:, :-1]], 1) if H else err[:, None]

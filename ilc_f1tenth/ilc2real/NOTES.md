@@ -1,5 +1,123 @@
 # ILC2Real on the F1TENTH: continuous drift on the LLA-MPC car
 
+## RMA + our ladder: the missing row (2026-10-18; `car_redo_rma.sh`, `car_redo_test3701.sh`, run on matcha)
+
+**What changed in the code** (hw_stage.py could only fly an RMA network zero-shot):
+- `hw_stage.py` trains an RMA network's ACTOR pi(o, z_hat) with the unchanged ILC step + distillation; the adaptation
+  module phi(last 40 [obs[:8], a_{t-1}]) -> z_hat stays frozen and runs in every trial and evaluation.
+  - z_hat per step is recomputed from each lap's measured history (`rma_zhat`; reproduces the flown actions to 1e-15).
+  - The ILC targets and the trust-region anchor pool are at (o_t, z_hat_t) (the pool flies the deployed RMA loop in the
+    nominal sim).
+  - The per-car networks are saved with `mode=rma` and `rma_adapt.npz` is copied next to them, so reeval /
+    policy_runtime load them as RMA. The manual (real-car) backend refuses RMA (not needed).
+- `ilc_core.make_gn(..., nz)`: an optional per-step context appended to the observation and held fixed in K.
+- **Choice: z_hat is a measured, frozen input; K = d pi / d o at the measured z_hat.**
+  - Why: it is how the stage already treats everything measured (the GN step linearizes around the measured lap), and the
+    distillation target is a function of (o, z_hat).
+  - The exact closed-loop sensitivity would need the 400-dim history in the linearized state.
+  - Size of what is dropped, at measured states (3 RMA seeds, 2 cars, both b25 plans):
+    - the instantaneous path o_t -> z_hat_t -> a_t is 1.3–1.8 % of the direct K (median);
+    - summed over all 40 history slots (the delayed path through the next 40 z_hat's, 1 s) it is about 0.7 of the
+      direct K. That is an upper bound (norms added), and the path is slow and delayed.
+  - So the RMA arm's ILC runs on a less exact Jacobian than ours / PPO's. Its fit realizes the steps as well as
+    PPO+DR's (median 0.65–0.71 vs 0.60–0.70).
+- **Checks.**
+  - Existing kinds are unchanged:
+    - `make_gn` on an MLP is bit-identical to the old code (step, J, J_pred: max |Δ| 0.0);
+    - `v3drBtL_s0` zero-shot through the new hw_stage: all 704 summary cells match the old `v3drBtL_s0_zs8`, identical
+      success / crash / laps (only ~1e-13 float noise in the RMS values on the translated b25 plans).
+  - The RMA path really uses phi:
+    - a no-op stage (`runs/hw/rmaL_task_s0_lr0check`, lr 0) saved + reloaded reproduces `rmaL_task_s0_zs8` on seed 301
+      exactly;
+    - the RMA zero-shot validation arm re-scored now matches validation exactly (`car_redo_test3701.sh` check);
+    - the three new arms load as {actor, adapt, hist}.
+
+**Validation (seed 301, tag `_val`; `runs/hw/redo_val_table.txt`).** The recipe is identical to ours and PPO+DR
+(`ladR_lap10`: 5 trials × 2 laps, goals = the two b25 plans, ladder `_mu80,_mu60`, band trigger, revert, worst-first).
+It was run once, with nothing tuned. The other rows are unchanged from the section below.
+
+| arm | b25 success | crash | all plans | nom | mass | mu | act | lag | ×0.9 | ×0.7 | ×0.6 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| **ours + 10-lap ladder** | **89.9 ± 14.2** | **1.9** | **94.9** | 100 | 86 | 83 | 99 | 83 | 100 | 81 | 88 |
+| PPO+DR (task) + our ladder | 85.9 ± 1.1 | 7.5 | 86.2 | 100 | 96 | 89 | 89 | 96 | 100 | 68 | 50 |
+| RMA (task) zero-shot | 39.1 ± 3.5 | 31.6 | 52.1 | 50 | 51 | 38 | 74 | 50 | 50 | 0 | 0 |
+| RMA (task) on our rungs | 72.0 ± 2.3 | 11.8 | 84.4 | 65 | 51 | 67 | 74 | 99 | 83 | 88 | 50 |
+| **RMA (task) + our ladder** (new) | 75.2 ± 4.5 | 10.8 | 79.5 | 83 | 100 | 96 | 96 | 94 | 81 | 51 | 0 |
+
+- RMA + our ladder per seed: 69.8 / 75.0 / 80.7 % b25.
+- Paired b25 differences (`table_redo.py`, pogo-style: cluster = car × b25 plan, seeds pooled, both arms resampled on the
+  same 16 clusters, 95 % bootstrap):
+
+| comparison | Δ b25 (pp) | 95 % CI | clusters better / worse |
+|---|---|---|---|
+| ours + ladder − RMA + ladder | +14.8 | [−1.4, +32.5] | 8 / 3 |
+| ours + ladder − PPO+DR + ladder | +4.0 | [−6.8, +16.7] | 5 / 3 |
+| PPO+DR + ladder − RMA + ladder | +10.8 | [−1.0, +25.9] | 5 / 4 |
+| RMA + ladder − RMA on our rungs | +3.1 | [−18.8, +25.0] | 4 / 6 |
+| RMA + ladder − RMA zero-shot | +36.1 | [+18.1, +54.9] | 9 / 0 |
+
+- **Where RMA + ladder loses: the ×0.6 car (0 % on all 3 seeds) and ×0.7 (51 %).**
+  - On ×0.6, its square2fast trial on the `_mu80` rung lands just inside the ladder's e_y band (RMS e_y 0.093–0.096 m,
+    band 0.10). So the ladder stops there.
+  - The evaluation then fails it on pace (0.88–0.89 < 0.9). PPO+DR's trial on the same rung was 0.101 (just outside the
+    band): it descended to `_mu60` and succeeds there on square2fast.
+  - The figfast goal crashes on b25 and `_mu80` (2 of the car's 5 trials rolled back). After a single `_mu60` trial,
+    the evaluation crashes in 83–100 % of runs.
+  - A threshold effect of the ladder's e_y-only trigger, consistent across seeds. Not changed here: the recipe stays
+    frozen.
+
+**Frozen test pass (seed 3701, 2026-10-18 19:16 – 10-19 00:18; `car_redo_test3701.sh`, `runs/hw/redo_test3701_table.txt`).**
+- The script header (what is frozen) was written before launch. Every headline arm × 3 seeds was re-evaluated once on a
+  fresh reeval seed; nothing was selected on it. Spent seeds: 1701, 301, 2701, and now 3701.
+- Checks first, both passed:
+  - plan-translation invariance: `v3drBtL_s0_ladR_lap10` and `rmaL_task_s0_zs8` re-scored on seed 301 give max
+    |Δ success| 0.0;
+  - the new arms load as RMA.
+
+| arm | b25 success | crash | all plans | ×0.7 | ×0.6 |
+|---|---|---|---|---|---|
+| ours zero-shot | 40.5 ± 4.0 | 45.1 | 49.8 | 0 | 0 |
+| **ours + 10-lap ladder** | **90.1 ± 13.6** (seeds 100.0 / 70.8 / 99.5) | **1.6** | **95.3** | 82 | 90 |
+| PPO+DR (task) zero-shot | 49.7 ± 7.3 | 27.6 | 55.5 | 0 | 0 |
+| PPO+DR (task) on our rungs | 81.1 ± 10.5 | 7.6 | 87.5 | 86 | 50 |
+| PPO+DR (task) + our ladder | 85.6 ± 2.6 (seeds 84.9 / 89.1 / 82.8) | 6.9 | 85.8 | 69 | 50 |
+| RMA (task) zero-shot | 37.3 ± 2.8 | 32.6 | 52.1 | 0 | 0 |
+| RMA (task) on our rungs | 71.9 ± 2.4 | 12.3 | 84.5 | 89 | 50 |
+| **RMA (task) + our ladder** (new) | 75.3 ± 4.3 (seeds 71.4 / 73.4 / 81.2) | 10.2 | 78.9 | 50 | 0 |
+
+| paired comparison (test 3701) | Δ b25 (pp) | 95 % CI | clusters better / worse |
+|---|---|---|---|
+| ours + ladder − RMA + ladder | +14.8 | [−2.1, +33.3] | 9 / 3 |
+| ours + ladder − PPO+DR + ladder | +4.5 | [−8.0, +18.6] | 6 / 3 |
+| PPO+DR + ladder − RMA + ladder | +10.2 | [−1.6, +25.2] | 6 / 4 |
+| RMA + ladder − RMA on our rungs | +3.5 | [−18.4, +25.7] | 5 / 5 |
+| RMA + ladder − RMA zero-shot | +38.0 | [+19.8, +56.9] | 9 / 0 |
+
+**Reading.**
+- **Test 3701 reproduces validation and test 2701 within about 2 points on every row** (ours + ladder 89.9 / 91.1 /
+  90.1; PPO+DR + ladder 85.9 / 85.9 / 85.6; RMA + ladder 75.2 val / 75.3 test). The car comparison is stable across
+  reeval seeds.
+- **Our ladder stage also works on an RMA network.** It lifts RMA from 37 to 75 % b25 (+38 pp, CI [+20, +57]; better on
+  9 of 16 clusters, worse on none). That makes 3 of 3 network families where the stage turns a ~40 % zero-shot network
+  into a 75–90 % one.
+- **RMA + ladder is the weakest ladder arm** (75 vs PPO+DR 86 vs ours 90) and is only +3.5 pp over RMA given our rungs
+  for free, CI [−18, +26]. Its gain comes from the rungs, not from the ILC updates; for PPO+DR the updates added about
+  5 pp.
+  - It does better on the friction / actuator / mass cars (92–99 %).
+  - It fails the ×0.6 car on every seed (0 %) and ×0.7 at 50 %.
+  - The cause is the ladder's e_y-only band trigger (above): its trials there sit just inside the band, too slow to pass
+    the pace test.
+- **Ours + ladder vs RMA + ladder: +14.8 pp on both validation and test.** The 95 % CIs just include 0 ([−1.4, +32.5]
+  and [−2.1, +33.3]); 9 clusters favour ours, 3 favour RMA. Honest claim: ours + ladder is better than RMA + ladder on
+  the mean and on most clusters, but at 3 seeds × 16 clusters this is not significant at 95 %. The same holds vs PPO+DR
+  + ladder (+4.5, CI [−8, +19]).
+- **Caveats.**
+  - The RMA arm's ILC uses a less exact closed-loop Jacobian (the z_hat feedback is dropped; see above). A stage that
+    modelled the history might do better for RMA. Not tried: it needs the 400-dim history in the linearization.
+  - The three RMA seeds fail the same way on ×0.6. The spread (sd 4.3) understates the risk of a design-level threshold
+    effect.
+  - The seed spread of ours (s1 70.8 %) is unchanged and remains its weakness.
+
 ## Car comparison redone with the task objective (validation, 2026-10-17)
 
 **Protocol.**

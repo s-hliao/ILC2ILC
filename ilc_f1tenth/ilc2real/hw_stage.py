@@ -16,11 +16,16 @@ lap used, then the multi-lap evaluation. Per car, from the same starting network
   from a start spread over the lap with a perturbation (reserved seeds from --eval-seed); success = no spin-out /
   departure, RMS lateral error <= 0.10 m and RMS sideslip error <= 8 deg over all laps.
 --iters 0: zero-shot evaluation only. --policy lqr: the plans' LQR (no network; evaluation only).
+An RMA policy (mode rma + rma_adapt.npz): the stage trains the ACTOR pi(o, z_hat) only; the adaptation module
+phi(history) -> z_hat stays frozen and keeps running in every trial and evaluation. z_hat is recomputed from each lap's
+measured history (real_car's buffer: the last H of [obs[:8], a_{t-1}]) and is part of the network's input: the ILC
+targets are at (o_t, z_hat_t), and the closed-loop K = d pi / d o holds z_hat fixed (ilc_core nz).
 -> DIR/summary.json (per car: trials, per-plan eval metrics), DIR/<car>_policy.npz.
 """
 import argparse
 import json
 import os
+import shutil
 import sys
 import time
 
@@ -109,6 +114,9 @@ ap.add_argument('--session-dir', default='', help='--backend manual: the directo
 ap.add_argument('--launch', type=float, nargs=2, default=[1.0, 8.0], metavar=('V_HAND', 'CURRENT'),
                 help='--backend manual: the slow-start launch (the car starts at rest): fixed current (A) until |V| >= '
                 'V_HAND m/s, then the network; the launch phase is cut from the data the ILC learns from')
+ap.add_argument('--save-its', type=int, default=0, help='1: also save every iteration\'s network per car (DIR/its/'
+                'it<k>_<car>_policy.npz, k = 0 the start network .. iters; RMA: + its/rma_adapt.npz) and each car\'s goal '
+                'rungs per iteration (DIR/its/its.json); 0 (default): only the final networks, as before')
 a = ap.parse_args()
 if a.gpu is not None:
     os.environ['CUDA_VISIBLE_DEVICES'] = a.gpu
@@ -164,6 +172,7 @@ def run_manual(jobs):
 
 
 def run_jobs(jobs):
+    assert a.backend != 'manual' or not any(isinstance(j['policy'], dict) for j in jobs), 'manual backend: MLP only'
     return run_manual(jobs) if a.backend == 'manual' else rc.run_many(jobs)
 
 DEFAULT_EVAL = [f'mocap_{t}_b{b}' for t in ('square2fast', 'figfast') for b in (25, 21, 14, 0)]
@@ -180,6 +189,16 @@ def load_policy(path):
         return dict(actor=pol, adapt=[(np.asarray(e[f'W{i}']), np.asarray(e[f'b{i}'])) for i in range(m)],
                     hist=int(e['hist']))
     return pol
+
+
+def rma_zhat(rma, obs, act):
+    """z_hat_t = phi(last H of [obs_k[:8], a_{k-1}]) along a flown trajectory (obs (T, NOBS), act (T, 2) the flown
+    normalized actions), zeros before the start: what real_car / policy_runtime's buffer held at each step."""
+    H = rma['hist']
+    f = np.concatenate([obs[:, :8], np.concatenate([np.zeros((1, 2)), act[:-1]])], 1)
+    f = np.concatenate([np.zeros((H - 1, 10)), f])
+    hv = np.lib.stride_tricks.sliding_window_view(f, (H, 10))[:, 0].reshape(len(obs), H * 10)
+    return rc.mlp_np(rma['adapt'], hv)
 
 
 def evaluate(policies, plans_by_name, eval_names, seed, laps, runs):
@@ -242,8 +261,10 @@ def main():
         json.dump(summary, open(os.path.join(a.out, 'summary.json'), 'w'), indent=1)
         return
     base = load_policy(a.policy)
-    if isinstance(base, dict):                       # RMA: zero-shot evaluation only
-        assert a.iters == 0
+    rma = None
+    if isinstance(base, dict) and a.iters > 0:       # RMA: the stage trains the actor; phi stays frozen
+        rma, base = base, base['actor']
+    elif isinstance(base, dict):                     # RMA zero-shot
         summary['eval'] = evaluate({c: base for c in a.cars}, by_name, eval_names, a.eval_seed, a.eval_laps, a.eval_runs)
         json.dump(summary, open(os.path.join(a.out, 'summary.json'), 'w'), indent=1)
         return
@@ -254,11 +275,25 @@ def main():
     T = int(np.ceil((a.trial_laps + 0.05) * max(P.lap_time) / sj.DT))  # one trial
     policy_fn = lambda ps, o: sj.mlp(ps, o)
     gns = {}
+    nz = rma['adapt'][-1][1].shape[0] if rma else 0
+    deploy = lambda pol: dict(rma, actor=pol) if rma else pol           # what flies: RMA keeps its frozen phi
+    aug = lambda r: np.concatenate([r['obs'], rma_zhat(rma, r['obs'], r['a'])], 1) if rma else r['obs']
 
     def gn_for(cap):
         if cap not in gns:
-            gns[cap] = ilc_core.make_gn(P, T, policy_fn, a.beta, a.delta, cap, a.jac, err_scale=ERRS)
+            gns[cap] = ilc_core.make_gn(P, T, policy_fn, a.beta, a.delta, cap, a.jac, err_scale=ERRS, nz=nz)
         return gns[cap]
+
+    def gn_call(c, rr, *args):                       # RMA: + each lap's measured z_hat, padded as pad_runs
+        if not rma:
+            return gn_for(cap[c])(params[c], *args)
+        Z = np.zeros((len(rr), T, nz))
+        for k, r in enumerate(rr):
+            m = min(len(r['obs']), T)
+            if m:
+                Z[k, :m] = aug(r)[:m, -nz:]
+                Z[k, m:] = Z[k, m - 1]
+        return gn_for(cap[c])(params[c], *args, jnp.array(Z))
 
     # trust-region pool: nominal-sim states of the bank's plans flown by the starting network
     anc = [by_name[n] for n in list(dict.fromkeys(a.anchor_plans + [fb(n, k) for n in a.anchor_plans
@@ -272,10 +307,23 @@ def main():
         x0, i0 = sj.start_states(PA, jax.random.PRNGKey(k), [q], [rs.uniform() * float(PA.L[q])], pert=0.5)
         xs.append(x0[0]); ids.append(i0[0])
     jb = [(jnp.array(W), jnp.array(b)) for W, b in base]
-    pool = sj.rollout(PA, lambda o: policy_fn(jb, o), T1, jnp.stack(xs), jnp.stack(ids), jnp.array(pid),
-                      sj.nominal_params(n_pool))
+    if rma:                                          # the deployed RMA loop (ppo_dr.student_fly's buffer)
+        ja = [(jnp.array(W), jnp.array(b)) for W, b in rma['adapt']]
+
+        def pol_rma(o, ps):
+            buf, ap_ = ps
+            buf = jnp.concatenate([buf[1:], jnp.concatenate([o[:8], ap_])[None]], 0)
+            mu = policy_fn(jb, jnp.concatenate([o, sj.mlp(ja, buf.reshape(-1))]))
+            return mu, (buf, mu)
+        pool = sj.rollout(PA, pol_rma, T1, jnp.stack(xs), jnp.stack(ids), jnp.array(pid), sj.nominal_params(n_pool),
+                          pstate=(jnp.zeros((n_pool, rma['hist'], 10)), jnp.zeros((n_pool, 2))))
+        pobs = np.stack([aug(dict(obs=o, a=u)) for o, u in zip(np.asarray(pool['obs']), np.asarray(pool['a']))])
+    else:
+        pool = sj.rollout(PA, lambda o: policy_fn(jb, o), T1, jnp.stack(xs), jnp.stack(ids), jnp.array(pid),
+                          sj.nominal_params(n_pool))
+        pobs = np.asarray(pool['obs'])
     ok = ~np.asarray(pool['failed'])
-    O_anchor = np.asarray(pool['obs'])[ok]
+    O_anchor = pobs[ok]
 
     opt = optax.adam(a.lr)
 
@@ -325,11 +373,27 @@ def main():
                 return [worst]
         return [a.goals[it % len(a.goals)]]
 
+    its_dir, its_log = os.path.join(a.out, 'its'), {}
+
+    def save_its(k):                                  # --save-its: the networks after k iterations (no RNG / state touched)
+        os.makedirs(its_dir, exist_ok=True)
+        for c in a.cars:
+            ps_ = [(np.asarray(W), np.asarray(b)) for W, b in params[c]]
+            np.savez(os.path.join(its_dir, f'it{k}_{c}_policy.npz'), **{f'W{i}': W for i, (W, b) in enumerate(ps_)},
+                     **{f'b{i}': b for i, (W, b) in enumerate(ps_)}, **(dict(mode='rma') if rma else {}))
+        if rma and k == 0:
+            shutil.copy(os.path.join(os.path.dirname(a.policy), 'rma_adapt.npz'), os.path.join(its_dir, 'rma_adapt.npz'))
+        its_log[k] = {c: dict(goal_now=dict(goal_now[c]), rung=dict(rung[c]), frozen=bool(frozen[c]), cap=float(cap[c]))
+                      for c in a.cars}
+        json.dump(its_log, open(os.path.join(its_dir, 'its.json'), 'w'), indent=1)
+
+    if a.save_its:
+        save_its(0)
     for it in range(a.iters):
         goals_c = {c: pick(c, it) for c in a.cars}
         jobs = []
         for c in [c for c in a.cars if not frozen[c]]:
-            pol = [(np.asarray(W), np.asarray(b)) for W, b in params[c]]
+            pol = deploy([(np.asarray(W), np.asarray(b)) for W, b in params[c]])
             goals_it = goals_c[c]
             for gi, g in enumerate(goals_it):
                 pl = by_name[goal_now[c][g]]
@@ -389,8 +453,8 @@ def main():
                 continue
             if a.tr:                                   # rho from the J of this trial vs the kept step's prediction
                 xs_, idx_, acts_, err_, valid_ = ilc_core.pad_runs(rr, T)
-                _, J_now, _ = gn_for(cap[c])(params[c], jnp.array(xs_), jnp.array(idx_), jnp.array(acts_),
-                                             jnp.array(pid_c), jnp.array(valid_), jnp.array(err_))
+                _, J_now, _ = gn_call(c, rr, jnp.array(xs_), jnp.array(idx_), jnp.array(acts_),
+                                      jnp.array(pid_c), jnp.array(valid_), jnp.array(err_))
                 J_now = {gn_names[pid_c[k]]: float(np.nan_to_num(np.asarray(J_now)[k])) for k in range(len(rr))}
                 common = [g for g in J_now if g in tr_last[c]]
                 rho = None
@@ -430,8 +494,8 @@ def main():
                         frac = frac - a.pace_local * alat / max(alat.max(), 1e-6)
                     j = idx[k] % len(zz)
                     err[k, :, 5] += (1.0 - frac[j]) * vp[j]
-            step, J, Jp = gn_for(cap[c])(params[c], jnp.array(xs), jnp.array(idx), jnp.array(acts), jnp.array(pid_c),
-                             jnp.array(valid), jnp.array(err))
+            step, J, Jp = gn_call(c, rr, jnp.array(xs), jnp.array(idx), jnp.array(acts), jnp.array(pid_c),
+                                  jnp.array(valid), jnp.array(err))
             step, J, Jp = np.asarray(step), np.asarray(J), np.asarray(Jp)
             bad = ~(np.isfinite(step).all(axis=(1, 2)) & np.isfinite(J))
             valid[bad] = False                          # a non-finite step (an odd measured state) gives no targets
@@ -440,7 +504,7 @@ def main():
             for k, r in enumerate(rr):
                 m = min(len(r['obs']), T)
                 v = valid[k, :m]
-                data[c].append(dict(obs=r['obs'][:m][v], y=(r['mu'][:m] + step[k, :m])[v], it=it))
+                data[c].append(dict(obs=aug(r)[:m][v], y=(r['mu'][:m] + step[k, :m])[v], it=it))
                 mm = rc.lap_metrics(r, by_name[gn_names[pid_c[k]]])
                 trials[c].append(dict(it=it, goal=gn_names[pid_c[k]], failed=mm.get('failed'), rms_ey=mm.get('rms_ey'),
                                       rms_dbeta=mm.get('rms_dbeta'), J=float(J[k]), J_pred=float(Jp[k]),
@@ -485,10 +549,15 @@ def main():
                                   dbeta=float(np.nanmean([t['rms_dbeta'] or np.nan for t in last])),
                                   J=float(np.mean([t['J'] for t in last])), Jp=float(np.mean([t['J_pred'] for t in last])),
                                   t=round(time.time() - t0, 1))), flush=True)
+        if a.save_its:
+            save_its(it + 1)
     pols = {c: [(np.asarray(W), np.asarray(b)) for W, b in params[c]] for c in a.cars}
     for c in a.cars:
         np.savez(os.path.join(a.out, f'{c}_policy.npz'), **{f'W{i}': W for i, (W, b) in enumerate(pols[c])},
-                 **{f'b{i}': b for i, (W, b) in enumerate(pols[c])})
+                 **{f'b{i}': b for i, (W, b) in enumerate(pols[c])}, **(dict(mode='rma') if rma else {}))
+    if rma:                                           # reeval / policy_runtime load the frozen phi from next to the npz
+        shutil.copy(os.path.join(os.path.dirname(a.policy), 'rma_adapt.npz'), os.path.join(a.out, 'rma_adapt.npz'))
+        pols = {c: deploy(p) for c, p in pols.items()}
     # each eval plan on the rung the car settled on for the trained goals of the same track (the deepest one)
     track = lambda n: n.split('_b')[0]
     lvl = {c: {track(g): 0 for g in a.goals} for c in a.cars}

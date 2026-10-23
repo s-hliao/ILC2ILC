@@ -88,6 +88,10 @@ ap.add_argument("--dr", action="store_true",
                      "dynamics from JumpEnv.sample_dyn (mass, CoM, motors, torque curve, friction, payload -- the robots' "
                      "family; delays / mocap stay out, the GPU sim cannot model them), and its ILC step uses its own "
                      "robot's FD Jacobians. The evaluations stay nominal (plus the logged DR eval)")
+ap.add_argument("--dr-async", action="store_true",
+                help="with --dr: also the robots' timing and mocap (JumpEnv.sample_async: actuation delay / jitter / "
+                     "dropped commands, mocap delay and noise on the estimator's frames), drawn per training jump and "
+                     "in the DR eval; the clean / perturbed evals and the hardware stage's Jacobians stay nominal")
 ap.add_argument("--gps-inner", type=int, default=0,
                 help="GPS-style ablation: each batch is first optimized on the model -- this many extra Gauss-Newton "
                      "rounds, each a new rollout of the same jumps (goals, stances, exploration) with the accumulated "
@@ -100,6 +104,7 @@ ap.add_argument("--seed", type=int, default=0)
 ap.add_argument("--est-window", type=float, default=0.0, help="s: the policy observes the robots' estimator (jump.Config.est_window); 0: the true state")
 ap.add_argument("--gpu", default=None)
 a = ap.parse_args()
+assert a.dr or not a.dr_async, "--dr-async needs --dr"
 if a.gpu is not None:
     os.environ["CUDA_VISIBLE_DEVICES"] = a.gpu
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
@@ -403,6 +408,8 @@ def evaluate():
     res = {}
     if a.dr and E_DYN is None:
         E_DYN = env.dyn_arrays(env.sample_dyn(len(GE), np.random.default_rng(12345)))
+        if a.dr_async:
+            E_DYN.update(env.sample_async(len(GE), np.random.default_rng(12346)))
     for name, q, dy in (("clean", None, None), ("perturbed", QOFF_E, None)) + ((("dr", None, E_DYN),) if a.dr else ()):
         o = env.rollout(w, REF_E, jax.random.PRNGKey(0), stochastic=False, q_offset=q, dyn=dy)
         e = o["X"][:, N, :3] - TG_E
@@ -468,6 +475,8 @@ for it, inner in sched:
         q_off[nx:], a_off[nx:] = 0.0, 0.0
         gps_off = np.zeros((B, Nc, 4))
         dyn_b = env.dyn_arrays(env.sample_dyn(B, rng)) if a.dr else None
+        if a.dr_async:
+            dyn_b.update(env.sample_async(B, rng))
     o = env.rollout(w, ref, jax.random.PRNGKey(it), stochastic=False, fd=True, a_offset=a_off + gps_off, q_offset=q_off,
                     dyn=dyn_b)
     n_sim += B

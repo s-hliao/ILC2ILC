@@ -35,6 +35,12 @@ ap.add_argument("--lr", type=float, default=3e-4)
 ap.add_argument("--seed", type=int, default=0)
 ap.add_argument("--horizon", type=int, default=1, help="the planner's target and the IDM's input: the error H samples "
                 "ahead (H > 1: a less delay-sensitive inverse model; stored as P_h)")
+ap.add_argument("--collect-batch", type=int, default=256, help="jumps per collection rollout (the original runs: 256; larger batches use the GPU better)")
+ap.add_argument("--relabel-h", type=int, default=-1, help="with --load-data of a horizon-1 run: relabel the planner's "
+                "target and the IDM's input to e_{k+H} (capped at the takeoff sample Nc; H >= Nc: the TAKEOFF error, the "
+                "outcome that sets the ballistic landing; stored as P_h). Each jump's Nc rows are consecutive, so e_{k+H} is "
+                "row k+H-1's target. H = 0: the IDM's target input zeroed (the identifiability control: what o_k alone explains)")
+ap.add_argument("--no-sim-eval", action="store_true", help="skip the closing GPU-sim zero-shot evaluation")
 ap.add_argument("--load-data", default="", help="skip the collection: OUT/data.npz of an earlier run")
 ap.add_argument("--gpu", default="0")
 ap.add_argument("--plane", action="store_true", help="2D goal plane: goals uniform over the bank's valid region (flat and box jumps), evals on its grid")
@@ -80,7 +86,7 @@ t0 = time.time()
 Po, Pt, Io, It, Ia, Im = [], [], [], [], [], []
 env.priv_dim = NZ if a.priv else 0
 for b in range(0 if a.load_data else a.batches):
-    B = 256
+    B = a.collect_batch
     for kind in ("planner", "idm"):
         goals = env.sample_plane_goals(B, rng) if a.plane else np.stack([rng.uniform(*a.goals, B), np.zeros(B)], 1)
         ref = env.references(goals)
@@ -107,6 +113,12 @@ f32 = lambda x: jnp.asarray(np.concatenate(x) if isinstance(x, list) else x, jnp
 if a.load_data:
     _d = np.load(a.load_data)
     Po, Pt, Io, It, Ia, Im = (_d[k] for k in ("Po", "Pt", "Io", "It", "Ia", "Im"))
+    if a.relabel_h >= 0:
+        assert a.horizon == 1 and len(Po) % Nc == 0 and len(Io) % Nc == 0
+        idx = np.minimum(np.arange(Nc) + max(a.relabel_h, 1) - 1, Nc - 1)
+        rel = lambda T_: T_.reshape(-1, Nc, 6)[:, idx].reshape(-1, 6) * (1.0 if a.relabel_h > 0 else 0.0)
+        Pt, It = rel(Pt), rel(It)
+        a.horizon = max(a.relabel_h, 1)
 else:
     np.savez(os.path.join(a.out, "data.npz"), **{k: np.concatenate(v) for k, v in
                                                   dict(Po=Po, Pt=Pt, Io=Io, It=It, Ia=Ia, Im=Im).items()})
@@ -179,6 +191,8 @@ json.dump(dict(best="policy", eval_goals=None, members=[dict(name="policy", grou
           open(os.path.join(d, "manifest.json"), "w"))
 
 # zero-shot in the GPU sim: the planner-IDM against its source, nominal and over a fixed DR set
+if a.no_sim_eval:
+    raise SystemExit(0)
 env.priv_dim = 0
 r_scale, qe = float(bank["r_scale"]), np.asarray(bank["qe"], float)
 for name, B, Pd in (("nominal", 16, nominal(16)), ("DR", 128, env.sample_dyn(128, np.random.default_rng(12345)))):
@@ -196,4 +210,4 @@ for name, B, Pd in (("nominal", 16, nominal(16)), ("DR", 128, env.sample_dyn(128
         e = o["X"][:, N] - tg
         res.append(f"{tag} {(0.01 * r_scale * (e * qe * e).sum(1) + 20 * o['fell']).mean():.2f}")
     say(f"zero-shot {name}: " + ", ".join(res))
-say(f"done: {2 * a.batches * 256} sim jumps, collect {t_col:.0f} s + fit {t_fit:.0f} s")
+say(f"done: {2 * a.batches * a.collect_batch} sim jumps, collect {t_col:.0f} s + fit {t_fit:.0f} s")

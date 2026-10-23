@@ -13,15 +13,16 @@ import car_model as cm
 import sim_jax as sj
 
 
-def make_gn(P, T, policy_fn, beta=0.5, delta=0.05, cap=0.05, jac_mode='closed', feedback='policy', err_scale=None):
+def make_gn(P, T, policy_fn, beta=0.5, delta=0.05, cap=0.05, jac_mode='closed', feedback='policy', err_scale=None, nz=0):
     """Returns gn(params, xs (n, T+1, 10), idx (n, T), a (n, T, 2) normalized, pid (n,), valid (n, T), err (n, T, NE))
     -> step (n, T, 2), J, J_pred. feedback: 'policy' (K from policy_fn(params, obs)), 'expert' (the plan's LQR,
-    for the per-track ILC baseline), 'none'."""
+    for the per-track ILC baseline), 'none'. nz > 0: the network also takes a per-step context z (n, T, nz), appended
+    to the observation and held FIXED in K (RMA: z_hat = phi(measured history), part of the input); gn(..., Z)."""
     p0 = sj.nominal_params(1)
     p1 = {k: v[0] for k, v in p0.items()}
 
-    def lane(params, X, I, Ap, q, V, E):
-        def one(x, i, a):
+    def lane(params, X, I, Ap, q, V, E, Z=None):
+        def one(x, i, a, z=None):
             A = jax.jacfwd(lambda xx: sj.step(xx, a * sj.A_SCALE + sj.A_OFF, p1))(x)
             B = jax.jacfwd(lambda aa: sj.step(x, aa * sj.A_SCALE + sj.A_OFF, p1))(a)
             C = jax.jacfwd(lambda xx: sj.features(P, q, i, xx)[1])(x)
@@ -30,9 +31,11 @@ def make_gn(P, T, policy_fn, beta=0.5, delta=0.05, cap=0.05, jac_mode='closed', 
             elif feedback == 'expert':
                 K = jax.jacfwd(lambda xx: (sj.expert_action(P, q, i, xx) - sj.A_OFF) / sj.A_SCALE)(x)
             else:
-                K = jax.jacfwd(lambda xx: policy_fn(params, sj.features(P, q, i, xx)[0]))(x)
+                obs = (lambda xx: sj.features(P, q, i, xx)[0]) if z is None else \
+                    (lambda xx: jnp.concatenate([sj.features(P, q, i, xx)[0], z]))
+                K = jax.jacfwd(lambda xx: policy_fn(params, obs(xx)))(x)
             return A, B, C, K
-        A, B, C, K = jax.vmap(one)(X[:-1], I, Ap)
+        A, B, C, K = jax.vmap(one)(X[:-1], I, Ap) if Z is None else jax.vmap(one)(X[:-1], I, Ap, Z)
         Acl = A + jnp.einsum('tij,tjk->tik', B, K)
 
         def body(Vc, t):
@@ -57,6 +60,8 @@ def make_gn(P, T, policy_fn, beta=0.5, delta=0.05, cap=0.05, jac_mode='closed', 
         e_pred = e + G @ step
         return step.reshape(T, 2) * Vf[:, None], 0.5 * jnp.sum(e ** 2), 0.5 * jnp.sum(e_pred ** 2)
 
+    if nz:
+        return jax.jit(jax.vmap(lane, in_axes=(None, 0, 0, 0, 0, 0, 0, 0)))
     return jax.jit(jax.vmap(lane, in_axes=(None, 0, 0, 0, 0, 0, 0)))
 
 

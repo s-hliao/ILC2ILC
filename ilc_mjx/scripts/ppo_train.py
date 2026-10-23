@@ -56,6 +56,19 @@ ap.add_argument("--seed", type=int, default=0)
 ap.add_argument("--gpu", default="0")
 ap.add_argument("--plane", action="store_true", help="2D goal plane: goals uniform over the bank's valid region (flat and box jumps), evals on its grid")
 ap.add_argument("--est-window", type=float, default=0.0, help="s: the policy observes the robots' estimator (jump.Config)")
+# baseline audit (2026-10-19, log/dilc/plane/baseline_audit/AUDIT.md): the defaults keep the original behaviour
+ap.add_argument("--cost-cap", type=float, default=0.0, help="> 0: the landing part of the terminal cost capped at this "
+                "(0.01 x landing cost; a fall still adds 20). The uncapped quadratic cost has MJX blow-ups of 1e10 that "
+                "wreck the value fit (L_v up to 1e22) -- PPO then does not learn. Also caps the eval score")
+ap.add_argument("--rew-scale", type=float, default=1.0, help="rewards (and so value targets) multiplied by this")
+ap.add_argument("--student-loss", default="latent", choices=("latent", "action"),
+                help="student / student_ctx: regress the latent (RMA's original) or match the teacher's ACTION (teacher at the "
+                "true latent vs at the student's) on the student's own states (DAgger-style)")
+ap.add_argument("--resume", default="", help="plain / teacher: an OUT/it<K> dir to continue from (its actor; its value net "
+                "if saved, else a fresh one warmed up again), iterations numbered from K")
+ap.add_argument("--eval-n", type=int, default=128, help="DR robots in the checkpoint-selection eval")
+ap.add_argument("--fit-steps", type=int, default=200, help="student: adaptation-module Adam steps per iteration")
+ap.add_argument("--student-replay", type=int, default=1, help="student: iterations of the student's rollouts kept")
 a = ap.parse_args()
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", a.gpu)
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
@@ -114,10 +127,17 @@ else:
         ks = jax.random.split(key, 2)
         pi["E"], pi["bE"] = he(ks[0], L, NZ, 0.5), jnp.zeros(L)
     pi["log_sigma"] = jnp.full(4, np.log(a.sigma0), jnp.float32)
+    if a.resume:                                    # continue a run: its actor (raw teacher params / plain policy)
+        src = os.path.join(a.resume, "teacher_params.npz" if a.mode == "teacher" else "train_params.npz")
+        if not os.path.exists(src):
+            src = os.path.join(a.resume, "policy", "policy.npz")
+        pi.update({k: jnp.asarray(v, jnp.float32) for k, v in np.load(src).items() if k != "n_hidden"})
     vd = OD + (NZ if a.mode == "teacher" else 0)
     ks = jax.random.split(jax.random.PRNGKey(a.seed + 1), 3)
     vf = dict(W0=he(ks[0], 256, vd), b0=jnp.zeros(256), W1=he(ks[1], 256, 256), b1=jnp.zeros(256),
               Wo=he(ks[2], 1, 256, 0.1), bo=jnp.zeros(1))
+    if a.resume and os.path.exists(os.path.join(a.resume, "value_params.npz")):
+        vf = {k: jnp.asarray(v, jnp.float32) for k, v in np.load(os.path.join(a.resume, "value_params.npz")).items()}
 
 
 def folded(p):
@@ -204,7 +224,10 @@ def targets_of(goals, ref):
 
 def score(X, fell, tg):
     e = X[:, N] - tg
-    return 0.01 * r_scale * (e * qe * e).sum(1) + 20.0 * fell
+    land = 0.01 * r_scale * (e * qe * e).sum(1)
+    if a.cost_cap > 0:
+        land = np.minimum(np.nan_to_num(land, nan=a.cost_cap, posinf=a.cost_cap), a.cost_cap)
+    return land + 20.0 * fell
 
 
 def export(w_, d, extra=None):
@@ -226,7 +249,7 @@ def deploy_weights():
     return folded(pi)
 
 
-EB = 128
+EB = a.eval_n
 e_goals = (env.sample_plane_goals(EB, np.random.default_rng(777)) if a.plane else np.stack([np.linspace(*a.goals, EB), np.zeros(EB)], 1))
 e_ref = env.references(e_goals)
 e_tg = targets_of(e_goals, e_ref)
@@ -286,6 +309,35 @@ if a.mode == "student_ctx":
             return (psi, st), l
         (psi, st), ls = jax.lax.scan(one, (psi, st), jax.random.split(k, 200))
         return psi, st, ls.mean()
+
+    TLA = rma_ctx.latent_actor(T)
+
+    @jax.jit
+    def psi_fit_action(psi, st, F, Lt, S, k):
+        """action matching: per context F (one jump of a DR robot), the teacher's action at psi(F) vs at the true latent on
+        that robot's own flown states S (n, M, 31); a robot-minibatch of 512, 8 states each."""
+        n, M = F.shape[0], S.shape[1]
+        mk = jnp.asarray(mask, jnp.float32)
+        act = lambda o_, l_: JumpEnv.actor(TLA, jnp.concatenate([o_, l_]))
+
+        def one(c, kk):
+            psi, st = c
+            k1, k2 = jax.random.split(kk)
+            idx = jax.random.randint(k1, (512,), 0, n)
+            j = jax.random.randint(k2, (512, 8), 0, M)
+            o = S[idx[:, None], j]                                  # (512, 8, 31)
+            m_ = mk[j % Nc]                                         # each state's sample index: its swing mask
+            tgt = jax.vmap(lambda oo, lt_: jax.vmap(lambda o_: act(o_, lt_))(oo))(o, Lt[idx])
+
+            def lossf(q):
+                lq = jax.vmap(lambda f: rma_ctx.psi(q, f))(F[idx])
+                pr = jax.vmap(lambda oo, l_: jax.vmap(lambda o_: act(o_, l_))(oo))(o, lq)
+                return (((pr - tgt) * m_) ** 2).sum(-1).mean()
+            l, g = jax.value_and_grad(lossf)(psi)
+            psi, st = adam_step(psi, g, st, 3e-4)
+            return (psi, st), l
+        (psi, st), ls = jax.lax.scan(one, (psi, st), jax.random.split(k, a.fit_steps))
+        return psi, st, ls.mean()
 elif a.mode != "student":
     sp, sv = adam_init(pi), adam_init(vf)
 else:
@@ -301,17 +353,51 @@ else:
             l, g = jax.value_and_grad(lambda q: ((jax.vmap(lambda o_: JumpEnv.planner(q, o_))(O[idx]) - Lt[idx]) ** 2).mean())(phi)
             phi, st = adam_step(phi, g, st, 3e-4)
             return (phi, st), l
-        (phi, st), ls = jax.lax.scan(one, (phi, st), jax.random.split(k, 200))
+        (phi, st), ls = jax.lax.scan(one, (phi, st), jax.random.split(k, a.fit_steps))
+        return phi, st, ls.mean()
+
+    TLA = rma_ctx.latent_actor(T)                    # the teacher reading [o, l] (its encoder dropped)
+    sbuf = []
+
+    @jax.jit
+    def phi_fit_action(phi, st, O, Lt, MK, k):
+        """action matching (DAgger on the student's own states): the teacher's action at the student's latent vs at the
+        true latent -- only the latent directions the teacher's actions depend on matter."""
+        n = O.shape[0]
+        act = lambda o_, l_: JumpEnv.actor(TLA, jnp.concatenate([o_, l_]))
+
+        def one(c, kk):
+            phi, st = c
+            idx = jax.random.randint(kk, (a.minibatch,), 0, n)
+            o, lt_, mk = O[idx], Lt[idx], MK[idx]
+            tgt = jax.vmap(act)(o, lt_)
+
+            def lossf(q):
+                ls_ = jax.vmap(lambda o_: JumpEnv.planner(q, o_))(o)
+                return (((jax.vmap(act)(o, ls_) - tgt) * mk) ** 2).sum(-1).mean()
+            l, g = jax.value_and_grad(lossf)(phi)
+            phi, st = adam_step(phi, g, st, 3e-4)
+            return (phi, st), l
+        (phi, st), ls = jax.lax.scan(one, (phi, st), jax.random.split(k, a.fit_steps))
         return phi, st, ls.mean()
 
 t_start, t_train, jumps = time.time(), 0.0, 0
-for it in range(a.iters + 1):
+it0 = int(os.path.basename(os.path.normpath(a.resume))[2:]) if a.resume else 0
+if a.resume:
+    rng = np.random.default_rng(a.seed + 1000 + it0)          # fresh goals / robots for the continued iterations
+    a.value_warmup = it0 + (0 if os.path.exists(os.path.join(a.resume, "value_params.npz")) else a.value_warmup)
+    say(f"resumed from {a.resume} (it {it0}); value warm-up until it {a.value_warmup}")
+for it in range(it0, a.iters + 1):
     if it % a.eval_every == 0 or it == a.iters:
         sd, fr, sn = evaluate()
         extra = dict(dyn_dim=NZ if a.mode == "teacher" else 0)
         export(deploy_weights(), os.path.join(a.out, f"it{it}", "policy"), extra)
         if a.mode == "teacher":
             np.savez(os.path.join(a.out, f"it{it}", "teacher_params.npz"), **{k: np.asarray(v) for k, v in pi.items()})
+        if a.mode in ("plain", "teacher"):              # (for --resume)
+            np.savez(os.path.join(a.out, f"it{it}", "value_params.npz"), **{k: np.asarray(v) for k, v in vf.items()})
+            if a.mode == "plain":
+                np.savez(os.path.join(a.out, f"it{it}", "train_params.npz"), **{k: np.asarray(v) for k, v in pi.items()})
         if a.mode == "student_ctx":
             np.savez(os.path.join(a.out, f"it{it}", "ctx_params.npz"), **{k: np.asarray(v) for k, v in psi.items()})
             json.dump(dict(teacher=os.path.abspath(a.teacher), latent0=L0.tolist()),
@@ -337,11 +423,16 @@ for it in range(a.iters + 1):
         lt = np.asarray(dyn["z"]) @ np.asarray(T["E"]).T + np.asarray(T["bE"])
         m_pred = float(((l2 - lt) ** 2).mean())                 # psi before this batch: held-out robots
         m_prior = float(((L0[None] - lt) ** 2).mean())
-        cbuf.append((np.concatenate([F1, F2]), np.concatenate([lt, lt])))
+        Sb = np.clip(np.nan_to_num(np.concatenate([o1["obs"][:, :Nc, :OD], o2["obs"][:, :Nc, :OD]], 1)), -20, 20).astype(np.float32)
+        cbuf.append((np.concatenate([F1, F2]), np.concatenate([lt, lt]), np.concatenate([Sb, Sb])))
         cbuf = cbuf[-a.ctx_replay:]
         F_ = jnp.asarray(np.concatenate([c[0] for c in cbuf]))
         Lt_ = jnp.asarray(np.concatenate([c[1] for c in cbuf]), jnp.float32)
-        psi, spsi, lf = psi_fit(psi, spsi, F_, Lt_, jax.random.PRNGKey(10_000 + it))
+        if a.student_loss == "action":
+            psi, spsi, lf = psi_fit_action(psi, spsi, F_, Lt_, jnp.asarray(np.concatenate([c[2] for c in cbuf])),
+                                           jax.random.PRNGKey(10_000 + it))
+        else:
+            psi, spsi, lf = psi_fit(psi, spsi, F_, Lt_, jax.random.PRNGKey(10_000 + it))
         s2 = score(np.nan_to_num(o2["X"], nan=9.0), o2["fell"], tg2)
         jumps += 2 * B
         t_train += time.time() - t0
@@ -355,10 +446,24 @@ for it in range(a.iters + 1):
         O = jnp.asarray(out["obs"][ok][:, :Nc].reshape(-1, OD), jnp.float32)
         lt = np.asarray(dyn["z"]) @ np.asarray(T["E"]).T + np.asarray(T["bE"])
         Lt = jnp.asarray(np.repeat(lt[ok], Nc, 0), jnp.float32)
-        phi, sphi, lf = phi_fit(phi, sphi, O, Lt, jax.random.PRNGKey(10_000 + it))
+        if a.student_loss == "latent":
+            phi, sphi, lf = phi_fit(phi, sphi, O, Lt, jax.random.PRNGKey(10_000 + it))
+            extra_log = ""
+        else:
+            sbuf.append((O, Lt, jnp.asarray(np.tile(mask, (int(ok.sum()), 1)), jnp.float32)))
+            sbuf = sbuf[-a.student_replay:]
+            O_, Lt_, MK_ = (jnp.concatenate([s[i] for s in sbuf]) for i in range(3))
+            nfix = a.batch * Nc * a.student_replay        # a fixed size (resampled rows): phi_fit_action compiles once
+            sel = rng.choice(len(O_), nfix, replace=len(O_) < nfix)
+            O_, Lt_, MK_ = O_[sel], Lt_[sel], MK_[sel]
+            lpred = jax.jit(jax.vmap(lambda o_: JumpEnv.planner(phi, o_)))(O)     # before this fit: held-out robots
+            phi, sphi, lf = phi_fit_action(phi, sphi, O_, Lt_, MK_, jax.random.PRNGKey(10_000 + it))
+            sc_ = score(np.nan_to_num(out["X"], nan=9.0), out["fell"], targets_of(goals, ref))
+            extra_log = (f", held-out latent mse {float(((lpred - Lt) ** 2).mean()):.4f}; student batch score "
+                         f"{float(sc_.mean()):.2f} (falls {int(out['fell'].sum())})")
         jumps += B
         t_train += time.time() - t0
-        say(f"  it {it}: latent mse {float(lf):.4f} (latent var {float(Lt.var()):.3f})  [{time.time() - t0:.1f} s]")
+        say(f"  it {it}: {a.student_loss} loss {float(lf):.4f} (latent var {float(Lt.var()):.3f}){extra_log}  [{time.time() - t0:.1f} s]")
         continue
     sig = np.exp(np.asarray(pi["log_sigma"]))
     a_off = rng.standard_normal((B, Nc, 4)) * sig * mask
@@ -371,6 +476,7 @@ for it in range(a.iters + 1):
     err2 = (Ob[:, 1:Nc + 1, :6] ** 2).mean(-1)                      # the next sample's normalized error
     rew = -a.beta * err2
     rew[:, -1] -= sc
+    rew = rew * a.rew_scale
     act = out["mu"] + a_off                                         # the action taken (before the force clip)
     Ov = Ob[:, :Nc, :OD + (NZ if a.mode == "teacher" else 0)]
     V = np.asarray(jax.jit(jax.vmap(lambda o_: value(vf, o_)))(jnp.asarray(Ov.reshape(-1, Ov.shape[-1]), jnp.float32))

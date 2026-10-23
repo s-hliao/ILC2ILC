@@ -84,7 +84,7 @@ def fly(pdir, conds, jumps, seed, json_out, save_dir="", episodes=1):
     sd = f"--save-dir {cpath(save_dir)}" if save_dir else ""
     cmd = (f"cd /ilc_ws && source install/setup.bash && export ROS_LOCALHOST_ONLY=1 OMP_NUM_THREADS=1 && {OVERLAY}"
            f"python3 install/ilc_quad/lib/ilc_quad/dilc_execute.py run --policy {cpath(pdir)} --member policy "
-           f"--conds {conds} {j} --episodes {episodes} --seed {seed} --jobs 8 --json {cpath(json_out)} {sd}")
+           f"--conds {conds} {j} --episodes {episodes} --seed {seed} --jobs {os.environ.get('DILC_FLY_JOBS', '8')} --json {cpath(json_out)} {sd}")
     for attempt in range(2):
         try:
             flown(["sg", "docker", "-c", f"docker exec ilc_quad bash -lc '{cmd}'"], stdout=subprocess.DEVNULL,

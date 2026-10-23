@@ -85,6 +85,9 @@ ap.add_argument('--mode-accept', type=int, default=0, help='1: mode-consistent a
 ap.add_argument('--record', default='', help='save every training trial (x, goal, robot, it) to this npz')
 ap.add_argument('--eval-at', type=int, nargs='*', default=[], help='also evaluate after these iterations (the budget '
                 'curve along one run) -> summary_it<k>.json')
+ap.add_argument('--save-at', type=int, nargs='*', default=[], help='save the per-robot networks after these iterations '
+                '(<out>/it<k>/<robot>_policy.npz) WITHOUT the evaluation --eval-at runs (the flow analysis, '
+                'log/dilc/flows/pogo; append-only, default off)')
 ap.add_argument('--gpu', default=None)
 a = ap.parse_args()
 if a.gpu is not None:
@@ -372,6 +375,11 @@ def main():
                                   realized=realize[r][-1]['realized'] if realize[r] and realize[r][-1]['it'] == it else None,
                                   cos=[round(q['cos'], 2) for q in pos[r] if q['it'] == it], t=round(time.time() - t0, 1))),
                   flush=True)
+        if it + 1 in a.save_at and it + 1 not in a.eval_at and it + 1 < a.iters:
+            os.makedirs(os.path.join(a.out, f'it{it + 1}'), exist_ok=True)
+            for r in ROBOTS:
+                C.save_policy(os.path.join(a.out, f'it{it + 1}', f'{r}_policy.npz'),
+                              [(np.asarray(W), np.asarray(b)) for W, b in params[r]], kind='mlp')
         if it + 1 in a.eval_at and it + 1 < a.iters:
             evk, runsk = evaluate({r: [(np.asarray(W), np.asarray(b)) for W, b in params[r]] for r in ROBOTS})
             json.dump(dict(summary, eval=evk, runs=runsk, real_trials=dict(n_trials), it=it + 1, seconds=time.time() - t0),

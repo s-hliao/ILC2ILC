@@ -11,6 +11,11 @@
 #   nbr05        neighbour targets (grid goals <= 5 cm get a weighted step, w 0.5): the interpolation test's best arm,
 #                replicated here on validation goals and 3 seeds (INTERP_RESULTS.md was 1 seed on the spent test seed 701)
 #   ctl_random   the causal control: a same-size step in a random direction (any gain left is the refit's)
+#   vs           (matcha, not in the default ARMS) varied training starts, redrawn every iteration (--train-starts 1)
+#   vsfix        (matcha) the same with each goal's start kept across iterations (--starts-fixed): the pogo's fix
+#                (ilc_pogo/NOTES.md, "Perturbed training starts") -- redrawn starts make the gate / bold / stall compare
+#                jumps from different starts
+# GPU0=1 offsets the GPU rotation (matcha: GPUs 1-3; GPU 0 is shared).
 # ARMS="jac_real sens_goal" bash landing_arms.sh   runs a subset (default: all). SMOKE=1: 2 goals x 2 iterations on real_r1,
 # seed 9001, -> $P/smoke_landing (about 15 min; checks every arm starts, steps and evaluates).
 P=/home/henry/ilc_ws/log/dilc/plane; S=/home/henry/ilc_ws/src/ilc_mjx; PY=~/miniconda3/envs/ilcmjx/bin/python
@@ -29,6 +34,8 @@ declare -A ARM=(
   [sens_vres]="$RECIPE --sens-adapt vres"
   [nbr05]="$RECIPE --nbr-radius 0.05 --nbr-weight 0.5"
   [ctl_random]="$RECIPE --control random"
+  [vs]="$RECIPE --train-starts 1"
+  [vsfix]="$RECIPE --train-starts 1 --starts-fixed"
 )
 ARMS=${ARMS:-"recipe jac_real sens_goal sens_shared sens_vres nbr05 ctl_random"}
 mkdir -p $OUT; cd $S; n=0; g=0; NPAR=${NPAR:-4}
@@ -38,7 +45,7 @@ for seed in $SEEDS; do
       out=$OUT/${arm}_sd$seed
       [ -f $out/$rb/eval_planeval_final.json ] && continue
       START=--skip-start-eval; [ $arm = recipe ] && [ $seed = 9001 ] && START=""      # one zero-shot reference per robot
-      $PY scripts/deploy.py $COMMON ${ARM[$arm]} --seed $seed $START --robots $rb --out $out --gpu $g 2>&1 \
+      $PY scripts/deploy.py $COMMON ${ARM[$arm]} --seed $seed $START --robots $rb --out $out --gpu $((g + ${GPU0:-0})) 2>&1 \
         | grep -v "warp\|bfc_alloc" > $OUT/${arm}_sd${seed}_$rb.log &
       g=$(( (g + 1) % ${NGPU:-3} )); n=$((n + 1))
       if (( n % NPAR == 0 )); then wait -n; n=$((n - 1)); fi

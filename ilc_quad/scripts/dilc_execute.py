@@ -137,6 +137,63 @@ del _i
 assert "--pose-rate 120 --pose-delay 0.015 --pose-noise 0.002 0.01 --param pose_latency:=0.015" in NAMED["real_r4"]
 NAMED["real_r4m"] = NAMED["real_r4"].replace("--pose-rate 120 --pose-delay 0.015 --pose-noise 0.002 0.01 --param pose_latency:=0.015", "--pose-rate 240 --pose-delay 0.0060 --pose-noise 0.0005 0.003 --param pose_latency:=0.0060")
 
+# clean twins (2026-10-19, matcha; log/dilc/plane/clip/DIAG.md): the validation robots' dynamics (mass, CoM, motors,
+# friction, ground, payload) WITHOUT the async / sensing effects -- no actuation delay / jitter / command drops, state
+# jitter, joint noise, foot-sensor error, mocap rate / delay / noise. Does the hardware stage converge when only the
+# dynamics differ from the sim?
+_ASYNC_FLAGS = {"--act-delay": 1, "--act-jitter": 1, "--cmd-drop": 1, "--state-jitter": 1, "--joint-noise": 2,
+                "--foot-sensor": 3, "--pose-rate": 1, "--pose-delay": 1, "--pose-noise": 2}
+
+
+def _strip_async(s):
+    t, out, i = s.split(), [], 0
+    while i < len(t):
+        if t[i] in _ASYNC_FLAGS:
+            i += 1 + _ASYNC_FLAGS[t[i]]
+            continue
+        if t[i] == "--param" and i + 1 < len(t) and t[i + 1].startswith("pose_latency:="):
+            i += 2
+            continue
+        out.append(t[i])
+        i += 1
+    return " ".join(out)
+
+
+for _n in ("real_r1", "real_s1", "real_r4", "real_r5"):
+    NAMED[_n + "c"] = _strip_async(NAMED[_n])
+del _n
+
+# partial twins (2026-10-19): clean dynamics plus ONE group of the robot's own async / sensing effects -- which group
+# stops the hardware stage from converging? <robot>_a: actuation (delay, jitter, command drops); <robot>_s: sensing (state
+# jitter, joint noise, foot-sensor error); <robot>_m: mocap (rate, delay, noise, the estimator's latency compensation)
+_GROUPS = {"a": ("--act-delay", "--act-jitter", "--cmd-drop"), "s": ("--state-jitter", "--joint-noise", "--foot-sensor"),
+           "m": ("--pose-rate", "--pose-delay", "--pose-noise", "pose_latency")}
+
+
+def _only_group(s, grp):
+    t, out, i = s.split(), [], 0
+    while i < len(t):
+        if t[i] == "--param" and i + 1 < len(t) and t[i + 1].startswith("pose_latency:="):
+            if "pose_latency" in _GROUPS[grp]:
+                out += t[i:i + 2]
+            i += 2
+            continue
+        if t[i] in _ASYNC_FLAGS:
+            n = 1 + _ASYNC_FLAGS[t[i]]
+            if t[i] in _GROUPS[grp]:
+                out += t[i:i + n]
+            i += n
+            continue
+        out.append(t[i])
+        i += 1
+    return " ".join(out)
+
+
+for _n in ("real_r1", "real_s1", "real_r4", "real_r5"):
+    for _g in _GROUPS:
+        NAMED[f"{_n}_{_g}"] = _only_group(NAMED[_n], _g)      # (underscore: real_r4m is already a robot)
+del _n, _g
+
 def conditions(spec: str, seed: int = 0) -> list[tuple[str, str]]:
     """'challenging', 'all', 'dr:N' (N randomized), a comma list of names, or a file of
     name|args lines (conds_async.txt)."""
