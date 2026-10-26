@@ -825,3 +825,21 @@ is at 92 and its other sticks at 100.
 | PPO+DR + our stage | 77.8 | **99.1** | 100 | 100 | 100 | 100 |
 - Under the servo leg the stage plateaus at 12 trials (ours) / 6 (from PPO+DR); 6 is too few for ours (82-84 %).
   The 36-trial headline was the instant leg's B* (84 % at 12 there). No paired CI run on 12 vs 36 (gap <= 1 point).
+
+## 2026-10-26 FADA under the servo leg: diagnosis (log/pogo_servo/fada_diag/, runs/v3/fadaF3*)
+- **Identifiability of the label.** One control period's leg-angle action, +0.1 on a single step, moves the next apex
+  by up to 1.33 cm on the instant leg, and that one step (touchdown) carries 52-58 % of the summed effect. On the
+  servo leg the largest one-step effect is 0.16-0.21 cm and 50 % of it takes 15-27 steps (the servo integrates the
+  command over the flight). FADA's one-step inverse dynamics, a_t from (o_t, the apex reached), is no longer identifiable
+  (step_effect.py).
+- The IDM barely uses its target in either leg model (d action per 1 sd of target ~0.01 vs action sd 0.11-0.21,
+  idm_sens.py); the adaptation moves the actions 0.02-0.04 (servo) vs 0.005-0.025 (instant).
+- **Fix tried:** target = the state H periods ahead INCLUDING the leg angle and its rate (`--target hstep --dims 0 1 2 4
+  5 8 9`; the servo is a state now). Seed 0, validation: zero-shot 48 % (F2, apex target) -> 71 % (H 4) / 70 % (H 8);
+  sim check (IDM vs its PPO+DR source in DR sim) 27 % -> 48 % / 46 % (source 54-59 %). After 24 trials: 58 -> 73 % /
+  77 %. The zero-shot loss is fixed; the adaptation gain stays small (+3..+7) and the offset stick stays at 0 %.
+- **Why offset stays at 0:** the offset biases the encoder and the servo alike; in the encoder frame the servo tracks the
+  command exactly, so the short-horizon transitions FADA relabels (o_t -> o_t+H) are unchanged by it -- its inverse
+  dynamics cannot see a calibration bias, which shows only in the touchdown physics a hop later. (Ours corrects it: the
+  stage regresses on the task error.)
+- Seeds 1, 2 of F3h8 running (fadaF3h8_s1/s2).
