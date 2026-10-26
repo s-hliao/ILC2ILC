@@ -198,6 +198,16 @@ del _n, _g
 # diagnosis, log/dilc/plane/quad_r5_split.py) -- everything else, timing and sensing included, as real_r5
 NAMED["real_r5mu1"] = NAMED["real_r5"] + " --friction 1.0"
 
+# the EKF robots (2026-10-26; the user: the lab's mocap runs at 500 Hz, the Go1 has an IMU): every validation robot
+# with its mocap at 500 Hz (its own noise and latency kept) and an IMU (noise 0.01 rad/s / 0.1 m/s^2 per reading,
+# bias per axis U(-0.01, 0.01) rad/s / U(-0.1, 0.1) m/s^2 per trial). The mocap-line policies fly them too (they
+# ignore the IMU), so both estimators are compared on the same robots.
+for _n in ("nominal", "real_r1", "real_s1", "real_r4", "real_r5"):
+    _a = NAMED[_n]
+    _a = " ".join(_a.split()).replace("--pose-rate 240", "--pose-rate 500").replace("--pose-rate 120", "--pose-rate 500")
+    NAMED[_n + "_m500"] = _a + " --imu-noise 0.01 0.1 --imu-bias 0.01 0.1"
+del _n, _a
+
 def conditions(spec: str, seed: int = 0) -> list[tuple[str, str]]:
     """'challenging', 'all', 'dr:N' (N randomized), a comma list of names, or a file of
     name|args lines (conds_async.txt)."""
@@ -446,7 +456,7 @@ class Estimator:
         self.lat, self.w = float(latency), float(window)
         self.tt, self.qq, self.frames, self.shift = [], [], [], None
 
-    def push(self, t, pos, quat, q12, new):
+    def push(self, t, pos, quat, q12, new, **_):
         self.tt.append(float(t))
         self.qq.append(self._collapse(np.asarray(q12)))
         if not (new or len(self.tt) == 1):
@@ -474,14 +484,113 @@ class Estimator:
         return np.array([fit[0][1], fit[1][1], fit[2][1], fit[0][0], fit[1][0], fit[2][0]])
 
 
-def replay_states(fb, x_ref, rec, dt, Nc, latency, window) -> np.ndarray:
-    """A recorded trial's (rec_*) states at samples 0..Nc, as Estimator saw them live."""
+class EkfEstimator:
+    """
+    The SRB state from the planar trunk EKF (planar_ekf: the IMU predicts, the mocap corrects, at cfg["rate"] Hz)
+    -- the same push / estimate interface as Estimator, which it replaces when the bank says
+    cfg["estimator"] == "ekf" (cfg["ekf"]: the filter's parameters). The CoM and its velocity come from the trunk
+    estimate and the joints: com(trunk, q), d com / d (trunk, q) . (trunk rates, dq), dq the mean of the last
+    10 ms of joint readings. The IMU biases start at the stand's (IlcJumpNode._imu_bias0). Causal and fed tick by
+    tick: a recorded trial replays into exactly what the live policy saw.
+    """
+    DQ_TICKS = 5
+
+    def __init__(self, fb, x_ref0, origin, yaw, latency, cfg=None):
+        import planar_ekf
+        from ilc_jump_sim import collapse, planar_pitch
+        self._ekf, self._collapse, self._pitch = planar_ekf, collapse, planar_pitch
+        self.fb, self.x0 = fb, np.asarray(x_ref0[:2], float)
+        self.origin, self.c, self.s = np.asarray(origin, float), math.cos(yaw), math.sin(yaw)
+        self.lat, self.cfg = float(latency), planar_ekf.params(cfg)
+        self.h = 1.0 / self.cfg["rate"]
+        self.x = self.P = None
+        self.t_k, self.t_next = None, None
+        self.frames, self.acc, self.dq, self.q, self.w = [], [], [], None, 0.0
+        self.shift = None
+        if not hasattr(fb, "_com_jac"):
+            import casadi as ca
+            S = ca.SX.sym("s", 7)
+            fb._com_jac = ca.Function("com_jac", [S], [ca.jacobian(fb.com(S), S)])
+
+    def _planar(self, pos, quat):
+        rel = np.asarray(pos) - self.origin
+        return np.array([self.c * rel[0] + self.s * rel[1], rel[2], self._pitch(quat)])
+
+    def push(self, t, pos, quat, q12, new, imu=None, dq12=None, imu_b0=None):
+        t = float(t)
+        self.q = self._collapse(np.asarray(q12))
+        if dq12 is not None:
+            self.dq = (self.dq + [self._collapse(np.asarray(dq12))])[-self.DQ_TICKS:]
+        if imu is not None and np.isfinite(imu).all():
+            self.w = float(imu[1])                              # body y: th_dot = -(w - bg)
+            self.acc.append((float(imu[1]), float(imu[3]), float(imu[5])))
+        if self.x is None:                                      # at rest where the first frame says
+            m = self._planar(pos, quat)
+            self.x, self.P = self._ekf.init(m[0], m[1], m[2], np, self.cfg)
+            if imu_b0 is not None:
+                self.x[5], self.x[6], self.x[7] = imu_b0[3], imu_b0[5], imu_b0[1]
+            self.t_k, self.t_next = t, t + self.h
+            self.acc = []
+            com = self.fb.com(np.concatenate([m, self.q])).full().ravel()
+            self.shift = self.x0 - com
+            return
+        if new:
+            self.frames.append((t - self.lat, self._planar(pos, quat)))
+        while t >= self.t_next - 1e-9:                          # a filter step (at most one per tick at 500 Hz)
+            if self.acc:
+                a = np.mean(self.acc, 0)
+                w_y, f = a[0], a[1:]
+            else:                                               # no IMU: a constant-velocity prediction
+                sn, c = math.sin(self.x[2]), math.cos(self.x[2])
+                w_y, f = self.x[7], np.array([sn * 9.81 + self.x[5], c * 9.81 + self.x[6]])
+            self.x, self.P = self._ekf.predict(self.x, self.P, w_y, f, self.h, np, self.cfg)
+            self.t_k = self.t_next
+            self.t_next += self.h
+            self.acc = []
+            keep = []
+            for tf, m in self.frames:
+                if tf <= self.t_k + 1e-9:
+                    self.x, self.P = self._ekf.update(self.x, self.P, m, self.t_k - tf, w_y, np, self.cfg)
+                else:
+                    keep.append((tf, m))
+            self.frames = keep
+
+    def estimate(self, t_now) -> np.ndarray:
+        tr = self._ekf.extrapolate(self.x, self.w, max(0.0, float(t_now) - self.t_k), np)
+        sv = np.concatenate([tr[:3], self.q])
+        dqf = np.mean(self.dq, 0) if self.dq else np.zeros(4)
+        com = self.fb.com(sv).full().ravel() + self.shift
+        comd = self.fb._com_jac(sv).full() @ np.concatenate([tr[3:6], dqf])
+        return np.array([com[0], com[1], tr[2], comd[0], comd[1], tr[5]])
+
+
+def make_estimator(fb, x_ref0, origin, yaw, latency, window, cfg=None):
+    """The bank's estimator: EkfEstimator if cfg["estimator"] == "ekf", else the line through the mocap frames."""
+    if cfg is not None and cfg.get("estimator") == "ekf":
+        return EkfEstimator(fb, x_ref0, origin, yaw, latency, cfg.get("ekf"))
+    return Estimator(fb, x_ref0, origin, yaw, latency, window)
+
+
+def _rec_kw(rec, i):
+    """The EKF's extra inputs at recorded tick i (absent in recordings before 2026-10-26)."""
+    kw = {}
+    if "imu" in rec and len(rec["imu"]) > i:
+        kw["imu"] = np.asarray(rec["imu"][i], float)
+    if "dq" in rec and len(rec["dq"]) > i:
+        kw["dq12"] = np.asarray(rec["dq"][i], float)
+    if "imu_b0" in rec and len(rec["imu_b0"]) > i:
+        kw["imu_b0"] = np.asarray(rec["imu_b0"][i], float)
+    return kw
+
+
+def replay_states(fb, x_ref, rec, dt, Nc, latency, window, est_cfg=None) -> np.ndarray:
+    """A recorded trial's (rec_*) states at samples 0..Nc, as the estimator saw them live."""
     from ilc_jump_sim import yaw_of
     t, pos, quat, q, new = rec["t"], rec["pos"], rec["quat"], rec["q"], rec["pose_new"]
-    est = Estimator(fb, x_ref[0], pos[0], yaw_of(quat[0]), latency, window)
+    est = make_estimator(fb, x_ref[0], pos[0], yaw_of(quat[0]), latency, window, est_cfg)
     X, last = [], -1
     for i in range(len(t)):
-        est.push(t[i], pos[i], quat[i], q[i], bool(new[i]))
+        est.push(t[i], pos[i], quat[i], q[i], bool(new[i]), **_rec_kw(rec, i))
         k = int(t[i] / dt + 1e-6)
         if last < k <= Nc:
             last = k
@@ -734,15 +843,17 @@ class Driver:
         if self.fd is not None and self.fd.child is not None:
             self.fd.report(node)                     # a perturbed copy: its state, and it ends
         if self.est is None:
-            self.est = Estimator(node.fb, ilc.x_ref[0], node.frame["origin"], node.frame["yaw"],
-                                 node.pose_latency, self.window)
+            self.est = make_estimator(node.fb, ilc.x_ref[0], node.frame["origin"], node.frame["yaw"],
+                                      node.pose_latency, self.window, self.bank.cfg)
         rec = node.rec
         n = len(rec["t"])
         for i in range(self.n_pushed, n):            # recorded ticks not yet seen
             self.est.push(rec["t"][i], rec["pos"][i], rec["quat"][i], rec["q"][i],
-                          bool(rec["pose_new"][i]))
+                          bool(rec["pose_new"][i]), **_rec_kw(rec, i))
         t_now = round((k * ilc.dt) / node.tick) * node.tick
-        self.est.push(t_now, node.pose[1], node.pose[2], q, bool(node.pose_fresh))
+        self.est.push(t_now, node.pose[1], node.pose[2], q, bool(node.pose_fresh),
+                      imu=np.concatenate(node.imu) if getattr(node, "imu", None) is not None else None,
+                      dq12=dq, imu_b0=getattr(node, "imu_b0", None))
         self.n_pushed = n + 1                        # this tick is recorded next, as pushed
         x = self.est.estimate(t_now)
         self.X.append(x)
@@ -799,6 +910,9 @@ def run_jump(bank: GoalBank, g, cond: str, seed: int, driver_kw: dict, land_time
             "--param", f"margin:={cfg['margin']}", "--param", f"land_time:={land_time}"]
     if "mu" in cfg:                    # a plan made for another friction cone (2026-10-23): the node must assume it too
         argv += ["--param", f"mu:={cfg['mu']}"]
+    for k in ("box_clearance", "box_setback", "box_setback_front"):     # a box plan's own edge settings (2026-10-25)
+        if k in cfg:
+            argv += ["--param", f"{k}:={cfg[k]}"]
     argv += [x for p_ in os.environ.get("DILC_NODE_PARAMS", "").split() for x in ("--param", p_)]   # run --node-param
     if menagerie_root:
         argv += ["--menagerie-root", menagerie_root]
@@ -1289,7 +1403,7 @@ def _dataset_run(job):
         ref = {k: d[k] for k in d if k in ("x_ref", "u_ref") or k.startswith("info_")}
         rec = {k[4:]: d[k] for k in d if k.startswith("rec_")}
         X = replay_states(maker.fb, ref["x_ref"], rec, bank.dt, bank.Nc, latency,
-                          bank.cfg["est_window"])
+                          bank.cfg["est_window"], bank.cfg)
         fell = bool(d["log_fell"])
         U, logX = d["U_flown"], d["log_X"]
         # the trial for the goal it aimed at, and in hindsight for the goal it reached (on
@@ -1363,7 +1477,7 @@ def build_lqr(bank: GoalBank, policy_dir, g, ref, rscale=1.0, root="", c_run=0.0
         meta = json.load(open(os.path.join(os.path.dirname(paths[p["name"]]), "meta.json")))
         lat = float(meta.get("params", {}).get("pose_latency", 0.0))
         rec = {k[4:]: d[k] for k in d if k.startswith("rec_")}
-        Xh = replay_states(maker.fb, d["x_ref"], rec, bank.dt, bank.Nc, lat, bank.cfg["est_window"])
+        Xh = replay_states(maker.fb, d["x_ref"], rec, bank.dt, bank.Nc, lat, bank.cfg["est_window"], bank.cfg)
         U_ff = U_ff + wi * (d["U_flown"] - r["u_ref"])
         X_nom = X_nom + wi * Xh
     Nc, N, dt = bank.Nc, bank.N, bank.dt
@@ -1651,6 +1765,8 @@ def _ilc_one(job):
             "--jump", str(g[0]), str(g[1]), "--reference-file", ref_path,
             "--param", "phases:=[" + ",".join(str(int(v)) for v in cfg["phases"]) + "]",
             "--param", f"margin:={cfg['margin']}", *extra,
+            *[x for k in ("mu", "box_clearance", "box_setback", "box_setback_front") if k in cfg     # the plan's own
+              for x in ("--param", f"{k}:={cfg[k]}")],                                           # settings (2026-10-25)
             *[x for p_ in node_params for x in ("--param", p_)],
             *shlex.split(strip_seed(cond)), "--seed", str(seed),
             "--log-dir", out, "--run-name", name,

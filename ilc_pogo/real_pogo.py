@@ -64,7 +64,7 @@ HARSH = {
 HARSH_ROBOTS = list(HARSH)
 ROBOTS.update(UNMODELLED)                         # robot_params knows them; DEFAULT_ROBOTS stays the original six
 ROBOTS.update(HARSH)
-MULT = ('m', 'k', 'gth', 'l0')
+MULT = ('m', 'k', 'gth', 'l0', 'wn', 'wmax')
 
 
 def robot_params(name):
@@ -104,7 +104,8 @@ def simulate(policy, goals, x0, params, T, noise=None, ff=None):
     EV = [[] for _ in range(n)]                       # per run: (period, fraction of the period, 1 touchdown / 0 liftoff)
     h = DT / SUB_REAL
     real = any(np.any(p[k] != 0) for k in REAL_ONLY)  # any unmodelled effect in the batch -> the real substep
-    bias = np.stack([np.zeros(n), p['bz'], p['bvx'], p['bvz'], np.zeros(n), np.zeros(n)], -1)
+    bias = np.zeros((n, NX))
+    bias[:, 1], bias[:, 2], bias[:, 3] = p['bz'], p['bvx'], p['bvz']
     aux = dict(yb=None, dl=None, zf=np.zeros(n), zfd=np.zeros(n))
     for t in range(T):
         xs[:, t] = x
@@ -143,15 +144,14 @@ def substep_real(x, a, dbl, p, h, aux):
     """common.substep plus the unmodelled effects (UNMODELLED): the thrust lag (tau), the compliant ground under the
     foot (kg, bg: the foot at height zf <= 0, massless) and the leg mass (mf) at liftoff. With those keys 0 it computes
     exactly common.substep (numpy: the straight-through saltation terms are 0 there)."""
-    _, phi = C.unnorm(a, np)
-    phi = phi + p['phi_off']
+    _, target = C.unnorm(a, np)
     if aux['dl'] is None:
         aux['dl'] = dbl.copy()
     lag = p['tau'] > 0
     aux['dl'] = np.where(lag, aux['dl'] + h / np.where(lag, p['tau'], 1.0) * (dbl - aux['dl']), dbl)
     delta = aux['dl']
     zf, zfd = aux['zf'], aux['zfd']
-    X, Z, VX, VZ, XF, ST = (x[..., i] for i in range(6))
+    X, Z, VX, VZ, XF, ST, TH, W = (x[..., i] for i in range(8))
     dx, dzl = X - XF, Z - zf
     L = np.sqrt(dx ** 2 + dzl ** 2)
     Ls = np.maximum(L, 1e-6)
@@ -166,6 +166,8 @@ def substep_real(x, a, dbl, p, h, aux):
     soft = (p['kg'] > 0) & (ST > 0.5)                 # the massless foot: ground force -kg zf - bg zfd = leg force (z)
     zfd = np.where(soft, (-p['kg'] * zf - F * dzl / Ls) / np.where(p['bg'] > 0, p['bg'], 1.0), 0.0)
     zf = np.where(soft, np.minimum(zf + h * zfd, 0.0), 0.0)
+    TH, W = C.leg_step(TH, W, target, ST, X, Z, VX, VZ, XF, p, h, np, zf, zfd)
+    phi = TH + p['phi_off']                           # the leg's true angle (th is the encoder's)
     td = (ST < 0.5) & (Z - p['l0'] * np.cos(phi) <= 0.0) & (VZ < 0)
     Ln = np.sqrt((X - XF) ** 2 + (Z - zf) ** 2)
     lo = (ST > 0.5) & (Ln >= p['l0'] + p['gth'] * delta) & (Ld > 0)
@@ -175,7 +177,7 @@ def substep_real(x, a, dbl, p, h, aux):
     zf, zfd = np.where(td | lo, 0.0, zf), np.where(td | lo, 0.0, zfd)
     aux['zf'], aux['zfd'] = zf, zfd
     ST = np.where(td, 1.0, np.where(lo, 0.0, ST))
-    return np.stack([X, Z, VX, VZ, XF, ST], -1)
+    return np.stack([X, Z, VX, VZ, XF, ST, TH, W], -1)
 
 
 def signature(res, i, a_lim=1.0):

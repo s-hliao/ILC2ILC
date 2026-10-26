@@ -83,6 +83,12 @@ def _stamp(msg, t):
 GO1_NO_LOAD_SPEED = np.tile([30.1, 30.1, 20.06], 4)
 
 
+def _rotate(q, v):
+    """v rotated by the unit quaternion q = (w, x, y, z)."""
+    w, u = q[0], np.asarray(q[1:])
+    return v + 2.0 * np.cross(u, np.cross(u, v) + w * v)
+
+
 def _small_rotation(rng, sigma):
     """(w, x, y, z) of a random rotation, each axis ~ N(0, sigma) rad."""
     r = rng.normal(0.0, sigma, 3)
@@ -117,7 +123,11 @@ class Reality:
       sensing    pose (mocap): pose_rate Hz frames, sample-and-hold, pose_delay s
                  latency, pose_noise [m, rad] per frame; joints: joint_noise [rad, rad/s]
                  per tick; foot_sensor [bias, gain spread, noise]: Go1's raw footForce
-                 reads bias_i + gain_i F + noise, bias_i ~ U(0, bias), gain_i ~ U(1-g, 1+g)
+                 reads bias_i + gain_i F + noise, bias_i ~ U(0, bias), gain_i ~ U(1-g, 1+g);
+                 IMU (at the base origin, read with the joints, as the Go1's lowstate): gyro (body, rad/s)
+                 and specific force (body, m/s^2, the base's acceleration over the last tick minus gravity),
+                 imu_noise [gyro, acc] per reading, imu_bias [gyro, acc] per axis ~ U(-b, b) per trial --
+                 drawn from their own generator, so a condition without them flies exactly as before
     """
 
     def __init__(self, args, sim, period):
@@ -156,6 +166,11 @@ class Reality:
         srng = np.random.default_rng(args.sensor_seed) if getattr(args, "sensor_seed", -1) >= 0 else self.rng
         self.ff_bias = srng.uniform(0.0, bias, 4) if bias > 0 else np.zeros(4)
         self.ff_gain = srng.uniform(1 - spread, 1 + spread, 4) if spread > 0 else np.ones(4)
+        self.imu_rng = np.random.default_rng(args.seed + 977)
+        self.imu_noise = list(getattr(args, "imu_noise", (0.0, 0.0)))
+        ib = list(getattr(args, "imu_bias", (0.0, 0.0)))
+        self.imu_b = np.concatenate([self.imu_rng.uniform(-ib[0], ib[0], 3) if ib[0] > 0 else np.zeros(3),
+                                     self.imu_rng.uniform(-ib[1], ib[1], 3) if ib[1] > 0 else np.zeros(3)])
         self.reset()
 
     def reset(self):
@@ -163,6 +178,9 @@ class Reality:
         self.poses = []                           # true (t, pos, quat), for the mocap's delay
         self.frame = None                         # (frame index, pos, quat) held by the mocap
         self.states = []                          # true (t, q, dq), for the joint readings' age
+        self.imus = []                            # true (t, gyro, specific force), read with the joints
+        self.v_prev = None                        # the base's world velocity at the previous IMU reading
+        self.js_seen = None                       # the time the latest joint reading was taken
 
     # -- actuators --
     def command(self, t, cmd):
@@ -220,8 +238,32 @@ class Reality:
                 self.states.pop(0)
             _, q, dq = self.states[0]
             q, dq = q.copy(), dq.copy()
+            self.js_seen = seen
+        else:
+            self.js_seen = t
         sq, sdq = self.joint_noise
         return q + self.rng.normal(0.0, sq, 12), dq + self.rng.normal(0.0, sdq, 12)
+
+    def imu(self, t):
+        """The IMU reading that comes with the latest joint reading (call after joints(t)): (gyro (3,),
+        specific force (3,)), body frame, with noise and the trial's bias."""
+        v = self.sim.base_velocity()
+        a = (v[:3] - self.v_prev) / self.period if self.v_prev is not None else np.zeros(3)
+        self.v_prev = v[:3].copy()
+        f_world = a + np.array([0.0, 0.0, 9.81])
+        qw = self.sim.base_quat()
+        conj = np.array([qw[0], -qw[1], -qw[2], -qw[3]])
+        f_body = _rotate(conj, f_world)
+        self.imus.append((t, v[3:6].copy(), f_body))
+        seen = self.js_seen if self.js_seen is not None else t
+        while len(self.imus) > 1 and self.imus[1][0] <= seen + 1e-9:
+            self.imus.pop(0)
+        _, g, f = self.imus[0]
+        out = np.concatenate([g, f]) + self.imu_b
+        if any(self.imu_noise):
+            out = out + np.concatenate([self.imu_rng.normal(0.0, self.imu_noise[0], 3),
+                                        self.imu_rng.normal(0.0, self.imu_noise[1], 3)])
+        return out[:3], out[3:]
 
     def foot_forces(self):
         f = self.sim.foot_normal_forces()
@@ -239,6 +281,7 @@ class Reality:
                     pose_delay=args.pose_delay, pose_noise=list(args.pose_noise),
                     joint_noise=list(args.joint_noise), foot_sensor=list(args.foot_sensor),
                     foot_bias=self.ff_bias.tolist(), foot_gain=self.ff_gain.tolist(),
+                    imu_noise=self.imu_noise, imu_bias=self.imu_b.tolist(),
                     seed=args.seed)
 
 
@@ -340,6 +383,7 @@ def run(args) -> list[dict]:
             if new_frame:                          # a mocap frame arrives only when taken
                 node._on_pose(odom)
             node.contacts = real.foot_forces()
+            node.imu = real.imu(t_sim)             # with the joint reading, as the Go1's lowstate
             node._on_joint_states(js)
             if node.worker is not None:           # the ILC update: wait, keep it deterministic
                 node.worker.join()
@@ -414,6 +458,10 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--pose-noise", type=float, nargs=2, default=(0.0, 0.0), metavar=("M", "RAD"))
     r.add_argument("--joint-noise", type=float, nargs=2, default=(0.0, 0.0),
                    metavar=("RAD", "RAD_S"))
+    r.add_argument("--imu-noise", type=float, nargs=2, default=(0.0, 0.0), metavar=("GYRO", "ACC"),
+                   help="IMU noise per reading: rad/s, m/s^2")
+    r.add_argument("--imu-bias", type=float, nargs=2, default=(0.0, 0.0), metavar=("GYRO", "ACC"),
+                   help="IMU bias per axis ~ U(-b, b), drawn per trial: rad/s, m/s^2")
     r.add_argument("--foot-sensor", type=float, nargs=3, default=(0.0, 0.0, 0.0),
                    metavar=("BIAS", "GAIN_SPREAD", "NOISE"), help="raw footForce model")
     r.add_argument("--seed", type=int, default=0)

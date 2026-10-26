@@ -793,3 +793,35 @@ is at 92 and its other sticks at 100.
   RMA (98–99 %) in 36 real trials, using no privileged information about the robot. On this toy it ties RMA / FADA; it
   does not beat them.
 - Test seeds 1301, 2301 and 3301 are now all spent.
+
+## 2026-10-24: the leg no longer teleports (common.py POGO_LEG)
+- Before: in flight the massless leg pointed at the commanded angle every substep, so the touchdown angle could jump
+  0.24 rad in one 10 ms period (measured on Raibert, real_nom): the policy chose the foot placement instantly.
+- Now (POGO_LEG=servo, the default): state x gains th, w (NX 8; th = the leg angle as the hip ENCODER reads it; the
+  true angle is th + phi_off). Stance: th, w from the leg geometry (atan2(xf - x, z) - phi_off). Flight: a hip servo
+  dw/dt = wn^2 (phi - th) - 2 zeta wn w, |w| <= wmax
+  (NOMINAL wn 30 rad/s, zeta 0.8, wmax 6 rad/s; axis robots ax:wn=<x> / ax:wmax=<x> multiply them). Touchdown uses
+  th. The observation gains th, w (NOBS 10). Same law in pogo_jax (nominal) and real_pogo (robots).
+- Raibert on real_nom: leg moves <= 0.03 rad per period (peak 3 rad/s), touchdown angle lags the command by up to
+  7 mrad; success 12.5 % (instant 12.5 %); ax:wn=0.5 (a slow servo): 0 %, one fall.
+- POGO_LEG=instant reproduces the old model bit for bit (checked: numpy robots and the JAX nominal, max diff 0.0), with
+  NOBS 8. EVERY network and result before 2026-10-24 needs POGO_LEG=instant; under the default they fail on the
+  observation size (10 vs 8), loudly. New results need retraining (sim_train / ppo_dr / rma / fada) under servo.
+- First servo retraining (log/pogo_servo/runs_v1_offset_visible, 2026-10-24 20:18) is INVALID for real_offset: th was
+  the TRUE angle, so the policy saw the calibration offset (offset zero-shot 0 -> 46-100 %). Fixed: th is in the
+  encoder frame (the offset biases sensor and servo alike). Rerun in log/pogo_servo/runs (scheduler_servo.py).
+- Servo-leg retraining, corrected (log/pogo_servo/runs, done 20:50, 47/47 jobs; results_table_servo.txt; validation
+  goals, 3 seeds; zero-shot -> after real trials; instant-leg values in brackets): ours nominal 11 -> 99.0 % @36
+  [6 -> 95.3]; ours + DR 45 -> 94.8 [54 -> 99.5]; PPO+DR + our stage 78 -> 100 [77 -> 98.8]; RMA 100 zs [99.8];
+  FADA 53 -> 56 @24 [67 -> 94.3]; PPO on the sticks 84 @48, 100 @384 [83, 96.5]; Raibert 12.5 [12.5]. Offset stick
+  0 % zero-shot for every network again (the encoder-frame fix). FADA's real-trial gain is gone under the servo leg:
+  not yet diagnosed.
+
+## 2026-10-26 servo-leg minimum budget (log/pogo_servo/budget_servo.sh; validation goals, 3 seeds, 6 goals x 1 trial / iter)
+| arm | zero-shot | 6 | 12 | 18 | 24 | 36 (PF) |
+|---|---|---|---|---|---|---|
+| ours nominal | 11.1 | 81.9 | **98.3** | 99.0 | 98.8 | 99.0 |
+| ours + DR (drNomInit) | 45.5 | 83.5 | **95.0** | 94.4 | 95.0 | 94.8 |
+| PPO+DR + our stage | 77.8 | **99.1** | 100 | 100 | 100 | 100 |
+- Under the servo leg the stage plateaus at 12 trials (ours) / 6 (from PPO+DR); 6 is too few for ours (82-84 %).
+  The 36-trial headline was the instant leg's B* (84 % at 12 there). No paired CI run on 12 vs 36 (gap <= 1 point).

@@ -66,6 +66,9 @@ class Config:
     est_window: float = 0.0     # > 0: the policy observes the robots' estimate (dilc_execute.Estimator: a line through
                                 # the CoM x, z and pitch of every tick of the last est_window s, at now), not the true
                                 # state -- the robots' sensing (a lagged velocity at the push), not their dynamics
+    estimator: str = "line"     # "ekf": the robots' planar trunk EKF (dilc_execute.EkfEstimator, planar_ekf: the IMU
+                                # predicts, the 500 Hz mocap corrects, one step per TO sample); the bank's "estimator"
+                                # key overrides this (the bank is what the robots read)
 
 
 def _quat_mul(a, b):
@@ -109,6 +112,12 @@ class JumpEnv:
         self.Nc, self.N = self.Ndc + self.Nsc, self.Ndc + self.Nsc + self.Nfl
         self.dt = float(c0["dt"])
         self.tps = int(round(self.dt / TICK))                       # ticks per TO sample
+        self.ekf_on = bank.get("estimator", cfg.estimator) == "ekf"
+        if self.ekf_on:
+            import planar_ekf
+            self._pe = planar_ekf
+            self.ekf_cfg = planar_ekf.params(bank.get("ekf"))
+            assert abs(self.ekf_cfg["rate"] * self.dt - 1.0) < 1e-6, "the EKF steps once per TO sample"
         self.goals = np.array([p["goal"] for p in bank["plans"]], float)
         f32 = lambda x: jnp.asarray(x, jnp.float32)
         self.plans = {k: f32(np.stack([r[src] for r in refs]))
@@ -387,10 +396,80 @@ class JumpEnv:
 
         def tick(dx, i):
             u_i = jnp.where((i < p["act_dl"][k]) | p["drop"][k], u_hold, u) if timed else u
+            d0 = dx
             dx = self._step(dx, self._command(dx, k, i, u_i, ref, contact), p, ref)
-            return dx, ((self._hit_geom(dx), self._pose3(dx)) if with_hit else None)
+            return dx, ((self._hit_geom(dx), self._tick_data(d0, dx)) if with_hit else None)
         dx, ex = jax.lax.scan(tick, dx, jnp.arange(self.tps))
         return (dx, ex[0].max(), ex[1]) if with_hit else dx
+
+    def _tick_data(self, d0, dx):
+        """What the estimator gets from one tick (d0 -> dx): the line's CoM pose (_pose3), or for the EKF the
+        trunk's planar pose (x, z, pitch), the IMU (gyro y, specific force body x, z: the base's acceleration over
+        the tick minus gravity), and the planar joints q, dq (14,)."""
+        if not self.ekf_on:
+            return self._pose3(dx)
+        s, sd = self.planar_state(dx)
+        quat = dx.qpos[3:7]
+        a = (dx.qvel[:3] - d0.qvel[:3]) / TICK + jnp.array([0.0, 0.0, 9.81])
+        fb = _rotate(quat * jnp.array([1.0, -1.0, -1.0, -1.0]), a)
+        return jnp.concatenate([s[:3], dx.qvel[4:5], fb[jnp.array([0, 2])], s[3:], sd[3:]])
+
+    def _ekf_init(self, dx0, dyn, timed):
+        """The EKF of each jump at its start (at rest; the biases as the stand measured them: the true ones)."""
+        B = dx0.qpos.shape[0]
+        s0 = jax.vmap(lambda d: self.planar_state(d)[0])(dx0)
+        pe = self._pe
+
+        def one(si):
+            x, P = pe.init(si[0], si[1], si[2], jnp, self.ekf_cfg)
+            return x, P
+        x, P = jax.vmap(one)(s0)
+        bias = dyn["imu_bias"] if timed else jnp.zeros((B, 3))
+        x = x.at[:, 5].set(bias[:, 1]).at[:, 6].set(bias[:, 2]).at[:, 7].set(bias[:, 0])
+        L = self.tps + self.DMAX
+        tbuf = jnp.repeat(s0[:, None, :3], L, 1)
+        return (x, P, tbuf, s0[:, 3:], jnp.zeros((B, 4)), bias[:, 0])
+
+    def _ekf_step(self, ek, ps, dyn, k, timed):
+        """One EKF step over a TO sample's ticks ps (B, tps, 14): predict with their mean IMU, correct with the
+        mocap frames that arrived by its end (pose_dl ticks late; each against the state moved back by its age)."""
+        x, P, tbuf, _, _, _ = ek
+        B, T = ps.shape[0], self.tps
+        imu = ps[:, :, 3:6]
+        frames = ps[:, :, :3]
+        if timed:
+            imu = imu + dyn["imu_noise"][:, k][:, :, jnp.array([0, 1, 2])] + dyn["imu_bias"][:, None]
+            frames = frames + dyn["pose_noise"][:, k]
+            d = dyn["pose_dl"]
+        else:
+            d = jnp.full((B,), int(round(0.006 / TICK)), jnp.int32)
+        L = T + self.DMAX
+        tbuf = jnp.concatenate([tbuf, frames], 1)[:, -L:]
+        w_m, f_m = imu[:, :, 0].mean(1), imu[:, :, 1:3].mean(1)
+        pe, cfg, h = self._pe, self.ekf_cfg, self.dt
+
+        def one(x, P, w, f, tb, dd):
+            x, P = pe.predict(x, P, w, f, h, jnp, cfg)
+            for i in range(T):                                  # the T frames new by now: ticks L-1-dd-(T-1-i)
+                j = L - 1 - dd - (T - 1 - i)
+                m = jax.lax.dynamic_index_in_dim(tb, j, 0, keepdims=False)
+                age = (dd + (T - 1 - i)).astype(jnp.float32) * TICK
+                x, P = pe.update(x, P, m, age, w, jnp, cfg)
+            return x, P
+        x, P = jax.vmap(one)(x, P, w_m, f_m, tbuf, d)
+        return (x, P, tbuf, ps[:, -1, 6:10], ps[:, :, 10:14].mean(1), imu[:, -1, 0])
+
+    def _ekf_obs(self, ek, shift):
+        """The SRB state the policy observes from the EKF (EkfEstimator.estimate at a step time)."""
+        x, _, _, qf, dqf, w = ek
+
+        def one(xi, q, dq, wi, sh):
+            thd = -(wi - xi[7])
+            sv = jnp.concatenate([xi[:3], q])
+            com = self.pl.com(sv)
+            comd = self.pl.com_jac(sv) @ jnp.concatenate([xi[3:5], thd[None], dq])
+            return jnp.concatenate([com + sh, xi[2:3], comd, thd[None]])
+        return jax.vmap(one)(x, qf, dqf, w, shift)
 
     def _pose3(self, dx):
         """The CoM x, z and the pitch (one jump's data): what the robots' estimator fits a line through."""
@@ -431,6 +510,18 @@ class JumpEnv:
         pd = np.where(bad, 0.015, rng.uniform(0.004, 0.010, B))
         tpf = np.sqrt(np.where(bad, 1 / 120, 1 / 240) / TICK)
         sd = np.stack([np.where(bad, 0.002, 0.0005)] * 2 + [np.where(bad, 0.01, 0.003)], 1) * tpf[:, None]
+        if self.ekf_on:
+            # the EKF robots: a 500 Hz mocap (a frame every tick, its own noise -- no sqrt(ticks per frame)), and the
+            # IMU: per reading noise sd (gyro 0.01 rad/s, acc 0.1 m/s^2) x U(0.5, 2) per jump, bias per axis
+            # U(-0.01, 0.01) rad/s, U(-0.1, 0.1) m/s^2 (the lockstep robots' --imu-noise / --imu-bias)
+            sd = sd / tpf[:, None]
+            isd = np.array([0.01, 0.1, 0.1])[None] * rng.uniform(0.5, 2.0, B)[:, None]
+            ib = np.concatenate([rng.uniform(-0.01, 0.01, (B, 1)), rng.uniform(-0.1, 0.1, (B, 2))], 1)
+            return dict(act_dl=jnp.asarray(np.clip(np.round(dl / TICK), 0, self.tps), jnp.int32),
+                        drop=jnp.asarray(drop), pose_dl=jnp.asarray(np.clip(np.round(pd / TICK), 0, self.DMAX), jnp.int32),
+                        pose_noise=jnp.asarray(rng.standard_normal((B, nt, self.tps, 3)) * sd[:, None, None], jnp.float32),
+                        imu_noise=jnp.asarray(rng.standard_normal((B, nt, self.tps, 3)) * isd[:, None, None], jnp.float32),
+                        imu_bias=jnp.asarray(ib, jnp.float32))
         return dict(act_dl=jnp.asarray(np.clip(np.round(dl / TICK), 0, self.tps), jnp.int32),
                     drop=jnp.asarray(drop), pose_dl=jnp.asarray(np.clip(np.round(pd / TICK), 0, self.DMAX), jnp.int32),
                     pose_noise=jnp.asarray(rng.standard_normal((B, nt, self.tps, 3)) * sd[:, None, None], jnp.float32))
@@ -758,7 +849,9 @@ class JumpEnv:
             x = srb(dx, shift)
             clr = jax.vmap(self._clearance)(dx, ref)
             x_obs = x
-            if self.W and timed:                     # the estimate with the mocap's delay: the frames it has by now
+            if self.ekf_on:                          # the robots' EKF (pbuf carries its state)
+                x_obs = self._ekf_obs(pbuf, shift)
+            elif self.W and timed:                   # the estimate with the mocap's delay: the frames it has by now
                 pa = jnp.einsum("bw,bwi->bi", self.est_ad[dyn["pose_dl"]], pbuf)
                 pb = jnp.einsum("bw,bwi->bi", self.est_bd[dyn["pose_dl"]], pbuf)
                 x_obs = jnp.concatenate([pa[:, :2] + shift, pa[:, 2:3], pb], 1)
@@ -786,7 +879,9 @@ class JumpEnv:
             if not fd:
                 dx, h, ps = jax.vmap(lambda d, u_, r, p, uh: self._fly_sample(d, k, u_, r, True, p, True, uh))(
                     dx, u, ref, dyn, u_hold)
-                if self.W:
+                if self.ekf_on:
+                    pbuf = self._ekf_step(pbuf, ps, dyn, k, timed)
+                elif self.W:
                     pbuf = jnp.concatenate([pbuf, ps + dyn["pose_noise"][:, k] if timed else ps], 1)[:, -Wb:]
                 return (dx, hist, a_st, key, hit, pbuf, du_next), (x, u, a_st, o, mu, jnp.zeros((B, 0, 6)), jnp.zeros((B, 0, 6)), fz, h, clr)
             # the jump and its ten copies, side by side: copy 0 the jump itself
@@ -804,7 +899,9 @@ class JumpEnv:
                                              (0, 0, 0, None, None)))(dxc, uc, refc, dyn, u_hold)
             s1 = jax.vmap(jax.vmap(lambda d: self.srb(d, jnp.zeros(2))))(dxc)
             dx = jax.tree_util.tree_map(lambda v: v[:, 0], dxc)
-            if self.W:                               # copy 0 is the jump itself: its ticks' poses
+            if self.ekf_on:                          # copy 0 is the jump itself: its ticks
+                pbuf = self._ekf_step(pbuf, psc[:, 0], dyn, k, timed)
+            elif self.W:                             # copy 0 is the jump itself: its ticks' poses
                 pbuf = jnp.concatenate([pbuf, psc[:, 0] + dyn["pose_noise"][:, k] if timed else psc[:, 0]], 1)[:, -Wb:]
             return (dx, hist, a_st, key, hit, pbuf, du_next), (x, u, a_st, o, mu, s0, s1, fz, hc[:, 0], clr)
 
@@ -817,7 +914,8 @@ class JumpEnv:
 
         hist0 = jnp.zeros((B, H + 1, 6))
         # the estimator's buffer: the stance's pose (it stood still) for every one of its W ticks
-        pbuf0 = jnp.repeat(jax.vmap(self._pose3)(dx0)[:, None], max(Wb, 1), 1)
+        pbuf0 = self._ekf_init(dx0, dyn, timed) if self.ekf_on else \
+            jnp.repeat(jax.vmap(self._pose3)(dx0)[:, None], max(Wb, 1), 1)
         (dx, hist, prev_a, _, hit, _, _), (Xc, U, A_st, O, MU, S0, S1, FZ, HC, CC) = jax.lax.scan(
             contact_sample, (dx0, hist0, jnp.zeros((B, 4)), key, jnp.zeros(B, bool), pbuf0, jnp.zeros((B, 4))),
             jnp.arange(self.Nc))

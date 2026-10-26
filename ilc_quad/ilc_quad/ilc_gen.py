@@ -338,10 +338,12 @@ class QuadILCStageSolver:
         return ground_z + 0.5 * box["height"] * (1 + ca.tanh((xf - box["x_front"]) / width))
 
     @staticmethod
-    def box_edge(xf, box, clearance, setback, width=0.005):
+    def box_edge(xf, box, clearance, setback, width=0.005, setback_front=None):
         """Height a moving foot must clear near the box's front edge: box top + clearance
-        within `setback` of the edge (either side), smoothly 0 elsewhere."""
-        lo, hi = box["x_front"] - setback, box["x_front"] + setback
+        within `setback` of the edge (either side; `setback_front`, when given, on the
+        approach side before the face), smoothly 0 elsewhere."""
+        lo = box["x_front"] - (setback if setback_front is None else setback_front)
+        hi = box["x_front"] + setback
         return (box["height"] + clearance) * 0.5 * (ca.tanh((xf - lo) / width)
                                                     - ca.tanh((xf - hi) / width))
 
@@ -588,7 +590,7 @@ class QuadILCStageSolver:
                      n_touchdown=3, qd_max=30.0, margin=0.8, joint_margin=0.1,
                      swing_qd=10.0, w_swing=1.0, w_goal=1e5, w_tau=1e-4, w_smooth=1e-4,
                      box_clearance=0.0, box_setback=0.0, max_iter=500, terrain_width=0.005,
-                     init_guess=None, ipopt_options=None, guess="line",
+                     box_setback_front=None, init_guess=None, ipopt_options=None, guess="line",
                      landing_pitch_rate=None, flight_pitch_rate=None, flight_min_pitch=None,
                      flight_spin_change=None, leg_clearance=None, landing_clearance=None,
                      n_landing=15, n_landing_ramp=6, landing_capture_margin=None):
@@ -606,7 +608,10 @@ class QuadILCStageSolver:
                      rear-leg contact as well as both in flight -- clears the box's front
                      edge by box_clearance (m) whenever it is within box_setback (m) of it,
                      horizontally. Without it the swinging front foot may skim the edge,
-                     and a jump that pushes a little late clips it and tumbles
+                     and a jump that pushes a little late clips it and tumbles.
+                     box_setback_front (None: box_setback) widens the zone before the face
+                     only: a robot ahead of the plan otherwise strikes the face with the
+                     swinging front feet (2026-10-25)
         max_iter   : IPOPT iteration cap. Jumps well inside the robot's limits solved in
                      10-60 s; a task at or past them can grind for tens of minutes
                      before giving up, so the cap is kept low
@@ -753,7 +758,7 @@ class QuadILCStageSolver:
                 height = xz[1] - radius - self.box_profile(xz[0], ground_z, box, terrain_width)
                 if box is not None and box_clearance > 0 and k < N - n_touchdown:
                     opti.subject_to(xz[1] - radius - ground_z >= self.box_edge(
-                        xz[0], box, box_clearance, box_setback, terrain_width))
+                        xz[0], box, box_clearance, box_setback, terrain_width, box_setback_front))
                 if k <= Nc:                           # lifted off while the other foot pushes
                     opti.subject_to(height >= 0)
                 elif k < N - n_touchdown:             # flight
@@ -1185,6 +1190,7 @@ class JumpILC:
                  phases=(20, 20, 25), dt=0.01, n_stage1=2, n_stage2=3, pos_tol=0.01,
                  theta_tol=np.radians(1.0), margin=0.8, swing_qd=10.0, w_swing=1.0,
                  box_clearance=0.04, box_setback=0.03, terrain_width=0.005, to_steps=1,
+                 box_setback_front=None,
                  to_guess="srb", landing_pitch_rate=np.radians(90.0),
                  flight_pitch_rate=None, flight_min_pitch=0.0,
                  flight_spin_change=np.radians(20.0), leg_clearance=0.10,
@@ -1235,6 +1241,8 @@ class JumpILC:
             self.config.update(box_clearance=float(box_clearance), box_setback=float(box_setback))
             if terrain_width != 0.005:
                 self.config["terrain_width"] = float(terrain_width)
+            if box_setback_front is not None:      # only such a plan records it
+                self.config["box_setback_front"] = float(box_setback_front)
         if landing_capture_margin is not None:    # only such a plan records it
             self.config["landing_capture_margin"] = float(landing_capture_margin)
         if self.mdc_params["mu"] != 0.6:    # a plan for other friction (0.6: older references)
@@ -1258,6 +1266,7 @@ class JumpILC:
         if reference is None:
             to_kwargs = dict(margin=margin, swing_qd=swing_qd, w_swing=w_swing,
                              box_clearance=box_clearance, box_setback=box_setback,
+                             box_setback_front=box_setback_front,
                              terrain_width=terrain_width, ipopt_options=ipopt_options,
                              guess=to_guess, landing_pitch_rate=landing_pitch_rate,
                              flight_pitch_rate=flight_pitch_rate,

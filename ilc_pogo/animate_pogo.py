@@ -43,8 +43,7 @@ def fly(policy, robot, goal, seconds, pert=0.0, seed=0):
     x0 = rp.start_states(g, pert, np.random.default_rng(seed))
     pp = rp.robot_params(robot) if robot != 'nominal' else dict(C.NOMINAL)
     res = rp.simulate(policies.as_policy(policy), g, x0, pp, int(seconds / C.DT))
-    phi = C.PHI_SCALE * np.clip(res['a'][0, :, 1], -1, 1) + pp['phi_off']
-    phi = np.concatenate([phi, phi[-1:]])
+    phi = res['x'][0, :, 6] + pp['phi_off']      # the leg's true angle (the state holds the encoder's)
     m = C.hop_metrics(res['x'][0], g[0], res['failed_end'][0])
     return res['x'][0], phi, m, pp
 

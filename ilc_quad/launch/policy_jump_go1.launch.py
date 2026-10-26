@@ -38,6 +38,8 @@ ARGS = [
     ("margin", "0.85", "share of each hard limit the TO may use (Go1 validation: 0.85 for flat and 10 cm boxes, 0.9-1.0 for taller)"),
     ("pose_latency", "0.006", "mocap latency, s (MEASURE it: the policy's state estimator dates every frame by it)"),
     ("mocap_offset", "[0.0, 0.0, 0.0]", "the tracked point in the base frame, m"),
+    ("imu_topic", "/imu", "sensor_msgs/Imu, body frame (gyro rad/s, specific force m/s^2): the EKF policies' "
+                          "(bank estimator = ekf) predict step; unused by the mocap-line ones"),
     ("with_bridge", "true", "launch the go1 bridge too (false: hw_session.py keeps one bridge up for the session)"),
     ("exit_when_done", "false", "exit after max_trials jumps (hw_session.py)"),
     ("policy_dir", "", "the policy folder deploy.py exported (required)"),
@@ -84,6 +86,7 @@ def generate_launch_description():
                      "transfer_mode": LaunchConfiguration("transfer_mode"),
                      "margin": _float("margin"),
                      "pose_latency": _float("pose_latency"),
+                     "imu_topic": LaunchConfiguration("imu_topic"),
                      "mocap_offset": ParameterValue(LaunchConfiguration("mocap_offset"), value_type=None),
                      "policy_dir": LaunchConfiguration("policy_dir"),
                      "policy_member": LaunchConfiguration("policy_member"),

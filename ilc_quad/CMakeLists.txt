@@ -35,5 +35,7 @@ install(PROGRAMS
 )
 # ilc_jump_lockstep.py loads it from next to itself
 install(FILES scripts/fastdds_lockstep_udp.xml DESTINATION lib/${PROJECT_NAME})
+# dilc_execute.EkfEstimator imports it from next to itself
+install(FILES scripts/planar_ekf.py DESTINATION lib/${PROJECT_NAME})
 
 ament_package()

@@ -59,7 +59,7 @@ from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
-from sensor_msgs.msg import JointState
+from sensor_msgs.msg import Imu, JointState
 from std_msgs.msg import Float64MultiArray
 from std_srvs.srv import Trigger
 
@@ -151,6 +151,7 @@ class IlcJumpNode(Node):
         p("w_swing", 1.0)                         # TO: weight on swing speed above it
         p("box_clearance", 0.04)                  # TO: moving feet clear the box's front edge
         p("box_setback", 0.03)                    #     by this much, when this close to it
+        p("box_setback_front", 0.0)               #     ... before the face (<= 0: box_setback)
         p("to_guess", "srb")                      # TO: start from an SRB plan (srb) or a line
         p("landing_pitch_rate_deg", 90.0)         # TO: |pitch rate| at touchdown; <= 0: free
         p("flight_pitch_rate_deg", 0.0)           # TO: |pitch rate| takeoff to touchdown; <= 0: free
@@ -349,6 +350,8 @@ class IlcJumpNode(Node):
         # trunk pose: sim_node's base_odom, or the mocap topic on the real robot
         p("pose_topic", "")
         p("pose_type", "")                        # odometry | pose
+        p("imu_topic", "")                        # sensor_msgs/Imu (gyro, specific force, body frame); "": none
+                                                  # (the lockstep robots set self.imu directly)
         p("mocap_offset", [0.0, 0.0, 0.0])        # tracked point in the base frame
         p("auto_start", True)                     # sim only; go2 always waits
         p("exit_when_done", False)                # sim runs: exit once learning stops
@@ -404,6 +407,8 @@ class IlcJumpNode(Node):
             margin=float(get("margin")), swing_qd=float(get("swing_qd")),
             w_swing=float(get("w_swing")), box_clearance=float(get("box_clearance")),
             box_setback=float(get("box_setback")), to_steps=int(get("to_steps")),
+            box_setback_front=(float(get("box_setback_front"))
+                               if float(get("box_setback_front")) > 0 else None),
             to_guess=get("to_guess"),
             landing_pitch_rate=(math.radians(float(get("landing_pitch_rate_deg")))
                                 if float(get("landing_pitch_rate_deg")) > 0 else None),
@@ -603,6 +608,11 @@ class IlcJumpNode(Node):
         self.pose_fresh = False               # this tick is the first to see the latest frame
         self.create_subscription(msg_type, pose_topic, self._on_pose, SENSOR_QOS)
         self.create_subscription(JointState, "joint_states", self._on_joint_states, SENSOR_QOS)
+        self.imu = None                       # latest (gyro (3,), specific force (3,)), body frame
+        self.imu_b0 = np.zeros(6)             # the IMU biases measured over the stand before this jump
+        self.imu_stand = []                   # (gyro, specific force, quat) of the stand's last 0.5 s: the biases
+        if get("imu_topic"):
+            self.create_subscription(Imu, get("imu_topic"), self._on_imu, SENSOR_QOS)
         self.contacts = np.full(4, np.nan)    # latest foot normal forces FL FR RL RR (logged)
         self.create_subscription(Float64MultiArray, "foot_contacts", self._on_contacts, SENSOR_QOS)
         self.cmd_pub = self.create_publisher(Float64MultiArray, "joint_cmd", SENSOR_QOS)
@@ -631,6 +641,20 @@ class IlcJumpNode(Node):
         pos = pos - quat_rotate(quat, self.mocap_offset)       # tracked point -> base origin
         self.pose = (time.monotonic(), pos, quat)
         self.pose_seq += 1
+
+    def _on_imu(self, msg):
+        w, a = msg.angular_velocity, msg.linear_acceleration
+        self.imu = (np.array([w.x, w.y, w.z]), np.array([a.x, a.y, a.z]))
+
+    def _imu_bias0(self):
+        """The IMU's biases (gyro 3, acc 3) from the stand's last 0.5 s (still: gyro reads its bias, the
+        accelerometer gravity in the body frame plus its bias); zeros without IMU data."""
+        if not self.imu_stand:
+            return np.zeros(6)
+        g = np.mean([x[0] for x in self.imu_stand], 0)
+        fb = np.mean([x[1] - quat_rotate(np.array([x[2][0], -x[2][1], -x[2][2], -x[2][3]]),
+                                         np.array([0.0, 0.0, 9.81])) for x in self.imu_stand], 0)
+        return np.concatenate([g, fb])
 
     def _on_start_trial(self, request, response):
         if self.phase not in ("idle", "damp", "done"):
@@ -983,6 +1007,8 @@ class IlcJumpNode(Node):
         a = min(t / self.stand_time, 1.0) if self.stand_time > 0 else 1.0
         kp, kd = self.gains["stand"]
         self.stood = True
+        if self.imu is not None and self.pose is not None and t >= self.stand_time + self.settle_time - 0.5:
+            self.imu_stand.append((self.imu[0].copy(), self.imu[1].copy(), self.pose[2].copy()))
         if t >= self.stand_time + self.settle_time:
             self._start_jump(now)
             return self._tick_jump(now, q, dq)
@@ -995,7 +1021,9 @@ class IlcJumpNode(Node):
         self.frame = dict(origin=pos.copy(), yaw=yaw_of(quat))
         self.rec = dict(t=[], pos=[], quat=[], q=[], dq=[], tau_pd=[], cmd_tau=[], q_des=[],
                         dq_des=[], tau_total=[], effort=[], contacts=[], bal_f=[],
-                        pose_new=[])
+                        pose_new=[], imu=[], imu_b0=[])
+        self.imu_b0 = self._imu_bias0()
+        self.imu_stand = []
         self.U_flown = self.ilc.U.copy()
         self.policy_k = -1
         self.fell = False
@@ -1136,6 +1164,8 @@ class IlcJumpNode(Node):
         self.rec["effort"].append(self.effort.copy())
         self.rec["contacts"].append(self.contacts.copy())
         self.rec["pose_new"].append(self.pose_fresh)          # first tick of a mocap frame
+        self.rec["imu"].append(np.concatenate(self.imu) if self.imu is not None else np.full(6, np.nan))
+        self.rec["imu_b0"].append(self.imu_b0)
         # the landing controller's pair forces this tick (NaN before it takes over)
         self.rec["bal_f"].append(self.bal_force.copy() if self.bal_force is not None
                                  else np.full(4, np.nan))

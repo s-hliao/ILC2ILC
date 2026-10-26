@@ -3,14 +3,25 @@ Shared definitions of the pogo-stick study: the simplest 2-D pogo stick, a sprin
 Kept jax-free so the CPU "real" pogo sticks never touch a GPU; functions take an array module `xp` (numpy / jax.numpy).
 
 The pogo stick: a point mass m (body + rider) on a massless spring leg of rest length l0 in the x-z plane.
-  flight  ballistic; the massless leg points along the commanded angle phi (CCW from straight down: phi > 0 puts the
-          foot ahead); touchdown when the foot l0 (sin phi, -cos phi) below the body reaches the ground
+  flight  ballistic; the massless leg swings at the hip towards the commanded angle phi (CCW from straight down:
+          phi > 0 puts the foot ahead) through a hip servo of finite bandwidth and speed (POGO_LEG, below); touchdown
+          when the foot l0 (sin th, -cos th) below the body reaches the ground, th the leg's ACTUAL angle
   stance  the foot is pinned (perfect friction); the leg force k (l0 + delta - L) (+ the real sticks' damping) acts
           along the leg, L = |body - foot|; delta (the thrust: the spring's rest length pushed out by the actuator,
           Raibert's pneumatic thrust) is commanded; liftoff when the spring is back at rest while extending
-State x (6): [x, z, vx, vz, xf, stance]  (xf the pinned foot, stance 0 / 1)
+State x (8): [x, z, vx, vz, xf, stance, th, w]  (xf the pinned foot, stance 0 / 1, th / w the leg angle and its rate
+          as the hip ENCODER reads them: the leg's true angle is th + phi_off (a calibration offset biases the encoder
+          and the servo alike, so the policy cannot see it); in stance from the geometry, atan2(xf - x, z) - phi_off;
+          in flight the hip servo's)
 Action a (2), normalized to [-1, 1]: delta = D_OFF + D_SCALE a0 (m), phi = PHI_SCALE a1 (rad, used in flight).
 Goal g (2): [v*, h*], the forward speed (m/s) and the apex height of the body (m).
+
+The leg (POGO_LEG, 2026-10-24):
+  servo    (default) the hip servo, a rate-limited second-order loop: dw/dt = wn^2 (phi - th) - 2 zeta wn w,
+           |w| <= wmax; the leg leaves the ground at its stance angle (foot behind) and must swing forward in flight, so a
+           short flight cannot reach a large commanded angle. The observation gains th and w (NOBS 10).
+  instant  the old model (before 2026-10-24): th = phi at every substep of a flight (the leg teleports to the
+           command); NOBS 8. Reproduces every result and network trained before the change exactly.
 """
 import os
 
@@ -18,10 +29,14 @@ import numpy as np
 
 DT = 0.01                     # control period (100 Hz)
 GRAV = 9.81
-NX, NU, NG = 6, 2, 2
-NOMINAL = dict(m=10.0, k=4000.0, l0=0.5, b=0.0, gth=1.0, phi_off=0.0, kp=0.0)
+LEG = os.environ.get('POGO_LEG', 'servo')
+assert LEG in ('servo', 'instant'), LEG
+NX, NU, NG = 8, 2, 2
+NOMINAL = dict(m=10.0, k=4000.0, l0=0.5, b=0.0, gth=1.0, phi_off=0.0, kp=0.0, wn=30.0, zeta=0.8, wmax=6.0)
 #   b: leg damping (N s/m, the nominal has none), gth: thrust gain, phi_off: leg-angle calibration offset (rad),
-#   kp: progressive-spring coefficient (k (1 + kp c / l0) with c the compression; 0 = linear)
+#   kp: progressive-spring coefficient (k (1 + kp c / l0) with c the compression; 0 = linear),
+#   wn / zeta / wmax: the hip servo's bandwidth (rad/s), damping ratio and top leg speed (rad/s) (POGO_LEG servo; a
+#   ~0.15 s settle and ~0.1 s for the 0.5 rad liftoff-to-touchdown swing, vs flights of ~0.3-0.45 s)
 PKEYS = list(NOMINAL)
 D_OFF, D_SCALE, PHI_SCALE = 0.04, 0.04, 0.6
 
@@ -52,7 +67,7 @@ def eval_goals(n=8):
     return goals_from_seed(n, EVAL_SEED)
 
 
-OBS_SCALE = np.array([0.1, 0.5, 1.0, 1.0, 0.1, 0.05, 0.5, 0.06])
+OBS_SCALE = np.array([0.1, 0.5, 1.0, 1.0, 0.1, 0.05, 0.5, 0.06] + ([0.3, 5.0] if LEG == 'servo' else []))
 NOBS = len(OBS_SCALE)
 ERR_SCALE = np.array([0.02, 0.10])    # the ILC error rows: predicted apex - h*, vx - v* (in flight)
 NE = len(ERR_SCALE)
@@ -64,12 +79,15 @@ def leg_length(x, xp):
 
 
 def features(x, g, xp, l0=0.5):
-    """Observation: [z - h*, vx - v*, vz, stance, (x - xf) stance, (L - l0) stance, v*, h*] scaled."""
+    """Observation: [z - h*, vx - v*, vz, stance, (x - xf) stance, (L - l0) stance, v*, h*] (+ [th, w] with the servo
+    leg) scaled."""
     st = x[..., 5]
     L = leg_length(x, xp)
-    o = xp.stack([x[..., 1] - g[..., 1], x[..., 2] - g[..., 0], x[..., 3], st, (x[..., 0] - x[..., 4]) * st,
-                  (L - l0) * st, g[..., 0] - 0.75, g[..., 1] - 0.65], -1)
-    return o / OBS_SCALE
+    rows = [x[..., 1] - g[..., 1], x[..., 2] - g[..., 0], x[..., 3], st, (x[..., 0] - x[..., 4]) * st,
+            (L - l0) * st, g[..., 0] - 0.75, g[..., 1] - 0.65]
+    if LEG == 'servo':
+        rows += [x[..., 6], x[..., 7]]
+    return xp.stack(rows, -1) / OBS_SCALE
 
 
 def errors(x, g, xp):
@@ -97,12 +115,27 @@ def sg(v):
     return v
 
 
+def leg_step(TH, W, target, ST, X, Z, VX, VZ, XF, p, h, xp, zf=0.0, zfd=0.0):
+    """The leg angle th and rate w (encoder frame) after a step of length h (the state AFTER the body's update): in
+    stance the geometry's (the foot pinned at (xf, zf)) less the calibration offset, in flight the hip servo's towards
+    the command target (POGO_LEG instant: th = target)."""
+    u, v = XF - X, Z - zf
+    r2 = xp.maximum(u ** 2 + v ** 2, 1e-12)
+    th_st, w_st = xp.arctan2(u, v) - p['phi_off'], (v * (-VX) - u * (VZ - zfd)) / r2
+    if LEG == 'instant':
+        th_fl, w_fl = target + 0.0 * TH, 0.0 * W
+    else:
+        acc = p['wn'] ** 2 * (target - TH) - 2.0 * p['zeta'] * p['wn'] * W
+        w_fl = xp.clip(W + h * acc, -p['wmax'], p['wmax'])
+        th_fl = TH + h * w_fl
+    return xp.where(ST > 0.5, th_st, th_fl), xp.where(ST > 0.5, w_st, w_fl)
+
+
 def substep(x, a, p, h, xp):
     """One explicit (semi-implicit Euler) step of length h of the SLIP pogo stick with its touchdown / liftoff
     switching, under the normalized action a and parameters p (a dict; values scalars or per-lane arrays)."""
-    delta, phi = unnorm(a, xp)
-    phi = phi + p['phi_off']
-    X, Z, VX, VZ, XF, ST = (x[..., i] for i in range(6))
+    delta, target = unnorm(a, xp)
+    X, Z, VX, VZ, XF, ST, TH, W = (x[..., i] for i in range(8))
     dx, L = X - XF, xp.sqrt((X - XF) ** 2 + Z ** 2)
     Ls = xp.maximum(L, 1e-6)
     Ld = (dx * VX + Z * VZ) / Ls
@@ -113,6 +146,9 @@ def substep(x, a, p, h, xp):
     az = F * Z / Ls / p['m'] - GRAV
     VX, VZ = VX + h * ax, VZ + h * az
     X, Z = X + h * VX, Z + h * VZ
+    # the leg swings in flight (the servo) or follows the stance geometry; touchdown uses its actual angle
+    TH, W = leg_step(TH, W, target, ST, X, Z, VX, VZ, XF, p, h, xp)
+    phi = TH + p['phi_off']                             # the leg's true angle
     # events: touchdown (flight, the foot at the leg's rest length reaches the ground) / liftoff (spring at rest)
     td = (ST < 0.5) & (Z - p['l0'] * xp.cos(phi) <= 0.0) & (VZ < 0)
     Ln = xp.sqrt((X - XF) ** 2 + Z ** 2)
@@ -126,7 +162,7 @@ def substep(x, a, p, h, xp):
     X, Z, VZ = xp.where(td, Xt, X), xp.where(td, Zt, Z), xp.where(td, VZt, VZ)
     XF = xp.where(td, X + p['l0'] * xp.sin(phi), XF)
     ST = xp.where(td, 1.0, xp.where(lo, 0.0, ST))
-    return xp.stack([X, Z, VX, VZ, XF, ST], -1)
+    return xp.stack([X, Z, VX, VZ, XF, ST, TH, W], -1)
 
 
 # ---- the classical expert: Raibert's hopping controller (on nominal constants) -----------------------------------
