@@ -38,6 +38,12 @@ ap.add_argument('--T', type=int, default=300, help='control periods per lane (3 
 ap.add_argument('--explore-frac', type=float, default=0.7)
 ap.add_argument('--pert', type=float, default=1.0)
 ap.add_argument('--a-off', type=float, default=0.15)
+ap.add_argument('--gain-w', type=float, default=0.0, help='> 0: + W x mean |d policy / d obs|_F^2 on the fit\'s states (the '
+                'first 256 of each minibatch): robustness WITHOUT stiff feedback -- the DR stage otherwise buys robustness '
+                'with 3-8x the feedback gain of PPO+DR, and a stiff network absorbs the hardware stage\'s corrections')
+ap.add_argument('--a-bias', type=float, default=0.0, help='> 0: on the explore lanes also a CONSTANT action offset per lane '
+                '~ U(-B, B) per channel, held for the whole lane -- a persistent unmodelled disturbance (a weak push, a '
+                'leg-angle error) the network must reject from the state alone; the model stays nominal (not DR)')
 ap.add_argument('--chain', type=float, default=0.3)
 ap.add_argument('--beta', type=float, default=0.5)
 ap.add_argument('--delta', type=float, default=0.02)
@@ -145,7 +151,11 @@ def fit_step(params, opt_state, o, y, wgt, y_anc, lr_scale, aw):
     def loss(ps):
         out = policy_fn(ps, o)
         l = jnp.sum(wgt[:, None] * (out - y) ** 2) / (jnp.sum(wgt) + 1e-9)
-        return l + aw * jnp.mean((out - y_anc) ** 2)
+        l = l + aw * jnp.mean((out - y_anc) ** 2)
+        if a.gain_w > 0:
+            jac = jax.vmap(jax.jacfwd(lambda x: policy_fn(ps, x[None])[0]))(o[:256])
+            l = l + a.gain_w * jnp.mean(jnp.sum(jac ** 2, axis=(1, 2)))
+        return l
     l, gr = jax.value_and_grad(loss)(params)
     upd, opt_state = opt.update(gr, opt_state, params)
     upd = jax.tree_util.tree_map(lambda u: u * lr_scale, upd)
@@ -240,6 +250,9 @@ for it in range(a.iters):
     key, k1, k2, k3 = jax.random.split(key, 4)
     x0, G, explore = sample_lanes(k1, a.lanes, chain)
     noise = ou_noise(k2, a.lanes, a.T, a.a_off) * jnp.asarray(explore)[:, None, None]
+    if a.a_bias > 0:
+        bias = rng.uniform(-a.a_bias, a.a_bias, (a.lanes, 1, 2)) * np.asarray(explore)[:, None, None]
+        noise = noise + jnp.asarray(bias, noise.dtype)
     p = lanes_params(a.lanes, k3)
     out = fly_policy(params, x0, G, p, noise)
     SIM_SECONDS += a.lanes * a.T * C.DT

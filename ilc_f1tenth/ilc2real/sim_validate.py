@@ -30,6 +30,8 @@ ap.add_argument('--lanes', type=int, default=24)
 ap.add_argument('--laps', type=float, default=2.0)
 ap.add_argument('--seed', type=int, default=4040)
 ap.add_argument('--gpu', default=None)
+ap.add_argument('--train-plans', nargs='+', default=None, help='the training plans to score on (default: the drift bank b0..b25)')
+ap.add_argument('--held-plans', nargs='+', default=None, help='the held-out plans (default: the drift bank b14 / b21)')
 a = ap.parse_args()
 if a.gpu is not None:
     os.environ['CUDA_VISIBLE_DEVICES'] = a.gpu
@@ -42,8 +44,8 @@ import numpy as np                               # noqa: E402
 import bank                                      # noqa: E402
 import sim_jax as sj                             # noqa: E402
 
-TRAIN = [f'mocap_{t}_b{b}' for t in ('square2fast', 'figfast') for b in (0, 10, 18, 25)]
-HELD = [f'mocap_{t}_b{b}' for t in ('square2fast', 'figfast') for b in (14, 21)]
+TRAIN = a.train_plans or [f'mocap_{t}_b{b}' for t in ('square2fast', 'figfast') for b in (0, 10, 18, 25)]
+HELD = a.held_plans or [f'mocap_{t}_b{b}' for t in ('square2fast', 'figfast') for b in (14, 21)]
 NAMES = TRAIN + HELD
 COND = dict(nominal=dict(pert=0.5), pstart=dict(pert=2.0), delay=dict(pert=0.5, delay=True),
             dist=dict(pert=0.5, noise=0.1), dr=dict(pert=0.5, dr=1.0), drwide=dict(pert=0.5, dr=1.5))

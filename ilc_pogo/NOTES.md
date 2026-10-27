@@ -843,3 +843,22 @@ is at 92 and its other sticks at 100.
   dynamics cannot see a calibration bias, which shows only in the touchdown physics a hop later. (Ours corrects it: the
   stage regresses on the task error.)
 - Seeds 1, 2 of F3h8 running (fadaF3h8_s1/s2).
+
+## 2026-10-27 FROZEN pogo results (servo leg; test seed 4301; log/pogo_servo/final_table.py -> src/paper/pogo/results_test4301.md, figures_final.py -> src/paper/pogo/figures/fig_pogo_{budget,sticks}.png)
+- Primary metric changed (user: success/failure is too lossy): normalized error per run max(RMS apex / 2 cm, |dv| / 0.1),
+  a fall = 5, cluster-bootstrap 95 % CI over (seed, stick, goal); success (<= 1) secondary. table_cont.py for any arm.
+- Ours + DR frozen = drP (simple_fix.sh: nomNA -> DR transfer, the paper's GN step / targets / refit, no anchor, no line
+  search, no gain penalty, lagged feedback --fbk-refresh 20; sim-only DR-sim pick it20 / it20 / it40; stage PF without the
+  hardware anchor). Chosen on validation over drF (gain penalty, nerr 0.95 vs 0.81) and drX (no lagged feedback, 1.0-1.4,
+  degrades after it10). The POGO_INTEG integrator was rejected by the user (not in the paper) and reverted.
+- Test (nerr [CI]): zero-shot ours nominal 2.32, ours + DR 0.85 [0.73, 0.97], PPO+DR 0.80 [0.71, 0.89], FADA 0.87,
+  RMA 0.13. Ours + DR beats PPO+DR on the mass / spring sticks (0.42 / 0.53 vs 0.88 / 0.97), loses on nominal, offset
+  (out of the DR family, 2.32 vs 1.74) and progressive spring.
+- With real trials: ours nominal 0.61 / 0.53 / 0.45 at 12 / 24 / 36; ours + DR 0.65 / 0.57 / 0.57 (the stage fixes offset
+  2.32 -> 0.63 but loosens mass / spring 0.42 -> 0.79, 0.53 -> 0.91; s2 spring success 0.88 -> 0.44); PPO+DR + our stage
+  0.28 at 12 (best adapted arm); PPO on the sticks 0.72 / 0.58 / 0.44 / 0.20 at 24 / 96 / 192 / 384; RMA oracle 0.25 at 24.
+- Sample efficiency: PPO on the sticks reaches our nominal arm's 0.45 at ~192 trials (vs 36: ~5x) and PPO+DR + our
+  stage's 0.28 at ~300 (vs 12: ~25x).
+- FADA (user, 2026-10-27): FADA with DR (fadaF3h8) is the nominal / published implementation (Guanya Shi's lab); FADA
+  without DR (fadaNoDR) is our ablation. Test: FADA 0.87 zs -> 0.77 @24; without DR 2.25 -> 0.81 @24 (mass / spring 0.16,
+  offset 2.43, prog 1.34); oracle planner 0.84 -> 0.81.

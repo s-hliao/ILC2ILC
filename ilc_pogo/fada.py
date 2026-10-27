@@ -52,6 +52,9 @@ ap.add_argument('--eval-runs', type=int, default=4)
 ap.add_argument('--eval-seconds', type=float, default=10.0)
 ap.add_argument('--eval-goals', type=int, default=8)
 ap.add_argument('--seed', type=int, default=0)
+ap.add_argument('--oracle', action='store_true', help='the oracle FADA: per stick, the planner and the IDM fitted on data '
+                'from THAT stick\'s exact dynamics (its real_pogo parameters in the JAX sim; the default sticks differ '
+                'only in parameters the model has) instead of the DR family -- the counterpart of RMA\'s true-z oracle')
 ap.add_argument('--gpu', default=None)
 a = ap.parse_args()
 if a.gpu is not None:
@@ -178,13 +181,16 @@ def main():
     def fly(x0, g, p, nz):
         return pj.rollout(lambda o: pj.mlp(src, o), a.T, x0, g, p, nz)
 
-    PX, PY, IX, IY = [], [], [], []
-    for it in range(a.data_iters):
+    def build(params_fn, tag):
+      nonlocal key
+      sim_seconds = 0.0
+      PX, PY, IX, IY = [], [], [], []
+      for it in range(a.data_iters):
         for noisy in (False, True):
             G = C.GOAL_LO + (C.GOAL_HI - C.GOAL_LO) * rng.uniform(size=(a.lanes, 2))
             key, k1, k2 = jax.random.split(key, 3)
             x0 = pj.start_states(k1, G, rng.uniform(0, 1, a.lanes))
-            p = pj.dr_params(k2, a.lanes, a.dr) if a.dr > 0 else pj.nominal_params(a.lanes)
+            p = params_fn(k2)
             nz = ou_noise(rng, a.lanes, a.T, a.a_off) if noisy else np.zeros((a.lanes, a.T, 2))
             out = fly(x0, jnp.asarray(G), p, jnp.asarray(nz, jnp.float32))
             sim_seconds += a.lanes * a.T * C.DT
@@ -193,42 +199,60 @@ def main():
                 IX.append(np.concatenate([o, d], -1)); IY.append(act)
             if not noisy:
                 PX.append(o); PY.append(d)
-    PX, PY, IX, IY = map(np.concatenate, (PX, PY, IX, IY))
-    print(json.dumps(dict(event='data', planner=len(PX), idm=len(IX), sim_hours=sim_seconds / 3600, t=time.time() - t0)),
-          flush=True)
-    hidden = src[0][0].shape[1]
-    key, k0 = jax.random.split(key)
-    planner = pj.init_mlp(k0, [C.NOBS, hidden, hidden, ND])
-    planner, lp = fit(planner, PX, PY, a.train_steps, 3e-4, rng)
-    W0 = jnp.concatenate([src[0][0], jnp.zeros((ND, hidden))], 0)            # the IDM starts as the source policy
-    idm = [(W0, src[0][1])] + list(src[1:])
-    idm, li = fit(idm, IX, IY, a.train_steps, 3e-4, rng)
-    print(json.dumps(dict(event='fit', planner_loss=lp, planner_var=float(np.mean(np.var(PY, 0))), idm_loss=li,
-                          idm_var=float(np.mean(np.var(IY, 0))), t=time.time() - t0)), flush=True)
-    base = [(np.asarray(W), np.asarray(b)) for W, b in idm]
-    pl_np = [(np.asarray(W), np.asarray(b)) for W, b in planner]
-    extra = dict(sim_hours=sim_seconds / 3600, planner_loss=lp, idm_loss=li, target=a.target)
-    if a.sim_check:
-        extra['sim_check'] = sim_check(src, idm, planner, rng)
-        print(json.dumps(dict(event='sim_check', **extra['sim_check'])), flush=True)
-    zs_pols = {r: fada_np.FADAPolicy(base, pl_np, DIMS, H) for r in ROBOTS}
+      PX, PY, IX, IY = map(np.concatenate, (PX, PY, IX, IY))
+      print(json.dumps(dict(event='data', tag=tag, planner=len(PX), idm=len(IX), sim_hours=sim_seconds / 3600,
+                            t=time.time() - t0)), flush=True)
+      hidden = src[0][0].shape[1]
+      key, k0 = jax.random.split(key)
+      planner = pj.init_mlp(k0, [C.NOBS, hidden, hidden, ND])
+      planner, lp = fit(planner, PX, PY, a.train_steps, 3e-4, rng)
+      W0 = jnp.concatenate([src[0][0], jnp.zeros((ND, hidden))], 0)            # the IDM starts as the source policy
+      idm = [(W0, src[0][1])] + list(src[1:])
+      idm, li = fit(idm, IX, IY, a.train_steps, 3e-4, rng)
+      print(json.dumps(dict(event='fit', tag=tag, planner_loss=lp, planner_var=float(np.mean(np.var(PY, 0))), idm_loss=li,
+                            idm_var=float(np.mean(np.var(IY, 0))), t=time.time() - t0)), flush=True)
+      chk = sim_check(src, idm, planner, rng) if (a.sim_check and not a.oracle) else None
+      if chk:
+          print(json.dumps(dict(event='sim_check', **chk)), flush=True)
+      return ([(np.asarray(W), np.asarray(b)) for W, b in idm], [(np.asarray(W), np.asarray(b)) for W, b in planner],
+              dict(sim_hours=sim_seconds / 3600, planner_loss=lp, idm_loss=li), chk)
+
+    BASE, PLAN = {}, {}
+    if a.oracle:                                         # per stick, its exact dynamics
+        sim_h, infos = 0.0, {}
+        for r in ROBOTS:
+            pr = {k: v for k, v in rp.robot_params(r).items() if k in C.PKEYS}
+            assert all(v == 0 for k, v in rp.robot_params(r).items() if k not in C.PKEYS), f'{r}: not in the model'
+            fn = lambda kk, pr=pr: {k: jnp.full((a.lanes,), v, jnp.float32) for k, v in pr.items()}
+            BASE[r], PLAN[r], inf, _ = build(fn, r)
+            sim_h += inf['sim_hours']
+            infos[r] = inf
+        extra = dict(sim_hours=sim_h, oracle=infos, target=a.target)
+    else:
+        b_, p_, inf, chk = build(lambda kk: pj.dr_params(kk, a.lanes, a.dr) if a.dr > 0 else pj.nominal_params(a.lanes), 'family')
+        BASE = {r: b_ for r in ROBOTS}
+        PLAN = {r: p_ for r in ROBOTS}
+        extra = dict(inf, target=a.target)
+        if chk:
+            extra['sim_check'] = chk
+    zs_pols = {r: fada_np.FADAPolicy(BASE[r], PLAN[r], DIMS, H) for r in ROBOTS}
     write_arm(f'{a.out}_zs', zs_pols, {}, extra, t0)
 
     # ---- adaptation: LoRA on every IDM layer, hindsight relabelling of the real transitions
     def lora_init(k):
         out = []
-        for W, b in base:
+        for W, b in BASE[ROBOTS[0]]:
             k, kk = jax.random.split(k)
             out.append((jax.random.normal(kk, (W.shape[0], a.rank)) * 0.01, jnp.zeros((a.rank, W.shape[1]))))
         return out
-    merged = lambda lo: [(W + np.asarray(A) @ np.asarray(B), b) for (W, b), (A, B) in zip(base, lo)]
+    merged = lambda r, lo: [(W + np.asarray(A) @ np.asarray(B), b) for (W, b), (A, B) in zip(BASE[r], lo)]
     opt2 = optax.adam(1e-3)
-    base_j = [(jnp.array(W), jnp.array(b)) for W, b in base]
+    base_j = {r: [(jnp.array(W), jnp.array(b)) for W, b in BASE[r]] for r in ROBOTS}
 
     @jax.jit
-    def astep(lo, st, x, y):
+    def astep(bj, lo, st, x, y):
         def loss(lo):
-            ps = [(W + A @ B, b) for (W, b), (A, B) in zip(base_j, lo)]
+            ps = [(W + A @ B, b) for (W, b), (A, B) in zip(bj, lo)]
             return jnp.mean((pj.mlp(ps, x) - y) ** 2)
         l, g = jax.value_and_grad(loss)(lo)
         u, st = opt2.update(g, st, lo)
@@ -244,7 +268,7 @@ def main():
         keys = [(r, gi) for r in ROBOTS for gi in range(len(G6))]
         goals = np.array([G6[gi] for r, gi in keys])
         x0 = rp.start_states(goals, 0.2, rng)
-        pols = {r: fada_np.FADAPolicy(merged(lora[r]), pl_np, DIMS, H) for r in ROBOTS}
+        pols = {r: fada_np.FADAPolicy(merged(r, lora[r]), PLAN[r], DIMS, H) for r in ROBOTS}
 
         class Mixed:                                     # each run flies its own robot's adapted policy
             def reset(self, n):
@@ -270,13 +294,13 @@ def main():
             Ya = jnp.asarray(np.concatenate(data[r][1]), jnp.float32)
             for s in range(a.adapt_steps):
                 b = jnp.asarray(rng.integers(0, Xa.shape[0], min(2048, Xa.shape[0])))
-                lora[r], st2[r], l = astep(lora[r], st2[r], Xa[b], Ya[b])
+                lora[r], st2[r], l = astep(base_j[r], lora[r], st2[r], Xa[b], Ya[b])
             last = [t for t in trials[r] if t['it'] == it]
             print(json.dumps(dict(robot=r, it=it, loss=float(l), n=int(Xa.shape[0]),
                                   fails=int(sum(t['failed'] for t in last)),
                                   apex=float(np.nanmean([t['rms_apex'] if t['rms_apex'] is not None else np.nan for t in last])),
                                   t=round(time.time() - t0, 1))), flush=True)
-    pols = {r: fada_np.FADAPolicy(merged(lora[r]), pl_np, DIMS, H) for r in ROBOTS}
+    pols = {r: fada_np.FADAPolicy(merged(r, lora[r]), PLAN[r], DIMS, H) for r in ROBOTS}
     write_arm(f'{a.out}_hw{a.iters * len(G6)}', pols, trials, extra, t0)
     print(json.dumps(dict(event='done', t=time.time() - t0)), flush=True)
 

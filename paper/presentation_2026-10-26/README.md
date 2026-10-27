@@ -23,3 +23,20 @@ Caveats for the talk:
   video shows exactly that: one correction, then scatter of 3-6 cm at a fixed network.
 
 Scripts (absolute paths to the workspace logs; run from log/dilc/presentation_2026-10-26/media): scripts/iter_style.py (shared look), video_pogo_iters.py, video_car_iters.py, video_quad_iters.py, flow_iters_pogo.py.
+
+## Goal conditioning: one network flies every goal at once (no graphs)
+Each frame: ONE network π_k on all goals side by side, earlier iterations as ghosts, a pause after each iteration with
+every goal's verdict (✓ / ✗ and its error).
+
+| file | what | per goal, π₀ → last |
+|---|---|---|
+| media/pogo/videos/pogo_goals_real_offset_nom_s0.mp4 | pogo offset stick, the 6 training goals (speed 0-1.4 m/s, apex 0.58-0.74 m) as 6 lanes; green ▲ = where a stick at the goal speed would be | 0 → 1 → 6 → 6 → 6 of 6 on target |
+| media/pogo/videos/pogo_goals_real_mass_nom_s0.mp4 | pogo mass stick | |
+| media/car/videos/car_goals_real_nom.mp4 | car, nominal: rounded-square and figure-8 tracks x drift angle 0 / 18 / 25°, every iteration's network re-flown on all 6 (car_fly_goals.py) | figure-8: 6.5 → 5.9, 8.4 → 6.1, 9.2 → 5.7 cm; square: 0.7 → 0.6, 1.6 → 1.1, 3.0 → 3.2 cm |
+| media/car/videos/car_goals_real_mu.mp4 | car, friction x0.8, the same 6 goals | figure-8 25°: 16.7 → 13.5 cm; the rest ~flat (12-15 cm) |
+| media/quadruped/videos/quad_goals_real_s1.mp4 | quad s1: 3 flat distances + 3 boxes (stage_c_drCft_s2 recipe seed 9004) | 5 of 6 within 5 / 3 cm at π₃ |
+| media/quadruped/videos/quad_goals_real_r4.mp4 | quad r4, 8 iterations (stage_sbfCft_s2 avg4_it8 seed 9001) | big first corrections, then noise; the 15 cm box goal falls on 4 of 8 |
+
+Caveat (car, friction x0.8): on its ORIGINAL goals the stage barely moves this car (above). The 16.7 → 3.7 cm in
+car_iters_real_mu.mp4 comes mostly from the stage's ladder easing that car's plan to the friction-0.8 rung from π₂ on.
+The nominal car's goals video is the clean one (same goals throughout).

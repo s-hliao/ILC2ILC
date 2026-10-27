@@ -63,7 +63,7 @@ def spatial_rhs(p):
 
 
 def solve(track, beta_d, N, p, guess=None, w=None, e_max=0.3, v_star=None, max_iter=3000, kappa0=0.25, vscale=1.0):
-    w = dict(y=200.0, b=60.0, v=4.0, r=0.5, du=(2.0, 2e-4), u=(0.0, 1e-5), **(w or {}))
+    w = {**dict(y=200.0, b=60.0, v=4.0, r=0.5, du=(2.0, 2e-4), u=(0.0, 1e-5)), **(w or {})}
     L = track.length
     h = L / N
     tau, C, D = radau3()
@@ -177,6 +177,8 @@ def main():
     ap.add_argument('--mu-plan', type=float, default=1.0, help='friction scale the plan is solved for (conservative plans: < 1)')
     ap.add_argument('--vscale', type=float, default=1.0, help='scales the whole speed target (slower plans: < 1)')
     ap.add_argument('--tag', default='', help='suffix of the saved plan names, e.g. _mu80')
+    ap.add_argument('--w-beta', type=float, default=60.0, help='the sideslip target\'s weight (0: no sideslip target -- a pure '
+                    'path + pace plan, the sideslip whatever the optimum is; 2026-10-26 user: the reference is the track only)')
     ap.add_argument('--out', default='plans')
     a = ap.parse_args()
     tr = Track(a.track)
@@ -187,7 +189,7 @@ def main():
     os.makedirs(a.out, exist_ok=True)
     guess = None
     for b in [x for x in a.steps if x < a.beta] + [a.beta]:
-        sol, info = solve(tr, np.radians(b), N, p, guess, v_star=a.vstar or None, vscale=a.vscale)
+        sol, info = solve(tr, np.radians(b), N, p, guess, v_star=a.vstar or None, vscale=a.vscale, w=dict(b=a.w_beta))
         print(json.dumps(info), flush=True)
         if info['success'] or guess is None:
             guess = sol
@@ -199,7 +201,7 @@ def main():
                   f'delta {np.degrees(plan["z"][:, 7]).min():.1f}..{np.degrees(plan["z"][:, 7]).max():.1f}, '
                   f'I {plan["u"][:, 1].min():.1f}..{plan["u"][:, 1].max():.1f}, '
                   f'wheel slip {np.median(p["rw"] * plan["z"][:, 5] / plan["z"][:, 2] - 1):.2f}', flush=True)
-            np.savez(os.path.join(a.out, f'{a.track}_b{b:g}{a.tag}.npz'), info=json.dumps(dict(info, mu_plan=a.mu_plan, vscale=a.vscale)), N=N,
+            np.savez(os.path.join(a.out, f'{a.track}_b{b:g}{a.tag}.npz'), info=json.dumps(dict(info, mu_plan=a.mu_plan, vscale=a.vscale, w_beta=a.w_beta)), N=N,
                      Z=sol[0], Zc=np.stack(sol[1]), U=sol[2], **plan)
 
 

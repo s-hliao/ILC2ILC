@@ -73,6 +73,9 @@ ap.add_argument("--mb", type=int, default=2048)
 ap.add_argument("--lr", type=float, default=3e-4)
 ap.add_argument("--lr-final", type=float, default=None, help="the learning rate decays linearly to this by --iters")
 ap.add_argument("--anchor-pool", type=int, default=0, help="iterations of observations the trust region holds (0: none)")
+ap.add_argument("--gain-w", type=float, default=0.0, help="> 0: + W x mean |d policy / d obs|_F^2 on each minibatch's first 256 "
+                "states: robustness without stiff feedback (the pogo, 2026-10-26: a stiff network absorbs the hardware "
+                "stage's corrections and passes sensor noise on)")
 ap.add_argument("--anchor-w", type=float, default=1.0, help="the trust region's weight: on the pool's observations the "
                                                          "network held at its outputs before this iteration's fit")
 ap.add_argument("--hidden", type=int, default=256)
@@ -185,7 +188,11 @@ jac_fn = jax.jit(jax.vmap(jax.jacfwd(lambda o, w_: JumpEnv.actor(w_, o)), (0, No
 def loss_fn(p, w_, o, t, m):
     ww = dict(w_, **p)
     y = jax.vmap(lambda x: JumpEnv.actor(ww, x))(o)
-    return (((y - t) ** 2) * m).sum() / jnp.maximum(m.sum(), 1.0)
+    l = (((y - t) ** 2) * m).sum() / jnp.maximum(m.sum(), 1.0)
+    if a.gain_w > 0:
+        J = jax.vmap(jax.jacfwd(lambda x: JumpEnv.actor(ww, x)))(o[:256])
+        l = l + a.gain_w * jnp.mean(jnp.sum(J ** 2, axis=(1, 2)))
+    return l
 
 
 @jax.jit

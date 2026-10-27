@@ -54,6 +54,9 @@ ap.add_argument('--mb', type=int, default=4096)
 ap.add_argument('--lr', type=float, default=3e-4)
 ap.add_argument('--lr-final', type=float, default=1e-4)
 ap.add_argument('--anchor-w', type=float, default=0.0)
+ap.add_argument('--gain-w', type=float, default=0.0, help='> 0: + W x mean |d policy / d obs|_F^2 on the fit\'s states (first 256 '
+                'of each minibatch): robustness without stiff feedback (the pogo, 2026-10-26: a stiff network absorbs the '
+                'hardware stage\'s corrections)')
 ap.add_argument('--hidden', type=int, default=256)
 ap.add_argument('--dr', type=float, default=0.0, help='domain randomization scale (0: nominal, 1: the DR family)')
 ap.add_argument('--eval-every', type=int, default=10)
@@ -172,6 +175,9 @@ def fit_step(params, opt_state, o, y, wgt, o_anc, y_anc, lr_scale):
         l = jnp.sum(wgt[:, None] * (policy_fn(ps, o) - y) ** 2) / (jnp.sum(wgt) + 1e-9)
         if a.anchor_w > 0:
             l = l + a.anchor_w * jnp.mean((policy_fn(ps, o_anc) - y_anc) ** 2)
+        if a.gain_w > 0:
+            jac = jax.vmap(jax.jacfwd(lambda x: policy_fn(ps, x[None])[0]))(o[:256])
+            l = l + a.gain_w * jnp.mean(jnp.sum(jac ** 2, axis=(1, 2)))
         return l
     l, g = jax.value_and_grad(loss)(params)
     upd, opt_state = opt.update(g, opt_state, params)

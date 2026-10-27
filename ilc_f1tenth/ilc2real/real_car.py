@@ -140,6 +140,12 @@ def run(car_name, plan, policy=None, laps=1.0, s0=0.0, pert=None, seed=0, noise=
             failed = True
             crash = 'wall' if abs(err_true[0]) > max_ey else ('spin' if abs(err_true[1]) > sn.FAIL_EPSI else 'stall')
             break
+        if c.get('degrade'):                          # tire wear over the run's own laps (the harsh_drift car)
+            dg = c['degrade']
+            f = 1.0 - (1.0 - dg['to']) * min(1.0, max(prog, 0.0) / pl.L / dg['laps'])
+            if '_fiala0' not in c:
+                c['_fiala0'] = c['fiala'].copy()
+            c['fiala'] = c['_fiala0'] * np.array([f, f, f, 1.0])
         try:
             xm = mc.step(xm, d_cmd, i_cmd, c, DT)
         except (ZeroDivisionError, FloatingPointError):

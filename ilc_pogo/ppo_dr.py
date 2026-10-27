@@ -52,6 +52,7 @@ ap.add_argument('--p2-sub', type=int, default=6, help='RMA phase 2 on-policy: ke
 ap.add_argument('--z-noise', type=float, default=0.0, help='RMA teacher: gaussian noise on z during PPO (robustness '
                 'to the estimate)')
 ap.add_argument('--seed', type=int, default=0)
+ap.add_argument('--save-at', type=int, nargs='*', default=[], help='also snapshot after these iterations (a sim-data curve)')
 ap.add_argument('--gpu', default=None)
 a = ap.parse_args()
 if a.gpu is not None:
@@ -215,7 +216,7 @@ for it in range(0 if a.adapt_only else a.iters):
             apex=float(jnp.sqrt(jnp.sum(alive * e[..., 0] ** 2) / nfl)), v=float(jnp.sqrt(jnp.sum(alive * e[..., 1] ** 2) / nfl)),
             flight=float(jnp.sum(alive * fl) / jnp.maximum(jnp.sum(alive), 1.0)),
             loss=float(l), std=np.asarray(jnp.exp(params['log_std'])).tolist())
-    if (it + 1) % 100 == 0:
+    if (it + 1) % 100 == 0 or (it + 1) in a.save_at:
         save(f'it{it + 1:03d}')
 if not a.adapt_only:
     save('final')

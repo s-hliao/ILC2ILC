@@ -71,7 +71,7 @@ XSC = np.array([1.0, 1.0, 1.0, 1.0, 0.5, 2.0, 50.0, 10.0, 0.2])   # true planar 
 
 
 def true_z(car):
-    c = mc.REAL_CARS[car]
+    c = mc.raw_car(car)[0]
     mb, N = c['mb'], cm.NOMINAL
     v = np.array([N['m'] * mb.get('mass', 1.0), N['muf'] * mb.get('mu', 1.0), N['Cf'] * mb.get('ky', 1.0),
                   N['kt'] * c['kt'], c['tau'], c['d_off'], c['d_delay'], c['i_delay']])

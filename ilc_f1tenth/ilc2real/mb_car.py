@@ -68,6 +68,21 @@ REAL_CARS = {
     'real_act': dict(mb={}, kt=0.8, d_off=0.03, tau=0.07, d_delay=0, i_delay=1),
     'real_lag': dict(mb=dict(ky=0.8), kt=1.0, d_off=0.0, tau=0.05, d_delay=1, i_delay=0),
 }
+# the HARSH deployment suite (2026-10-26, defined before any method was run on it): larger or combined gaps, so that
+# zero-shot breaks and real-car data has to carry the result. kyr: rear cornering stiffness scale (front unchanged);
+# sense: a default sensing preset; degrade: the tires (stiffness and friction) wear linearly over the run's own laps,
+# x1 -> x`to` after `laps` laps (non-stationary; per run -- every trial starts on fresh tires)
+HARSH_CARS = {
+    'harsh_grip': dict(mb=dict(mu=0.6), kt=1.0, d_off=0.0, tau=0.04, d_delay=0, i_delay=0),
+    'harsh_combo': dict(mb=dict(mass=1.25, mu=0.8), kt=1.0, d_off=0.0, tau=0.04, d_delay=1, i_delay=1),
+    # calibrated on the plans' LQR only (not a compared method; log/dilc/car_free/calib1.txt): d_off 0.05 / tau 0.10 left
+    # LQR at 100 % -> 0.1 rad / 0.15 s / 1 period (LQR 50 %); the rear cornering stiffness is irrelevant at mu 0.2 (the
+    # tires are friction-saturated: LQR 100 % even at x0.3) -> harsh_tire dropped
+    'harsh_steer': dict(mb={}, kt=1.0, d_off=0.10, tau=0.15, d_delay=1, i_delay=0),
+    'harsh_sense': dict(mb={}, kt=1.0, d_off=0.0, tau=0.04, d_delay=0, i_delay=0, sense='mocapbad'),
+    'harsh_drift': dict(mb={}, kt=1.0, d_off=0.0, tau=0.04, d_delay=0, i_delay=0, degrade=dict(to=0.75, laps=5.0)),
+}
+REAL_CARS.update(HARSH_CARS)
 NOISE = np.array([0.003, 0.003, 0.005, 0.03, 0.03, 0.03, 0.5, 0.2])   # X Y psi vx vy r omega_w I (sensing)
 
 
@@ -82,12 +97,26 @@ def car_config(name):
     """A "real" car: REAL_CARS[name]; or "ax:key=value,..." -- the nominal car with single parameters changed (mass, mu,
     ky: multi-body scales; kt: torque-constant scale; tau: servo time constant; d_off: steering offset; d_delay /
     i_delay: steering / current command delay in periods); either with "+<SENSE preset>" for a sensing perturbation."""
+    c, sense = raw_car(name)
+    sense = sense or c.get('sense', '')
+    mb = c['mb']
+    p, P = mb_params(**{k: v for k, v in mb.items() if k != 'kyr'})
+    fiala = np.array([N['Cf'] / 2 * mb.get('ky', 1.0), N['Cr'] / 2 * mb.get('ky', 1.0) * mb.get('kyr', 1.0),
+                      N['muf'] * mb.get('mu', 1.0), c.get('lsd', LSD)])
+    return dict(name=name, p=p, P=P, fiala=fiala, kt=c['kt'] * N['kt'], d_off=c['d_off'], tau=c['tau'],
+                d_delay=c['d_delay'], i_delay=c['i_delay'], sense=SENSE[sense] if sense else None,
+                degrade=c.get('degrade'))
+
+
+def raw_car(name):
+    """car_config's parameter dict before the multi-body build (REAL_CARS entry, or the "ax:" overrides), and the
+    "+<SENSE preset>" suffix."""
     base, _, sense = name.partition('+')
     if base.startswith('ax:'):
         c = dict(REAL_CARS['real_nom'], mb={})
         for kv in base[3:].split(','):
             k, v = kv.split('=')
-            if k in ('mass', 'mu', 'ky'):
+            if k in ('mass', 'mu', 'ky', 'kyr'):
                 c['mb'] = dict(c['mb'], **{k: float(v)})
             elif k in ('d_delay', 'i_delay'):
                 c[k] = int(float(v))
@@ -95,12 +124,7 @@ def car_config(name):
                 c[k] = float(v)
     else:
         c = REAL_CARS[base]
-    p, P = mb_params(**c['mb'])
-    mb = c['mb']
-    fiala = np.array([N['Cf'] / 2 * mb.get('ky', 1.0), N['Cr'] / 2 * mb.get('ky', 1.0), N['muf'] * mb.get('mu', 1.0),
-                      c.get('lsd', LSD)])
-    return dict(name=name, p=p, P=P, fiala=fiala, kt=c['kt'] * N['kt'], d_off=c['d_off'], tau=c['tau'],
-                d_delay=c['d_delay'], i_delay=c['i_delay'], sense=SENSE[sense] if sense else None)
+    return c, sense
 
 
 @numba.njit(cache=True)
