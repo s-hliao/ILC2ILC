@@ -4,9 +4,10 @@ Offset stick (calibration offset 0.05 rad, outside the DR family), seed 0, servo
 6 training trials, then the final network). Each stage video, 1127 frames at 30 fps (~38 s), a 2 s pause after every batch; the RMA zero-shot video is one batch
 (5.4 s: 3 s of trials + the 2 s pause, no updates).
 Updated 13:24: the leg is drawn at its TRUE angle (the servo state + calibration offset; it swings at <= 6 rad/s, no
-teleporting -- the 12:31-12:39 renders drew the command), and a dashed DESIRED TRAJECTORY per trial: the goal gait, the
-nominal stick's periodic hop with every apex at h* and mean speed v* (solved by shooting; exact for all 6 goals),
-timed from the trial's start -- a body falling behind it has a speed error; a phase offset alone is not an error.
+teleporting -- the 12:31-12:39 renders drew the command), and a dashed DESIRED HOP per trial (14:24, phase-aligned): the
+goal gait's one-hop curve (the nominal stick's periodic hop with apex h* and mean speed v*, solved by shooting; exact for
+all 6 goals) restarted at EVERY apex the stick reaches -- the current hop's target bold, earlier ones faint. A blue hop
+under its dashed arc = apex too low; ending short of it = hop too short (too slow). No clock: phase never drifts.
 
 - Left: the 6 training trials of batch k, re-flown exactly (every re-flown trial cost J matches the stage's log to 3
   decimals; the per-iteration networks are from runs/video/<arm>_PF, the frozen stage rerun with --save-at 1..5, which
