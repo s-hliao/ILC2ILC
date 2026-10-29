@@ -39,3 +39,10 @@ Results notes stay with the code: `ilc_f1tenth/ilc2real/NOTES.md` (car), `~/ilc_
 ## pogo/ (toy 2-D SLIP pogo stick, 2026-10-13)
 - figures/fig1..fig8 (methods, budget, coverage, positivity, controls, cost, goal plane, data matching) -- src/ilc_pogo/figures.py
 - videos/*.gif (matplotlib animations) -- src/ilc_pogo/animate_pogo.py; results in src/ilc_pogo/NOTES.md
+
+## final/ (paper-ready figures, 2026-10-28)
+- final/*.{pdf,png}: the figures as they go into the paper; each generator lives in its own subfolder of final/ and writes
+  its outputs to final/ itself.
+- method_pogo_ilc.{pdf,png} (methodology schematic: batches at V goals -> policy update -> ... -> converged; hand-set,
+  no run data) -- final/pogo_method/method_diagram.py (run from src/ with any python that has matplotlib, e.g.
+  ~/miniconda3/envs/mj_quad/bin/python paper/final/pogo_method/method_diagram.py)
