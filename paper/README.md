@@ -46,3 +46,7 @@ Results notes stay with the code: `ilc_f1tenth/ilc2real/NOTES.md` (car), `~/ilc_
 - method_pogo_ilc.{pdf,png} (methodology schematic: batches at V goals -> policy update -> ... -> converged; hand-set,
   no run data) -- final/pogo_method/method_diagram.py (run from src/ with any python that has matplotlib, e.g.
   ~/miniconda3/envs/mj_quad/bin/python paper/final/pogo_method/method_diagram.py)
+- pogo_inout_{task,flow}.{pdf,png} (pogo goal generalization over the hardware stage: fixed-point error / apex-to-apex
+  flow error on the goals flown, inside their hull, outside it; mean over 6 robots x 3 seeds, 95 % bootstrap CIs; hull
+  goals are VALIDATION goals, seed 301) -- final/pogo_inout/inout_figs.py, from its data snapshot inout_ci.json (copied
+  from ~/ilc_ws/log/pogo_servo/runs/video/flows_out/summary_extra.json, made by log/pogo_servo/inout_fig.py aggregate)
