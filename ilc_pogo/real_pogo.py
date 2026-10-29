@@ -64,6 +64,24 @@ HARSH = {
 HARSH_ROBOTS = list(HARSH)
 ROBOTS.update(UNMODELLED)                         # robot_params knows them; DEFAULT_ROBOTS stays the original six
 ROBOTS.update(HARSH)
+# Systematic coverage tiers A / B (2026-10-29, defined before any method was run on them; user: equal-sized tiers): each
+# of the 6 DR axes (pogo_jax.dr_params) moved alone from real_nom, in both directions, by 0.75 (tier A, inside the DR
+# range) or 1.5 (tier B, extrapolated along the axis) of the axis's DR half-range -- A and B differ only in magnitude.
+# Half-ranges: mass 25 %, stiffness 20 %, thrust gain 20 %, leg offset 0.03 rad, rest length 4 %; damping: the DR range
+# is 0-30 N s/m (centre 15 = real_nom's), half-range 15 -> A 3.75 / 26.25; B cannot go negative, so both B damping robots
+# extrapolate upward (37.5 = 1.5, 45 = 2 half-ranges).
+_AXES = [('m', 0.25, 'mult'), ('k', 0.20, 'mult'), ('gth', 0.20, 'mult'), ('phi_off', 0.03, 'add'), ('l0', 0.04, 'mult')]
+TIER_A, TIER_B = {}, {}
+for _tier, _f in ((TIER_A, 0.75), (TIER_B, 1.5)):
+    for _key, _h, _kind in _AXES:
+        for _sgn, _tag in ((1, 'hi'), (-1, 'lo')):
+            _v = 1.0 + _sgn * _f * _h if _kind == 'mult' else ('add', _sgn * _f * _h)
+            _tier[f"real_{'a' if _tier is TIER_A else 'b'}_{_key}_{_tag}"] = {_key: _v}
+TIER_A.update(real_a_b_lo={'b': ('set', 3.75)}, real_a_b_hi={'b': ('set', 26.25)})
+TIER_B.update(real_b_b_hi={'b': ('set', 37.5)}, real_b_b_hi2={'b': ('set', 45.0)})
+ROBOTS.update(TIER_A)
+ROBOTS.update(TIER_B)
+TIER_A_ROBOTS, TIER_B_ROBOTS = list(TIER_A), list(TIER_B)
 MULT = ('m', 'k', 'gth', 'l0', 'wn', 'wmax')
 
 

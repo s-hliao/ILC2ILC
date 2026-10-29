@@ -124,12 +124,15 @@ publishes `joint_states`, `imu`, and joint-derived `leg_odom` at 500 Hz; the bri
 them. Mocap remains local and its configured `pose_latency` is subtracted from the measurement timestamp.
 
 Then run the controller as in `src/ilc_mjx/HARDWARE.md`, with
-`pose_topic:=/mocap/pose pose_type:=pose pose_latency:=<END-TO-END latency> mocap_offset:=[x, y, z]`.
+`pose_topic:=/mocap/pose pose_type:=pose pose_latency:=<END-TO-END latency> mocap_offset:=[x, y, z] imu_topic:=/imu`.
 
-**Why the controller reads raw mocap, not the EKF.** The policies were trained and tested with the controller's own
-estimator on raw, delayed mocap frames (`ilc_jump_sim.py`: frames dated by `pose_latency`; the simulated robots' mocap
-model). Feeding it the EKF would change what the policy sees. The EKF's `trunk/odometry` is for monitoring and logging,
-and for a controller retrained on it.
+**Why the controller runs its own EKF on raw mocap + IMU, not `trunk/odometry`.** The current networks (EKF banks, e.g.
+`ekfft_s2`, since 2026-10-26) were trained with the controller's OWN planar trunk EKF (`ilc_quad/scripts/planar_ekf.py`,
+`dilc_execute.EkfEstimator`): the IMU predicts, each raw mocap frame (dated by `pose_latency`) corrects, one step per
+10 ms control sample -- the same filter in the JAX training env and on the robot. So the controller reads raw
+`mocap/pose` and `imu` and fuses them itself; feeding it the workstation EKF would change what the policy sees. The
+workstation EKF's `trunk/odometry` stays for monitoring and logging. (Pre-10-26 networks, banks without `"estimator":
+"ekf"`, use the line estimator on raw mocap alone.)
 
 ## Calibrate once
 

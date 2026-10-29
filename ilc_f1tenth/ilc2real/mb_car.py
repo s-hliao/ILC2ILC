@@ -83,6 +83,33 @@ HARSH_CARS = {
     'harsh_drift': dict(mb={}, kt=1.0, d_off=0.0, tau=0.04, d_delay=0, i_delay=0, degrade=dict(to=0.75, laps=5.0)),
 }
 REAL_CARS.update(HARSH_CARS)
+# Systematic coverage tiers (2026-10-29, defined before any method was run on them; as the pogo's real_pogo.TIER_A / B):
+# A / B: each continuous DR axis of sim_jax.dr_params moved alone from real_nom, both directions, by 0.75 (A, inside the
+# DR range) / 1.5 (B, extrapolated) of its DR half-range: mass 25 %, friction 20 %, tire stiffness 20 %, motor constant
+# 20 %, steering offset 0.03 rad; the servo time constant's DR range is 0.03-0.08 s (centre 0.055, half-range 0.025) ->
+# absolute A 0.036 / 0.074, B 0.0175 / 0.0925. The command delays (DR: 0 / 1 period) are discrete: not an axis here.
+# C: 12 effects outside the DR class: the sensing presets (DR randomizes none), tire wear during the run (DR is
+# stationary), front / rear cornering-stiffness imbalance (DR scales both axles together).
+_NOM = REAL_CARS['real_nom']
+TIER_CARS = {}
+for _t, _f in (('a', 0.75), ('b', 1.5)):
+    for _key, _h in (('mass', 0.25), ('mu', 0.20), ('ky', 0.20)):
+        for _s, _tag in ((1, 'hi'), (-1, 'lo')):
+            TIER_CARS[f'tier{_t}_{_key}_{_tag}'] = dict(_NOM, mb={_key: 1.0 + _s * _f * _h})
+    for _s, _tag in ((1, 'hi'), (-1, 'lo')):
+        TIER_CARS[f'tier{_t}_kt_{_tag}'] = dict(_NOM, kt=1.0 + _s * _f * 0.20)
+        TIER_CARS[f'tier{_t}_doff_{_tag}'] = dict(_NOM, d_off=_s * _f * 0.03)
+        TIER_CARS[f'tier{_t}_tau_{_tag}'] = dict(_NOM, tau=0.055 + _s * _f * 0.025)
+for _p in ('mocapbad', 'latency2', 'lowrate', 'ekflag', 'noisy3'):
+    TIER_CARS[f'tierc_sense_{_p}'] = dict(_NOM, sense=_p)
+for _to in (0.85, 0.75, 0.6):
+    TIER_CARS[f'tierc_wear_{int(_to * 100)}'] = dict(_NOM, degrade=dict(to=_to, laps=5.0))
+TIER_CARS.update(tierc_rear_lo=dict(_NOM, mb=dict(kyr=0.7)), tierc_rear_hi=dict(_NOM, mb=dict(kyr=1.3)),
+                 tierc_front_lo=dict(_NOM, mb=dict(ky=0.7, kyr=1 / 0.7)), tierc_front_hi=dict(_NOM, mb=dict(ky=1.3, kyr=1 / 1.3)))
+REAL_CARS.update(TIER_CARS)
+TIER_A_CARS = [c for c in TIER_CARS if c.startswith('tiera_')]
+TIER_B_CARS = [c for c in TIER_CARS if c.startswith('tierb_')]
+TIER_C_CARS = [c for c in TIER_CARS if c.startswith('tierc_')]
 NOISE = np.array([0.003, 0.003, 0.005, 0.03, 0.03, 0.03, 0.5, 0.2])   # X Y psi vx vy r omega_w I (sensing)
 
 
