@@ -34,9 +34,9 @@ MUTED = "#777777"
 GRID = "#e4e4e4"
 TRIALS_PER_IT = 6
 # start -> (label, color, marker); colors as the pogo data figures (fig_pogo_budget.png)
-ARMS = {"ours": ("DistILC", "#2a78d6", "o"),
-        "ours+DR": ("DistILC + DR", "#eb6834", "s"),
-        "PPO+DR": ("PPO + DR + DistILC", "#1baf7a", "D"),
+ARMS = {"ours": (r"DistIL-C$_\mathrm{sim}$ + DistIL-C$_\mathrm{hw}$", "#2a78d6", "o"),
+        "ours+DR": (r"DistIL-C$_\mathrm{sim}$ + DR + DistIL-C$_\mathrm{hw}$", "#eb6834", "s"),
+        "PPO+DR": (r"PPO + DR + DistIL-C$_\mathrm{hw}$", "#1baf7a", "D"),
         "FADA": ("FADA (DR) + adaptation", "#6250d6", "P")}
 SETS = [("IN", "goals flown"), ("HULL", "inside their hull"), ("OUT", "outside their hull")]
 
@@ -74,9 +74,9 @@ def panel_fig(E, key, ylabel, name):
         ax.set_ylim(0, None)
     axs[0].set_ylabel(ylabel, color=INK)
     h, l = axs[0].get_legend_handles_labels()
-    fig.legend(h, l, loc="lower center", ncol=5, frameon=False, labelcolor=INK, handlelength=1.8, columnspacing=1.2,
+    fig.legend(h, l, loc="lower center", ncol=3, frameon=False, labelcolor=INK, handlelength=1.8, columnspacing=1.2,
                bbox_to_anchor=(0.5, 0.0))
-    fig.tight_layout(rect=(0, 0.1, 1, 1), w_pad=1.0)
+    fig.tight_layout(rect=(0, 0.16, 1, 1), w_pad=1.0)
     for ext in ("pdf", "png"):
         fig.savefig(os.path.join(OUT, f"{name}.{ext}"), dpi=300)
     plt.close(fig)

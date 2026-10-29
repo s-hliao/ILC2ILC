@@ -30,7 +30,7 @@ plt.rcParams.update({"font.family": ["Times New Roman", "TeX Gyre Termes", "Nimb
 INK = "#222222"
 MUTED = "#777777"
 GRID = "#e4e4e4"
-TIERS = [("A", "A: inside the DR range"), ("B", "B: extrapolated along DR axes"), ("C", "C: outside the model class")]
+TIERS = [("A", "A: inside the DR range"), ("B", "B: extrapolated along DR axes"), ("C", "C: outside the DR class")]
 # arm -> (color, marker, linestyle); colors as the pogo data figures
 STY = {"DistILC": ("#2a78d6", "o", "-"),
        "DistILC + DR": ("#eb6834", "s", "-"),
@@ -42,6 +42,11 @@ STY = {"DistILC": ("#2a78d6", "o", "-"),
        "FADA (DR) + adaptation": ("#6250d6", "P", "-"),
        "RMA (DR)": (INK, "*", "none"),
        "RMA (DR), zero-shot": (INK, "*", "none")}
+# legend names: subscript sim = the simulation stage, hw = the hardware (real-robot) stage (the paper's \oursS / \oursH)
+SIM_N, HW_N = r"DistIL-C$_\mathrm{sim}$", r"DistIL-C$_\mathrm{hw}$"
+LAB = {"sim": {"DistILC": SIM_N, "DistILC + DR": SIM_N + " + DR"},
+       "real": {"DistILC": SIM_N + " + " + HW_N, "DistILC + DR": SIM_N + " + DR + " + HW_N,
+                "PPO + DR + DistILC": "PPO + DR + " + HW_N, "PPO + DR + PPO on robot": r"PPO + DR + PPO$_\mathrm{hw}$"}}
 
 
 def style(ax):
@@ -56,16 +61,16 @@ def style(ax):
     ax.set_axisbelow(True)
 
 
-def draw(ax, arm, pts, xf):
+def draw(ax, arm, pts, xf, label):
     col, mk, ls = STY[arm]
     a = np.array(pts, float)
     x = xf(a[:, 0])
     if len(a) > 1 and ls != "none":
         ax.fill_between(x, a[:, 2], a[:, 3], color=col, alpha=0.13, lw=0)
-        ax.plot(x, a[:, 1], color=col, lw=1.3, ls=ls, marker=mk, ms=3.2, mec="white", mew=0.4, label=arm)
+        ax.plot(x, a[:, 1], color=col, lw=1.3, ls=ls, marker=mk, ms=3.2, mec="white", mew=0.4, label=label)
     else:
         ax.errorbar(x, a[:, 1], yerr=[a[:, 1] - a[:, 2], a[:, 3] - a[:, 1]], color=col, marker=mk,
-                    ms=6 if mk == "*" else 4, ls="none", capsize=1.5, lw=0.8, label=arm)
+                    ms=6 if mk == "*" else 4, ls="none", capsize=1.5, lw=0.8, label=label)
 
 
 def panel_fig(D, key, xf, xticks, xlabel, name):
@@ -75,20 +80,18 @@ def panel_fig(D, key, xf, xticks, xlabel, name):
         style(ax)
         for arm, per in D[key].items():
             if per.get(t):
-                draw(ax, arm, per[t], xf)
-        ax.axhline(1.0, color=INK, lw=0.6, ls=(0, (4, 3)))
+                draw(ax, arm, per[t], xf, LAB[key].get(arm, arm))
         ax.set_title(f"{title} ({len(D['tiers'][t])} robots)", fontsize=7.5, color=INK, pad=3)
         xt, xl = xticks
         ax.set_xticks(xf(np.array(xt, float)))
         ax.set_xticklabels(xl)
         ax.set_xlabel(xlabel, color=INK)
         ax.set_ylim(0, ymax * 1.03)
-    axs[0].text(axs[0].get_xlim()[1], 1.04, "success threshold", ha="right", va="bottom", fontsize=6.5, color=MUTED)
     axs[0].set_ylabel("normalized error", color=INK)
     h, l = axs[0].get_legend_handles_labels()
-    fig.legend(h, l, loc="lower center", ncol=len(l), frameon=False, labelcolor=INK, handlelength=1.8,
+    fig.legend(h, l, loc="lower center", ncol=len(l) if len(l) <= 6 and key == "sim" else 3, frameon=False, labelcolor=INK, handlelength=1.8,
                columnspacing=1.1, bbox_to_anchor=(0.5, 0.0))
-    fig.tight_layout(rect=(0, 0.09, 1, 1), w_pad=1.0)
+    fig.tight_layout(rect=(0, 0.09 if key == "sim" else 0.15, 1, 1), w_pad=1.0)
     for ext in ("pdf", "png"):
         fig.savefig(os.path.join(OUT, f"{name}.{ext}"), dpi=300)
     plt.close(fig)
