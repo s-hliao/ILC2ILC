@@ -46,6 +46,8 @@ ap.add_argument("--gpu", default="0")
 ap.add_argument("--plane", action="store_true", help="2D goal plane: goals uniform over the bank's valid region (flat and box jumps), evals on its grid")
 ap.add_argument("--true-robot", default="", help="ORACLE dynamics: collect at this robot's TRUE dynamics (its condition string's dynamics part, jump.JumpEnv.dyn_from_cond -- the latent RMA's oracle teacher gets) instead of nominal / DR")
 ap.add_argument("--est-window", type=float, default=0.0, help="s: the policy observes the robots' estimator (jump.Config)")
+ap.add_argument("--dr-async", action="store_true", help="(2026-10-30) with --dr: also the robots' timing and mocap (JumpEnv.sample_async), per "
+                "collected jump, as ppo_train.py / plane_train.py (the DR every other arm of the current quad setup trains under)")
 a = ap.parse_args()
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", a.gpu)
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
@@ -91,6 +93,8 @@ for b in range(0 if a.load_data else a.batches):
         goals = env.sample_plane_goals(B, rng) if a.plane else np.stack([rng.uniform(*a.goals, B), np.zeros(B)], 1)
         ref = env.references(goals)
         dyn = env.dyn_arrays(env.sample_dyn(B, rng) if a.dr else nominal(B))
+        if a.dr_async:
+            dyn.update(env.sample_async(B, rng))
         q_off, a_off = env.explore_noise(B, rng, a.explore[0], 0.0 if kind == "planner" else a.explore[1])
         out = env.rollout(ws, ref, jax.random.PRNGKey(int(rng.integers(2 ** 31))), stochastic=False,
                           a_offset=a_off, q_offset=q_off, dyn=dyn)
@@ -203,6 +207,8 @@ for name, B, Pd in (("nominal", 16, nominal(16)), ("DR", 128, env.sample_dyn(128
     tg[:, :2] = xr[:, 0, :2] + goals
     tg[:, 2] = 0.0
     dyn = env.dyn_arrays(Pd)
+    if a.dr_async and name == "DR":
+        dyn.update(env.sample_async(B, np.random.default_rng(12346)))
     res = []
     for tag, w_, pv in (("planner-IDM", W, 0), ("source", ws, NZ if a.priv else 0)):
         env.priv_dim = pv

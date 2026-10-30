@@ -38,10 +38,11 @@ STY = {"DistILC": ("#2a78d6", "o", "-"),
        "PPO + DR": ("#eda100", "^", "-"),
        "PPO + DR + PPO on robot": ("#eda100", "^", "-"),
        "PPO": ("#eda100", "v", "--"),
-       "FADA (DR)": ("#6250d6", "P", "none"),
+       "FADA (DR)": ("#6250d6", "P", "-"),          # (2026-10-30, user: "connect the fada line")
        "FADA (DR) + adaptation": ("#6250d6", "P", "-"),
        "RMA (DR)": (INK, "*", "-"),                 # (2026-10-30: a curve over sim hours, simdata_ext.py)
        "RMA (DR), zero-shot": (INK, "*", "none")}
+SIM_END = {"DistILC": 33.0, "DistILC + DR": 33.0}     # (2026-10-30, user: "end ours at around 30 sim hours")
 # legend names: subscript sim = the simulation stage, hw = the hardware (real-robot) stage (the paper's \oursS / \oursH)
 SIM_N, HW_N = r"DistIL-C$_\mathrm{sim}$", r"DistIL-C$_\mathrm{hw}$"
 LAB = {"sim": {"DistILC": SIM_N, "DistILC + DR": SIM_N + " + DR"},
@@ -73,20 +74,23 @@ def draw(ax, arm, pts, xf, label):
                     ms=6 if mk == "*" else 4, ls="none", capsize=1.5, lw=0.8, label=label)
 
 
-def panel_fig(D, key, xf, xticks, xlabel, name):
+def panel_fig(D, key, xf, xticks, xlabel, name, ytop=None):
     fig, axs = plt.subplots(1, 3, figsize=(7.16, 2.15), sharey=True)
     ymax = max(p[3] for arm in D[key].values() for pts in arm.values() for p in pts)
     for ax, (t, title) in zip(axs, TIERS):
         style(ax)
         for arm, per in D[key].items():
-            if per.get(t):
-                draw(ax, arm, per[t], xf, LAB[key].get(arm, arm))
+            pts = per.get(t)
+            if key == "sim" and arm in SIM_END and pts:
+                pts = [p for p in pts if p[0] <= SIM_END[arm]]
+            if pts:
+                draw(ax, arm, pts, xf, LAB[key].get(arm, arm))
         ax.set_title(f"{title} ({len(D['tiers'][t])} robots)", fontsize=7.5, color=INK, pad=3)
         xt, xl = xticks
         ax.set_xticks(xf(np.array(xt, float)))
         ax.set_xticklabels(xl)
         ax.set_xlabel(xlabel, color=INK)
-        ax.set_ylim(0, ymax * 1.03)
+        ax.set_ylim(0, ytop or ymax * 1.03)   # ytop: curves above it run off the top edge, clipped at the frame
     axs[0].set_ylabel("normalized error", color=INK)
     h, l = axs[0].get_legend_handles_labels()
     fig.legend(h, l, loc="lower center", ncol=4 if key == "sim" else 3, frameon=False, labelcolor=INK, handlelength=1.8,
@@ -100,7 +104,7 @@ def panel_fig(D, key, xf, xticks, xlabel, name):
 if __name__ == "__main__":
     D = json.load(open(os.path.join(HERE, "budget_data.json")))
     panel_fig(D, "sim", np.log10, ([2, 5, 10, 30, 100, 500], ["2", "5", "10", "30", "100", "500"]),
-              "simulated hours (zero-shot)", "pogo_budget_sim")
+              "simulated hours (zero-shot)", "pogo_budget_sim", ytop=3.5)   # (2026-10-30, user: FADA's line runs out of frame)
     real_x = lambda n: np.log2(1.0 + n)                       # 0 (zero-shot) at the left, rollouts on a log scale
     panel_fig(D, "real", real_x, ([0, 12, 36, 96, 384], ["0", "12", "36", "96", "384"]),
               "real rollouts per robot", "pogo_budget_real")

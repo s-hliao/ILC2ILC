@@ -55,6 +55,10 @@ ap.add_argument('--fit-noise', type=float, default=0.0, help='(2026-10-30) > 0: 
                 'normalized observation units), its target shifted by the pre-update network: y + mu(o + n) - mu(o), so the refit '
                 'keeps the network slope around the laps (one update changed the feedback gains by 2.4 x on the current channel, '
                 'while the GN step takes them as fixed)')
+ap.add_argument('--slope-w', type=float, default=0.0, help='(2026-10-30, the anchored refit anchors the network SLOPE too; user OK) '
+                '> 0: the refit also penalizes changing the network\'s local slope at the trial states, this weight x the mean '
+                '|d/de [mu_new(o + e v)] - d/de [mu_old(o + e v)]|^2 over random directions v ~ N(0, I) (a JVP: an unbiased '
+                'estimate of the Frobenius distance of the two observation Jacobians); the GN step assumes the feedback fixed')
 ap.add_argument('--crash-rollback', type=int, default=1, help='a car that crashes (wall / spin) on a goal it flew '
                 'cleanly in the last kept iteration is rolled back to that network and its step cap halved (1: on)')
 ap.add_argument('--max-crashes', type=int, default=0, help='crash budget per car: after this many crashed trials the '
@@ -331,10 +335,16 @@ def main():
 
     opt = optax.adam(a.lr)
 
+    def jvp_(ps, o, v):                                 # the directional derivative of the network at o along v
+        return jax.jvp(lambda x: policy_fn(ps, x), (o,), (v,))[1]
+    jvp_j = jax.jit(jvp_)
+
     @jax.jit
-    def fit_step(ps, st, o, y, w, oa, ya, wa):
+    def fit_step(ps, st, o, y, w, oa, ya, wa, os_, vs, ds, wsl):
         def loss(ps):
             l = jnp.sum(w[:, None] * (policy_fn(ps, o) - y) ** 2) / (jnp.sum(w) + 1e-9)
+            if a.slope_w > 0:                           # (traced only when on: --slope-w 0 is the old refit exactly)
+                l = l + wsl * jnp.mean(jnp.sum((jvp_(ps, os_, vs) - ds) ** 2, -1))
             return l + wa * jnp.mean((policy_fn(ps, oa) - ya) ** 2)
         l, g = jax.value_and_grad(loss)(ps)
         u, st = opt.update(g, st, ps)
@@ -533,11 +543,14 @@ def main():
                     b = jnp.array(rs.integers(0, len(O), min(2048, len(O))))
                     ba = jnp.array(rs.integers(0, len(O_anchor), min(2048, len(O_anchor))))
                     ob, yb = O_[b], Y_[b]
+                    os_ = ob                                    # the trial states (before any --fit-noise shift)
+                    vs = jnp.array(rs.standard_normal(ob.shape), ob.dtype)
+                    ds = jvp_j(params[c], os_, vs) if a.slope_w > 0 else jnp.zeros(yb.shape, yb.dtype)
                     if a.fit_noise > 0:
                         on = ob + a.fit_noise * jnp.array(rs.standard_normal(ob.shape), ob.dtype)
                         yb = yb + policy_fn(params[c], on) - policy_fn(params[c], ob)
                         ob = on
-                    ps, st, l = fit_step(ps, st, ob, yb, W_[b], Oa_[ba], Ya_[ba], wa)
+                    ps, st, l = fit_step(ps, st, ob, yb, W_[b], Oa_[ba], Ya_[ba], wa, os_, vs, ds, a.slope_w)
                 n_steps += chunk
                 realized = float(np.sum((np.asarray(policy_fn(ps, On)) - m0) * tgt) / max(np.sum(tgt ** 2), 1e-12))
                 hist_r.append(realized)
