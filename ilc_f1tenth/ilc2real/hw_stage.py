@@ -51,6 +51,10 @@ ap.add_argument('--tr-max', type=float, default=0.4)
 ap.add_argument('--fit-realize', type=float, default=0.0, help='>0: refit the newest trials to convergence: until the '
                 'realized fraction of the GN step reaches this or stops improving (< 0.003 over 1000 steps); 0: --steps')
 ap.add_argument('--fit-max-steps', type=int, default=8000)
+ap.add_argument('--fit-noise', type=float, default=0.0, help='(2026-10-30) > 0: each refit sample also at o + noise (this std, '
+                'normalized observation units), its target shifted by the pre-update network: y + mu(o + n) - mu(o), so the refit '
+                'keeps the network slope around the laps (one update changed the feedback gains by 2.4 x on the current channel, '
+                'while the GN step takes them as fixed)')
 ap.add_argument('--crash-rollback', type=int, default=1, help='a car that crashes (wall / spin) on a goal it flew '
                 'cleanly in the last kept iteration is rolled back to that network and its step cap halved (1: on)')
 ap.add_argument('--max-crashes', type=int, default=0, help='crash budget per car: after this many crashed trials the '
@@ -528,7 +532,12 @@ def main():
                 for s in range(chunk):
                     b = jnp.array(rs.integers(0, len(O), min(2048, len(O))))
                     ba = jnp.array(rs.integers(0, len(O_anchor), min(2048, len(O_anchor))))
-                    ps, st, l = fit_step(ps, st, O_[b], Y_[b], W_[b], Oa_[ba], Ya_[ba], wa)
+                    ob, yb = O_[b], Y_[b]
+                    if a.fit_noise > 0:
+                        on = ob + a.fit_noise * jnp.array(rs.standard_normal(ob.shape), ob.dtype)
+                        yb = yb + policy_fn(params[c], on) - policy_fn(params[c], ob)
+                        ob = on
+                    ps, st, l = fit_step(ps, st, ob, yb, W_[b], Oa_[ba], Ya_[ba], wa)
                 n_steps += chunk
                 realized = float(np.sum((np.asarray(policy_fn(ps, On)) - m0) * tgt) / max(np.sum(tgt ** 2), 1e-12))
                 hist_r.append(realized)

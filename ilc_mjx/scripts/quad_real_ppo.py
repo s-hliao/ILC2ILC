@@ -64,6 +64,7 @@ ap.add_argument("--rollback", type=float, default=0.0, help="a robot whose itera
 ap.add_argument("--log-cost", type=float, default=0.0, metavar="C0", help="terminal reward -10 log(1 + cost / C0) - fall_pen x fall instead of -land_w x cost - fall_pen x fall: compresses the infeasible goals' huge costs so a few cm on a feasible goal still counts after advantage normalization (the score logged stays land_w x cost + fall_pen x fall)")
 ap.add_argument("--ema", type=float, default=0.0, help="Polyak averaging: checkpoints export an exponential moving average of the actor weights (decay per iteration), not the last iterate -- less checkpoint-to-checkpoint noise")
 ap.add_argument("--eval-only", action="store_true", help="skip training: evaluate the checkpoints in OUT")
+ap.add_argument("--skip-eval", action="store_true", help="no evaluation on the reserved test goals (validation runs)")
 a = ap.parse_args()
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
@@ -363,4 +364,5 @@ def evaluate():
 if __name__ == "__main__":
     if not a.eval_only:
         train()
-    evaluate()
+    if not a.skip_eval:
+        evaluate()

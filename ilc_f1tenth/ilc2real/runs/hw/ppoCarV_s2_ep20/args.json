@@ -1,0 +1,51 @@
+{
+ "init": "runs/freePPOV_s2/policy_final.npz",
+ "arm": "ppoCarV_s2",
+ "cars": [
+  "real_nom",
+  "real_mass",
+  "real_mu",
+  "real_act",
+  "real_lag",
+  "ax:mu=0.9",
+  "ax:mu=0.7",
+  "ax:mu=0.6",
+  "harsh_combo",
+  "harsh_steer",
+  "harsh_sense",
+  "harsh_drift",
+  "ax:mu=4.5",
+  "ax:mu=5.5,mass=1.1"
+ ],
+ "goals": [
+  "mocap_square2fast_b0_free_v08",
+  "mocap_figfast_b0_free_v08"
+ ],
+ "rungs_from": "",
+ "per_iter": 10,
+ "checkpoints": [
+  10,
+  20,
+  40,
+  80,
+  160
+ ],
+ "std": [
+  0.049,
+  0.046
+ ],
+ "epochs": 8,
+ "mb": 1024,
+ "lr": 0.0001,
+ "lr_critic": 0.001,
+ "critic_warmup": 300,
+ "gamma": 0.98,
+ "lam": 0.95,
+ "clip": 0.2,
+ "seed": 4244,
+ "gpu": "3",
+ "policy": "runs/freePPOV_s2/policy_final.npz",
+ "iters": 20,
+ "trial": "ppo_real_car",
+ "episodes_per_car": 20
+}

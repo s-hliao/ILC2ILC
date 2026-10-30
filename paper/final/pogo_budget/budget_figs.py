@@ -24,7 +24,7 @@ OUT = os.path.dirname(HERE)                                          # paper/fin
 
 for f in glob.glob("/usr/share/fonts/truetype/msttcorefonts/[Tt]imes*.ttf"):
     font_manager.fontManager.addfont(f)
-plt.rcParams.update({"font.family": ["Times New Roman", "TeX Gyre Termes", "Nimbus Roman", "DejaVu Sans"],
+plt.rcParams.update({"font.family": ["Times New Roman", "TeX Gyre Termes", "Nimbus Roman", "STIXGeneral", "DejaVu Sans"],
                      "mathtext.fontset": "stix", "font.size": 7, "pdf.fonttype": 42})
 
 INK = "#222222"
@@ -40,7 +40,7 @@ STY = {"DistILC": ("#2a78d6", "o", "-"),
        "PPO": ("#eda100", "v", "--"),
        "FADA (DR)": ("#6250d6", "P", "none"),
        "FADA (DR) + adaptation": ("#6250d6", "P", "-"),
-       "RMA (DR)": (INK, "*", "none"),
+       "RMA (DR)": (INK, "*", "-"),                 # (2026-10-30: a curve over sim hours, simdata_ext.py)
        "RMA (DR), zero-shot": (INK, "*", "none")}
 # legend names: subscript sim = the simulation stage, hw = the hardware (real-robot) stage (the paper's \oursS / \oursH)
 SIM_N, HW_N = r"DistIL-C$_\mathrm{sim}$", r"DistIL-C$_\mathrm{hw}$"
@@ -81,10 +81,6 @@ def panel_fig(D, key, xf, xticks, xlabel, name):
         for arm, per in D[key].items():
             if per.get(t):
                 draw(ax, arm, per[t], xf, LAB[key].get(arm, arm))
-        for arm, per in (D.get("sim_picks", {}) if key == "sim" else {}).items():   # the stopping-rule snapshots
-            h_, m_ = per[t][0], per[t][1]
-            ax.plot(xf(np.array([h_])), [m_], ls="none", marker="o", ms=7, mfc="none", mec=STY[arm][0], mew=1.0,
-                    label="stopping-rule pick" if arm == "DistILC" else None)
         ax.set_title(f"{title} ({len(D['tiers'][t])} robots)", fontsize=7.5, color=INK, pad=3)
         xt, xl = xticks
         ax.set_xticks(xf(np.array(xt, float)))

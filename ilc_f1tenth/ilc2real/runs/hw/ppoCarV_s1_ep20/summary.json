@@ -1,0 +1,103 @@
+{
+ "args": {
+  "init": "runs/freePPOV_s1/policy_final.npz",
+  "arm": "ppoCarV_s1",
+  "cars": [
+   "real_nom",
+   "real_mass",
+   "real_mu",
+   "real_act",
+   "real_lag",
+   "ax:mu=0.9",
+   "ax:mu=0.7",
+   "ax:mu=0.6",
+   "harsh_combo",
+   "harsh_steer",
+   "harsh_sense",
+   "harsh_drift",
+   "ax:mu=4.5",
+   "ax:mu=5.5,mass=1.1"
+  ],
+  "goals": [
+   "mocap_square2fast_b0_free_v08",
+   "mocap_figfast_b0_free_v08"
+  ],
+  "rungs_from": "",
+  "per_iter": 10,
+  "checkpoints": [
+   10,
+   20,
+   40,
+   80,
+   160
+  ],
+  "std": [
+   0.049,
+   0.046
+  ],
+  "epochs": 8,
+  "mb": 1024,
+  "lr": 0.0001,
+  "lr_critic": 0.001,
+  "critic_warmup": 300,
+  "gamma": 0.98,
+  "lam": 0.95,
+  "clip": 0.2,
+  "seed": 4243,
+  "gpu": "2",
+  "policy": "runs/freePPOV_s1/policy_final.npz",
+  "iters": 20,
+  "trial": "ppo_real_car",
+  "episodes_per_car": 20
+ },
+ "real_laps": {
+  "real_nom": 19.738636482913314,
+  "real_mass": 19.73665553096858,
+  "real_mu": 19.26099747991613,
+  "real_act": 19.374927789721355,
+  "real_lag": 19.64966540423918,
+  "ax:mu=0.9": 19.588231084342155,
+  "ax:mu=0.7": 18.553915004184212,
+  "ax:mu=0.6": 16.894607440402055,
+  "harsh_combo": 19.028568456870858,
+  "harsh_steer": 17.919722972076777,
+  "harsh_sense": 19.57737344474757,
+  "harsh_drift": 19.662471552442245,
+  "ax:mu=4.5": 23.094253235507132,
+  "ax:mu=5.5,mass=1.1": 22.71029169421964
+ },
+ "crashes": {
+  "real_nom": 0,
+  "real_mass": 0,
+  "real_mu": 0,
+  "real_act": 0,
+  "real_lag": 0,
+  "ax:mu=0.9": 0,
+  "ax:mu=0.7": 0,
+  "ax:mu=0.6": 0,
+  "harsh_combo": 0,
+  "harsh_steer": 0,
+  "harsh_sense": 0,
+  "harsh_drift": 0,
+  "ax:mu=4.5": 0,
+  "ax:mu=5.5,mass=1.1": 0
+ },
+ "episodes": {
+  "real_nom": 20,
+  "real_mass": 20,
+  "real_mu": 20,
+  "real_act": 20,
+  "real_lag": 20,
+  "ax:mu=0.9": 20,
+  "ax:mu=0.7": 20,
+  "ax:mu=0.6": 20,
+  "harsh_combo": 20,
+  "harsh_steer": 20,
+  "harsh_sense": 20,
+  "harsh_drift": 20,
+  "ax:mu=4.5": 20,
+  "ax:mu=5.5,mass=1.1": 20
+ },
+ "seconds": 265.22935938835144,
+ "safety_ey": 1.0
+}

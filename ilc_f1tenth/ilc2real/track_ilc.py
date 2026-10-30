@@ -28,6 +28,10 @@ ap.add_argument('--eval-laps', type=float, default=5.0)
 ap.add_argument('--eval-seed', type=int, default=701)
 ap.add_argument('--seed', type=int, default=9001)
 ap.add_argument('--gpu', default=None)
+ap.add_argument('--policy', default=None, help='(2026-10-30, diagnostic) a network npz flies with the feedforward on top and gives '
+                'the GN step its feedback (feedback="policy", fixed weights): the stage\'s exact GN step applied as a per-track '
+                'offset instead of through the refit -- separates a wrong Jacobian from a bad refit')
+ap.add_argument('--log-cars', action='store_true', help='print J per car and per plan each iteration')
 a = ap.parse_args()
 if a.gpu is not None:
     os.environ['CUDA_VISIBLE_DEVICES'] = a.gpu
@@ -68,7 +72,13 @@ def main():
     plans = bank.load_bank(a.plans)
     P = sj.Plans(plans, a.plans)
     T = int(np.ceil(1.05 * max(P.lap_time) / sj.DT))
-    gn = ilc_core.make_gn(P, T, lambda ps, o: o[:2] * 0, a.beta, a.delta, a.cap, 'closed', feedback='expert',
+    pol, jp = None, None
+    if a.policy:
+        d = np.load(a.policy)
+        pol = [(np.asarray(d[f'W{i}']), np.asarray(d[f'b{i}'])) for i in range(len([k for k in d.files if k.startswith('W')]))]
+        jp = [(jnp.array(W), jnp.array(b)) for W, b in pol]
+    gn = ilc_core.make_gn(P, T, (lambda ps, o: sj.mlp(ps, o)) if pol else (lambda ps, o: o[:2] * 0), a.beta, a.delta, a.cap,
+                          'closed', feedback='policy' if pol else 'expert',
                           err_scale=sj.TASK_SCALE if a.objective == 'task' else sj.ERR_SCALE)
     rs = np.random.default_rng(a.seed)
     ff = {(c, k): np.zeros((len(pl['s']), 2)) for c in a.cars for k, pl in enumerate(plans)}
@@ -77,13 +87,13 @@ def main():
     done = 0
     for budget in sorted(a.budgets):
         for it in range(done, budget):
-            jobs = [dict(car_name=c, plan=pl, policy=None, laps=1.05, s0=0.0, pert=rs.uniform(-0.1, 0.1, 5),
+            jobs = [dict(car_name=c, plan=pl, policy=pol, laps=1.05, s0=0.0, pert=rs.uniform(-0.1, 0.1, 5),
                          seed=a.seed + 100 * it + k, ff=ff[(c, k)]) for c in a.cars for k, pl in enumerate(plans)]
             res = rc.run_many(jobs)
             keys = [(c, k) for c in a.cars for k in range(len(plans))]
             xs, idx, acts, err, valid = ilc_core.pad_runs(res, T)
             pid = np.array([k for c, k in keys])
-            step, J, Jp = gn(None, jnp.array(xs), jnp.array(idx), jnp.array(acts), jnp.array(pid), jnp.array(valid),
+            step, J, Jp = gn(jp, jnp.array(xs), jnp.array(idx), jnp.array(acts), jnp.array(pid), jnp.array(valid),
                              jnp.array(err))
             step = np.nan_to_num(np.asarray(step))
             for n, (key, r) in enumerate(zip(keys, res)):
@@ -92,6 +102,10 @@ def main():
                 ff[key] = ff[key] + to_grid(step[n, :m], r['idx'][:m], valid[n, :m], len(pl['s']), float(pl['ds']),
                                             a.smooth)
             fails = np.mean([r['failed'] for r in res])
+            if a.log_cars:
+                print(json.dumps(dict(it=it, per={f'{c}|{plans[k]["name"][6:16]}': [round(float(J[n]), 1), round(float(Jp[n]), 1),
+                      round(100 * float(rc.lap_metrics(r, plans[k])['rms_ey']), 2), bool(r['failed'])]
+                      for n, ((c, k), r) in enumerate(zip(keys, res))})), flush=True)
             print(json.dumps(dict(it=it, fails=float(fails), J=float(np.mean(J)), t=round(time.time() - t0, 1))),
                   flush=True)
         done = budget
@@ -101,7 +115,7 @@ def main():
             for k, pl in enumerate(plans):
                 r0 = np.random.default_rng(a.eval_seed + sum(map(ord, pl['name'])))
                 for j in range(a.eval_runs):
-                    jobs.append(dict(car_name=c, plan=pl, policy=None, laps=a.eval_laps, s0=(j / a.eval_runs) * float(pl['length']),
+                    jobs.append(dict(car_name=c, plan=pl, policy=pol, laps=a.eval_laps, s0=(j / a.eval_runs) * float(pl['length']),
                                      pert=r0.uniform(-0.5, 0.5, 5), seed=a.eval_seed * 7 + j, ff=ff[(c, k)]))
                     keys.append((c, pl['name']))
         res = rc.run_many(jobs)

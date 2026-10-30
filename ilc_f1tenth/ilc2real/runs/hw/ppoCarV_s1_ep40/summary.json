@@ -1,0 +1,103 @@
+{
+ "args": {
+  "init": "runs/freePPOV_s1/policy_final.npz",
+  "arm": "ppoCarV_s1",
+  "cars": [
+   "real_nom",
+   "real_mass",
+   "real_mu",
+   "real_act",
+   "real_lag",
+   "ax:mu=0.9",
+   "ax:mu=0.7",
+   "ax:mu=0.6",
+   "harsh_combo",
+   "harsh_steer",
+   "harsh_sense",
+   "harsh_drift",
+   "ax:mu=4.5",
+   "ax:mu=5.5,mass=1.1"
+  ],
+  "goals": [
+   "mocap_square2fast_b0_free_v08",
+   "mocap_figfast_b0_free_v08"
+  ],
+  "rungs_from": "",
+  "per_iter": 10,
+  "checkpoints": [
+   10,
+   20,
+   40,
+   80,
+   160
+  ],
+  "std": [
+   0.049,
+   0.046
+  ],
+  "epochs": 8,
+  "mb": 1024,
+  "lr": 0.0001,
+  "lr_critic": 0.001,
+  "critic_warmup": 300,
+  "gamma": 0.98,
+  "lam": 0.95,
+  "clip": 0.2,
+  "seed": 4243,
+  "gpu": "2",
+  "policy": "runs/freePPOV_s1/policy_final.npz",
+  "iters": 40,
+  "trial": "ppo_real_car",
+  "episodes_per_car": 40
+ },
+ "real_laps": {
+  "real_nom": 39.49006499163627,
+  "real_mass": 39.6840118284587,
+  "real_mu": 38.56998380695829,
+  "real_act": 38.8911165374181,
+  "real_lag": 39.171921437506946,
+  "ax:mu=0.9": 39.29354081801096,
+  "ax:mu=0.7": 37.244030187570154,
+  "ax:mu=0.6": 33.770125794265326,
+  "harsh_combo": 37.98388634908453,
+  "harsh_steer": 36.498447586358886,
+  "harsh_sense": 39.3516813759028,
+  "harsh_drift": 39.125478801619465,
+  "ax:mu=4.5": 46.01946084900395,
+  "ax:mu=5.5,mass=1.1": 45.7227384847626
+ },
+ "crashes": {
+  "real_nom": 0,
+  "real_mass": 0,
+  "real_mu": 0,
+  "real_act": 0,
+  "real_lag": 0,
+  "ax:mu=0.9": 0,
+  "ax:mu=0.7": 0,
+  "ax:mu=0.6": 0,
+  "harsh_combo": 0,
+  "harsh_steer": 0,
+  "harsh_sense": 0,
+  "harsh_drift": 0,
+  "ax:mu=4.5": 0,
+  "ax:mu=5.5,mass=1.1": 0
+ },
+ "episodes": {
+  "real_nom": 40,
+  "real_mass": 40,
+  "real_mu": 40,
+  "real_act": 40,
+  "real_lag": 40,
+  "ax:mu=0.9": 40,
+  "ax:mu=0.7": 40,
+  "ax:mu=0.6": 40,
+  "harsh_combo": 40,
+  "harsh_steer": 40,
+  "harsh_sense": 40,
+  "harsh_drift": 40,
+  "ax:mu=4.5": 40,
+  "ax:mu=5.5,mass=1.1": 40
+ },
+ "seconds": 342.6522841453552,
+ "safety_ey": 1.0
+}

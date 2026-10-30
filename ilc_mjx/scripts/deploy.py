@@ -1168,7 +1168,10 @@ def run_robot(robot):
                             continue
                         oj = np.asarray(nsim["obs"])[j][:Nc]
                         Sj = landing_sensitivity(dict(obs=oj), w, j, nAn, nBn).reshape(3, -1)
-                        sj = gn_step(Sj, e3_land[:3]).reshape(Nc, 4) * scale[g]
+                        if a.clip_mode == "weighted":            # (tolerance units, as the flown goal's own step)
+                            sj = gn_step(Sj * LW[:, None], e3_land[:3] * LW).reshape(Nc, 4) * scale[g]
+                        else:
+                            sj = gn_step(Sj, e3_land[:3]).reshape(Nc, 4) * scale[g]
                         rj = np.sqrt((sj ** 2).sum() / mask.sum())
                         sj *= min(1.0, a.step_rms / max(rj, 1e-12))
                         base_j = np.asarray(actor_mean(w, jnp.asarray(oj, jnp.float32))) * mask

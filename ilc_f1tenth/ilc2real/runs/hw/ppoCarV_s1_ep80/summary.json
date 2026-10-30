@@ -1,0 +1,103 @@
+{
+ "args": {
+  "init": "runs/freePPOV_s1/policy_final.npz",
+  "arm": "ppoCarV_s1",
+  "cars": [
+   "real_nom",
+   "real_mass",
+   "real_mu",
+   "real_act",
+   "real_lag",
+   "ax:mu=0.9",
+   "ax:mu=0.7",
+   "ax:mu=0.6",
+   "harsh_combo",
+   "harsh_steer",
+   "harsh_sense",
+   "harsh_drift",
+   "ax:mu=4.5",
+   "ax:mu=5.5,mass=1.1"
+  ],
+  "goals": [
+   "mocap_square2fast_b0_free_v08",
+   "mocap_figfast_b0_free_v08"
+  ],
+  "rungs_from": "",
+  "per_iter": 10,
+  "checkpoints": [
+   10,
+   20,
+   40,
+   80,
+   160
+  ],
+  "std": [
+   0.049,
+   0.046
+  ],
+  "epochs": 8,
+  "mb": 1024,
+  "lr": 0.0001,
+  "lr_critic": 0.001,
+  "critic_warmup": 300,
+  "gamma": 0.98,
+  "lam": 0.95,
+  "clip": 0.2,
+  "seed": 4243,
+  "gpu": "2",
+  "policy": "runs/freePPOV_s1/policy_final.npz",
+  "iters": 80,
+  "trial": "ppo_real_car",
+  "episodes_per_car": 80
+ },
+ "real_laps": {
+  "real_nom": 79.07794282529925,
+  "real_mass": 79.23116831316594,
+  "real_mu": 76.92474348294473,
+  "real_act": 78.44667431947711,
+  "real_lag": 78.5271910464025,
+  "ax:mu=0.9": 79.1553932752597,
+  "ax:mu=0.7": 74.44052306291803,
+  "ax:mu=0.6": 67.74473010483965,
+  "harsh_combo": 75.90385245534021,
+  "harsh_steer": 74.2832146766019,
+  "harsh_sense": 78.8488995506598,
+  "harsh_drift": 78.60596232183595,
+  "ax:mu=4.5": 91.50962488823747,
+  "ax:mu=5.5,mass=1.1": 90.84735772881378
+ },
+ "crashes": {
+  "real_nom": 0,
+  "real_mass": 0,
+  "real_mu": 0,
+  "real_act": 0,
+  "real_lag": 0,
+  "ax:mu=0.9": 0,
+  "ax:mu=0.7": 0,
+  "ax:mu=0.6": 0,
+  "harsh_combo": 0,
+  "harsh_steer": 0,
+  "harsh_sense": 0,
+  "harsh_drift": 0,
+  "ax:mu=4.5": 0,
+  "ax:mu=5.5,mass=1.1": 0
+ },
+ "episodes": {
+  "real_nom": 80,
+  "real_mass": 80,
+  "real_mu": 80,
+  "real_act": 80,
+  "real_lag": 80,
+  "ax:mu=0.9": 80,
+  "ax:mu=0.7": 80,
+  "ax:mu=0.6": 80,
+  "harsh_combo": 80,
+  "harsh_steer": 80,
+  "harsh_sense": 80,
+  "harsh_drift": 80,
+  "ax:mu=4.5": 80,
+  "ax:mu=5.5,mass=1.1": 80
+ },
+ "seconds": 520.1558611392975,
+ "safety_ey": 1.0
+}
