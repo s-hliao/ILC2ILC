@@ -65,7 +65,7 @@ from consts import TASK_SCALE                    # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # ppo_dr.py's privileged vector z (RMA): its keys, nominal and scale -- the real cars' true values mapped the same way
-ZNOM = np.array([4.6, 0.6, 250.0, 0.0258, 0.055, 0.0, 0.5, 0.5])
+ZNOM = np.array([cm.NOMINAL['m'], cm.NOMINAL['muf'], 250.0, 0.0258, 0.055, 0.0, 0.5, 0.5])
 ZSC = np.array([0.6, 0.12, 50.0, 0.005, 0.025, 0.03, 0.5, 0.5])
 XSC = np.array([1.0, 1.0, 1.0, 1.0, 0.5, 2.0, 50.0, 10.0, 0.2])   # true planar state scale for the critic
 

@@ -213,7 +213,7 @@ def exact_check(cars, out=None):
     import json
     env = {k: os.environ.get(k) for k in ('F1T_MU', 'F1T_PLANS', 'F1T_TRACKS', 'F1T_SAFETY_EY')}
     nowall = os.environ.get('F1T_TRAIN_NO_WALLS') == '1'   # idealized TRAINING without the room's walls (evaluation keeps them)
-    assert (env['F1T_PLANS'] or '').rstrip('/').endswith('plans_mu02_tight') and (env['F1T_SAFETY_EY'] == '0.5' or nowall) \
+    assert (env['F1T_PLANS'] or '').rstrip('/').endswith(('plans_mu02_tight', 'plans_mu02_tight_m374')) and (env['F1T_SAFETY_EY'] in ('0.5', '1.0') or nowall) \
         and env['F1T_MU'] == '0.2', f'not the tight-track setup (source env_tight.sh): {env}'
     rec = dict(env=env, train_no_walls=nowall, cars={c: mc.car_config(c) for c in cars})
     if out:

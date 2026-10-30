@@ -12,6 +12,8 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
+import os
+
 import numpy as np
 
 import car_model as cm
@@ -73,6 +75,9 @@ def dr_params(key, n, scale=1.0):
     u = lambda kk, lo, hi: lo + (hi - lo) * jax.random.uniform(kk, (n,))
     m = u(k[0], 1 - 0.25 * scale, 1 + 0.25 * scale)
     mu = u(k[1], 1 - 0.2 * scale, 1 + 0.2 * scale)
+    if os.environ.get('F1T_DR_MU'):              # the tire-covering family (2026-10-30: the real car runs plastic AND
+        lo, hi = map(float, os.environ['F1T_DR_MU'].split())     # rubber tires): friction x [lo, hi], log-uniform
+        mu = jnp.exp(u(k[1], np.log(lo), np.log(hi)))
     p = nominal_params(n)
     p['m'] = p['m'] * m
     p['Iz'] = p['Iz'] * m

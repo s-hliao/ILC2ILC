@@ -4,7 +4,7 @@ model the lab's NMPC runs on the car), term for term:
   single-track, Fiala/brush tires with combined slip sigma = sqrt(tan(alpha)^2 + kappa^2 + 1e-2) on each axle,
   peak mu Fz (static axle loads, no load transfer), ONE wheel-speed state omega_w driving BOTH axles (locked AWD:
   kappa_f and kappa_r from the same shaft), motor torque gear_ratio 1.5 pole_pairs lambda I on that shaft, against
-  (Iw + Im). Parameters: llampc params.F110 (mass 4.6 kg, Iz, lf, lr, rw, Iw, Im, pole_pairs = poles / 2 = 2) and
+  (Iw + Im). Parameters: llampc params.F110 (mass: the F1TENTH's 3.74 kg since 2026-10-30, was 4.6; Iz, lf, lr, rw, Iw, Im, pole_pairs = poles / 2 = 2) and
   the NMPC's mean tire model (llampc_fiala_fixed.fiala_setup: Cf 250, Cr 225 N/rad, muf = mur = 0.6, Cro 0).
 It is the quadruped's GPU-sim analog: the sim stage trains in it (JAX), the ILC Jacobians come from it, the
 trajectory optimization uses it (CasADi / IPOPT). The "real" cars are the f1tenth_gym fork's multi-body model
@@ -24,7 +24,8 @@ import numpy as np
 G = 9.81
 
 NOMINAL = dict(
-    m=4.6, Iz=0.04712, lf=0.15875, lr=0.17145, h=0.074,
+    m=3.74, Iz=0.04712,                             # m: the F1TENTH's 3.74 kg (user, 2026-10-30; was LLA-MPC's 4.6)
+    lf=0.15875, lr=0.17145, h=0.074,
     rw=0.051, Iw=0.9 * (4 * 0.1) * 0.043 ** 2, Im=11.82 ** 2 * 5.5e-6,
     kt=11.82 * 1.5 * 2 * 0.000726,                  # gear_ratio * 1.5 * pole_pairs * lambda [N m / A]
     Cf=250.0, Cr=225.0, muf=0.6, mur=0.6, Cro=0.0,              # muf / mur: overridden by $F1T_MU (e.g. plastic tires)

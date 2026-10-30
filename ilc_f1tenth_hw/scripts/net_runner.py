@@ -15,7 +15,7 @@ launch controller. The command goes out on /mpc/drive (drive_relay.py forwards i
 drive.jerk = 2.0 (current mode, the patched vesc_ackermann), drive.acceleration = motor current A, drive.steering_angle.
 
 SAFETY: a trial stops -- duty-cycle 0 (brake) for brake_s, then silence (the relay keeps braking) -- when
-    |e_y| > safety_ey (0.5 m: the room's envelope)      'wall'
+    |e_y| > safety_ey (1.0 m: the room's envelope, 2026-10-30; was 0.5)      'wall'
     |e_psi| > 1.2 rad                                    'spin'
     vx < 0.3 m/s after the launch                        'stall'
     the odometry or the VESC is older than stale_s       'stale'
@@ -64,7 +64,7 @@ class NetRunner(Node):
         p = self.declare_parameter
         p('session_dir', os.path.expanduser('~/car_session'))
         p('rate_hz', 1.0 / prt.DT)
-        p('safety_ey', 0.5)
+        p('safety_ey', 1.0)
         p('odom_topic', '/odometry/filtered')
         p('vesc_topic', '/sensors/core')
         p('drive_topic', '/mpc/drive')

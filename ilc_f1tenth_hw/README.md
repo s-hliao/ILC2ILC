@@ -140,7 +140,7 @@ The package runs on Foxy as well as Humble. The ROS distro picks the f1tenth_sys
   Foxy set has no mux patch and adds no file.
 - **The Python nodes, launch file and configs are shared.** The runtime the network uses (`policy_runtime.py`,
   `bank.py`, `car_model.py`) needs only numpy (>= 1.17, Foxy's). It parses under Python 3.6, and CasADi is only needed
-  if a plan's LQR gains are not cached (all of `plans_mu02_tight` are).
+  if a plan's LQR gains are not cached (all of `plans_mu02_tight_m374` are: the 3.74 kg bank, 2026-10-30).
 
 ```bash
 source /opt/ros/foxy/setup.bash
@@ -203,7 +203,7 @@ to the network.
 | services | `/net_runner/start`, `/net_runner/stop` (`std_srvs/Trigger`) |
 
 **Safety: a trial stops when any of these happens.**
-- `wall`: **|e_y| > `safety_ey` = 0.5 m** (the room's envelope, on the measured EKF state);
+- `wall`: **|e_y| > `safety_ey` = 1.0 m** (since 2026-10-30; was 0.5; the room's envelope, on the measured EKF state);
 - `spin`: |e_psi| > 1.2 rad;
 - `stall`: vx < 0.3 m/s after the launch;
 - `stale`: the odometry or the VESC state is older than 0.1 s;
@@ -220,10 +220,13 @@ keeps braking. A trial also ends normally after its laps. (The simulations score
   "true" entries are the measured ones) and `res_<k>.json` (summary).
 
 Plans come from the same bank as the simulations: `source ../ilc_f1tenth/ilc2real/env_tight.sh` first (`F1T_PLANS`), with
-the bank synced to the car. Run it with:
+the bank synced to the car. Since 2026-10-30 that is `plans_mu02_tight_m374` (the 3.74 kg car) and the goal plans are
+the `_free_v08` ones (the sideslip-free plan at 0.8 x speed, e.g. `mocap_square2fast_b0_free_v08`): one plan per track that
+both the plastic (mu 0.2) and the rubber tires can drive; the full-speed `_mu80` plans are power slides that put a
+gripping car into the wall. Run it with:
 ```bash
 source ../ilc_f1tenth/ilc2real/env_tight.sh
-ros2 run ilc_f1tenth_hw net_runner.py --ros-args -p session_dir:=$HOME/car_session   # (-p safety_ey:=0.5 is the default)
+ros2 run ilc_f1tenth_hw net_runner.py --ros-args -p session_dir:=$HOME/car_session   # (-p safety_ey:=1.0 is the default since 2026-10-30)
 ```
 
 **The hardware stage on the real car.** The 10-lap ladder recipe of the low-friction fix runs as

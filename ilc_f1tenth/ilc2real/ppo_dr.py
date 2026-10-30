@@ -61,6 +61,7 @@ import numpy as np                               # noqa: E402
 import optax                                     # noqa: E402
 
 import bank                                      # noqa: E402
+import car_model as cm                           # noqa: E402
 import sim_jax as sj                             # noqa: E402
 from consts import TASK_SCALE                    # noqa: E402
 
@@ -76,7 +77,7 @@ T0 = time.time()
 SIM_LAPS = 0.0
 NZ = 8                                            # privileged parameters (RMA)
 ZKEYS = ['m', 'muf', 'Cf', 'kt', 'tau_s', 'd_off', 'd_delay', 'i_delay']
-ZNOM = np.array([4.6, 0.6, 250.0, 0.0258, 0.055, 0.0, 0.5, 0.5])
+ZNOM = np.array([cm.NOMINAL['m'], cm.NOMINAL['muf'], 250.0, 0.0258, 0.055, 0.0, 0.5, 0.5])
 ZSC = np.array([0.6, 0.12, 50.0, 0.005, 0.025, 0.03, 0.5, 0.5])
 
 

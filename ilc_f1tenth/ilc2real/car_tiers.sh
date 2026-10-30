@@ -10,7 +10,7 @@
 cd "$(dirname "$0")"; source env_tight.sh; mkdir -p logs runs/hw
 for P in ${WAIT_PIDS:-}; do while kill -0 $P 2>/dev/null; do sleep 60; done; done
 C=$PWD; PY=~/miniconda3/envs/f1t/bin/python; L=/home/henry/ilc_ws/log/gpu_lock.sh
-export XLA_PYTHON_CLIENT_PREALLOCATE=false NUMBA_NUM_THREADS=1 OMP_NUM_THREADS=1 F1T_PROCS=3   # 9 stages x 3 = 27 CPUs
+export XLA_PYTHON_CLIENT_PREALLOCATE=false NUMBA_NUM_THREADS=1 OMP_NUM_THREADS=1 F1T_PROCS=${STAGE_PROCS:-3}   # 9 stages x 3 = 27 CPUs (2 alongside the pogo tier A / B queue)
 EV=/home/henry/ilc_ws/log/dilc/car_free/eval_free.py
 CARS=$($PY -c "import mb_car as m; print(' '.join(m.TIER_A_CARS + m.TIER_B_CARS + m.TIER_C_CARS))")
 G="mocap_square2fast_b0_free_mu80 mocap_figfast_b0_free_mu80"
@@ -27,5 +27,5 @@ for s in 0 1 2; do
   for n in freeNom5 freeDR5 freePPO freePPO5; do ARGS="$ARGS ${n}_s${s}_tiers_testzs $C/runs/${n}_s$s/policy_final.npz"; done
   for n in freeNom5 freeDR5 freePPO; do [ -f runs/hw/${n}_s${s}_tiers_stage/summary.json ] && ARGS="$ARGS ${n}_s${s}_tiers_test+stage $C/runs/hw/${n}_s${s}_tiers_stage"; done
 done
-EVAL_FREE_SEED=4301 EVAL_FREE_CARS="$CARS" EVAL_FREE_PLAN_SUFFIX=_mu80 EVAL_FREE_NO_RUNGS=1 F1T_PROCS=24 $PY -u $EV $ARGS > logs/free_tiers_test.log 2>&1
+EVAL_FREE_SEED=4301 EVAL_FREE_CARS="$CARS" EVAL_FREE_PLAN_SUFFIX=_mu80 EVAL_FREE_NO_RUNGS=1 F1T_PROCS=${EVAL_PROCS:-24} $PY -u $EV $ARGS > logs/free_tiers_test.log 2>&1
 echo "$(date +%T) CAR_TIERS_DONE"

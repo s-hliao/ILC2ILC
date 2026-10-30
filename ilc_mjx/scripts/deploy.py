@@ -72,6 +72,13 @@ ap.add_argument("--clip-mode", default="both", choices=("both", "clear", "weight
                      "(landing / LW, clearance / --clr-tol)")
 ap.add_argument("--clip-beta", type=float, default=None, help="--clip-mode clear: the GN gain (default --gn-beta)")
 ap.add_argument("--clr-tol", type=float, default=0.01, help="--clip-mode weighted: the clearance rows' tolerance (m)")
+ap.add_argument("--traj-rows", type=int, default=0,
+                help="(--update gn, --clip-mode weighted; 2026-10-30) > 0: the GN step also takes the trial's measured STANCE "
+                     "trajectory error -- the base x, z, pitch error to the goal's reference (the policy's own observed "
+                     "error) every this many control samples -- through the same closed-loop chain d e_k / d a as the "
+                     "clearance rows, in the landing's tolerance units, the block weighted --traj-w / sqrt(its samples) "
+                     "(Nguyen et al.'s ILC and our car stage step on the whole trajectory, not the landing alone)")
+ap.add_argument("--traj-w", type=float, default=1.0)
 ap.add_argument("--clear", type=float, default=0.0,
                 help="m (box banks, --update gn): the legs' and trunk's clearance to the box the ILC keeps -- a trial "
                      "whose least clearance (measured from its record, in single stance and in flight) is under it adds "
@@ -103,7 +110,7 @@ ap.add_argument("--anchor-pert", action="store_true",
 ap.add_argument("--lr", type=float, default=1e-4)
 ap.add_argument("--seed", type=int, default=9001)
 ap.add_argument("--eval", default="val", choices=("val", "final", "holdout", "boxval", "boxfinal", "comboval", "combofinal", "planeval", "planefinal",
-                                       "none"))
+                                       "planetrain", "none"))
 ap.add_argument("--perturbed", action="store_true")
 ap.add_argument("--target-base", default="flown", choices=("flown", "own"),
                 help="the step starts from the action the robot flew (after the controller's clipping: stays "
@@ -255,7 +262,10 @@ EVAL = dict(val=([0.45, 0.4625, 0.5375, 0.55], 301), final=([0.4375, 0.4875, 0.5
             planeval=([0.4375, 0.5625, (0.53, 0.11), (0.51, 0.13), (0.56, 0.12), (0.52, 0.16), (0.4625, 0.06),
                        (0.6125, 0.07)], 301),
             planefinal=([0.4875, 0.6125, (0.52, 0.12), (0.54, 0.14), (0.57, 0.11), (0.51, 0.17), (0.4875, 0.035),
-                         (0.6375, 0.09)], 701))
+                         (0.6375, 0.09)], 701),
+            # planetrain (2026-10-30): the stage's own PRACTICED goals (stage_*.sh ALL), the ILC protocol's task (Nguyen et
+            # al. score the jump they practice); fresh eval seed, so its episodes are not the stage's trials
+            planetrain=([0.45, 0.60, (0.50, 0.15), (0.60, 0.10), (0.50, 0.05), (0.575, 0.15)], 501))
 EVAL = {k: ([tuple(g) if isinstance(g, tuple) else (float(g), 0.0) for g in v[0]], v[1]) for k, v in EVAL.items()}
 gvec = lambda g: np.array(g, float)                                  # goal -> (x, h)
 gkey = lambda v: (round(float(v[0]), 4), round(float(v[1]), 4))     # a goal or an episode's goal -> dict key
@@ -595,6 +605,28 @@ def clearance_rows(zs, w, gi, An, Bn, g):
             rows.append(Gr[k] @ Dk)
             res.append(C[k] - a.clear)
     return rows, res, cmins
+
+
+def traj_rows(zs, w, gi, An, Bn):
+    """--traj-rows: (rows (m, Nc*4), residuals (m,)) in the landing's tolerance units, the trials' mean: the measured
+    stance error of base x, z, pitch (obs[k, :3], normalized -> physical by D) at k = s, 2s, ... < Nc, and its
+    closed-loop sensitivity d e_k / d a (the forward chain, the policy's feedback at each trial's states)."""
+    ks = np.arange(a.traj_rows, Nc, a.traj_rows)
+    R, E = [], []
+    for z_ in zs:
+        obs = np.asarray(z_["obs"], float)
+        K = np.asarray(dpi_fn(jnp.asarray(obs[:Nc], jnp.float32), w))[..., :6]
+        if any(a.jac_delay):
+            Dn = delayed_chain(K, gi, An, Bn)
+        else:
+            Dn = np.zeros((Nc + 1, 6, Nc * 4))
+            for k in range(Nc):
+                Dn[k + 1] = (An[gi, k] + Bn[gi, k] @ K[k]) @ Dn[k]
+                Dn[k + 1][:, 4 * k:4 * k + 4] += Bn[gi, k] * mask[k][None]
+        R.append(np.concatenate([(D[:3, None] * Dn[k][:3]) * LW[:, None] for k in ks]))
+        E.append(np.concatenate([D[:3] * obs[k, :3] * LW for k in ks]))
+    wt = a.traj_w / np.sqrt(len(ks))
+    return wt * np.mean(R, 0), wt * np.mean(E, 0)
 
 
 TRAIN_CF, TRAIN_OFF = None, None                # --train-cond: set per robot in run_robot
@@ -1064,6 +1096,12 @@ def run_robot(robot):
                         S, e3 = np.vstack([S, np.array(crow)]), np.concatenate([e3, np.array(cres)])
                     clr_txt = (f", clr {100 * min(cmins):.1f}cm rows {len(crow)}{' CLEAR-ONLY' if clip_only else ''}"
                                if cmins else "")
+                if a.clip_mode == "weighted" and S.shape[0] == 3:   # no clearance rows: the landing rows still in tolerance
+                    S, e3 = S * LW[:, None], e3 * LW                 # units (2026-10-30; was raw m / m / rad here)
+                if a.traj_rows > 0 and not clip_only:               # + the stance trajectory's rows (tolerance units)
+                    assert a.clip_mode == "weighted", "--traj-rows needs --clip-mode weighted (tolerance units)"
+                    Rt, Et = traj_rows(zs, w, gi, An, Bn)
+                    S, e3 = np.vstack([S, Rt]), np.concatenate([e3, Et])
                 stp = gn_step(S, e3, beta=a.clip_beta if clip_only else None)
                 ab_txt = ""
                 if a.abbeel > 0:

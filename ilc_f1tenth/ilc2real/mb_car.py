@@ -2,7 +2,7 @@
 The "real" cars: the f1tenth_gym fork's multi-body model (s-hliao/f1tenth_gym dev-humble, vehicle_dynamics_mb:
 sprung body with roll and pitch, four unsprung wheels with their own spin, suspension, compliant joints, Pacejka MF
 tires per corner including the full-scale tire's offsets) calibrated to LLA-MPC's car (car_model.NOMINAL):
-  mass 4.6 kg (sprung / unsprung masses, roll / pitch inertias and suspension rates scaled from the gym set by the
+  mass car_model.NOMINAL['m'] = 3.74 kg (was 4.6 until 2026-10-30; sprung / unsprung masses, roll / pitch inertias and suspension rates scaled from the gym set by the
   mass ratio, so static deflections stay), yaw inertia 0.04712, steering +-0.34 rad at 3.2 rad/s;
   tire: LLA-MPC's Fiala / brush combined-slip tire on each corner (mb_fiala.py, generated from the fork's
   multi_body.py with only the tire block replaced): per-tire stiffness Cf / 2, Cr / 2, peak mu Fz with each wheel's

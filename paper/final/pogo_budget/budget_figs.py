@@ -81,6 +81,10 @@ def panel_fig(D, key, xf, xticks, xlabel, name):
         for arm, per in D[key].items():
             if per.get(t):
                 draw(ax, arm, per[t], xf, LAB[key].get(arm, arm))
+        for arm, per in (D.get("sim_picks", {}) if key == "sim" else {}).items():   # the stopping-rule snapshots
+            h_, m_ = per[t][0], per[t][1]
+            ax.plot(xf(np.array([h_])), [m_], ls="none", marker="o", ms=7, mfc="none", mec=STY[arm][0], mew=1.0,
+                    label="stopping-rule pick" if arm == "DistILC" else None)
         ax.set_title(f"{title} ({len(D['tiers'][t])} robots)", fontsize=7.5, color=INK, pad=3)
         xt, xl = xticks
         ax.set_xticks(xf(np.array(xt, float)))
@@ -89,9 +93,9 @@ def panel_fig(D, key, xf, xticks, xlabel, name):
         ax.set_ylim(0, ymax * 1.03)
     axs[0].set_ylabel("normalized error", color=INK)
     h, l = axs[0].get_legend_handles_labels()
-    fig.legend(h, l, loc="lower center", ncol=len(l) if len(l) <= 6 and key == "sim" else 3, frameon=False, labelcolor=INK, handlelength=1.8,
+    fig.legend(h, l, loc="lower center", ncol=4 if key == "sim" else 3, frameon=False, labelcolor=INK, handlelength=1.8,
                columnspacing=1.1, bbox_to_anchor=(0.5, 0.0))
-    fig.tight_layout(rect=(0, 0.09 if key == "sim" else 0.15, 1, 1), w_pad=1.0)
+    fig.tight_layout(rect=(0, 0.15, 1, 1), w_pad=1.0)
     for ext in ("pdf", "png"):
         fig.savefig(os.path.join(OUT, f"{name}.{ext}"), dpi=300)
     plt.close(fig)

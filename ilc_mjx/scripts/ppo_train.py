@@ -66,6 +66,8 @@ ap.add_argument("--student-loss", default="latent", choices=("latent", "action")
                 "true latent vs at the student's) on the student's own states (DAgger-style)")
 ap.add_argument("--resume", default="", help="plain / teacher: an OUT/it<K> dir to continue from (its actor; its value net "
                 "if saved, else a fresh one warmed up again), iterations numbered from K")
+ap.add_argument("--dr-async", action="store_true", help="also the robots' timing and mocap (JumpEnv.sample_async), per training jump "
+                "and in the DR eval -- as plane_train.py --dr-async (2026-10-30: the baselines get our network's DR family)")
 ap.add_argument("--eval-n", type=int, default=128, help="DR robots in the checkpoint-selection eval")
 ap.add_argument("--fit-steps", type=int, default=200, help="student: adaptation-module Adam steps per iteration")
 ap.add_argument("--student-replay", type=int, default=1, help="student: iterations of the student's rollouts kept")
@@ -254,6 +256,8 @@ e_goals = (env.sample_plane_goals(EB, np.random.default_rng(777)) if a.plane els
 e_ref = env.references(e_goals)
 e_tg = targets_of(e_goals, e_ref)
 e_dyn = env.dyn_arrays(env.sample_dyn(EB, np.random.default_rng(12345)))
+if a.dr_async:
+    e_dyn.update(env.sample_async(EB, np.random.default_rng(12346)))
 n_goals = (env.plane_grid(0.05) if a.plane else np.stack([np.linspace(*a.goals, 16), np.zeros(16)], 1))
 n_ref = env.references(n_goals)
 n_tg = targets_of(n_goals, n_ref)
@@ -412,6 +416,8 @@ for it in range(it0, a.iters + 1):
     goals = env.sample_plane_goals(B, rng) if a.plane else np.stack([rng.uniform(*a.goals, B), np.zeros(B)], 1)
     ref = env.references(goals)
     dyn = env.dyn_arrays(env.sample_dyn(B, rng))
+    if a.dr_async:
+        dyn.update(env.sample_async(B, rng))
     q_off, _ = env.explore_noise(B, rng, a.explore_q, 0.0)
     if a.mode == "student_ctx":                      # two jumps per DR robot; psi regresses the latent on both contexts
         goals2 = env.sample_plane_goals(B, rng) if a.plane else np.stack([rng.uniform(*a.goals, B), np.zeros(B)], 1)
