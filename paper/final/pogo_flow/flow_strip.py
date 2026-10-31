@@ -5,7 +5,7 @@ right", no orange lines, the individual points instead).
               then the sim under pi_0 (the reference the stage pulls toward)
   background  |V - V_sim,pi0| in tolerance units (2 cm apex, 0.1 m/s), white = the sim's field
   arrows      the apex-to-apex return map (next apex - apex) at the goal (0.8 m/s, 0.62 m)
-  points      the apexes of 4 perturbed drops x 20 hops (where the old orbit lines turned); star = goal, box = tolerance
+  points      the apexes of 4 perturbed drops x 20 hops (where the old orbit lines turned); star = goal (2026-10-30, user: no tolerance box)
 The fields are computed once into flow_strip_data.npz (delete it to recompute). Full text width (7.16 in), Times as the
 other paper/final figures. Writes pogo_flow.{pdf,png} to paper/final/.
     POGO_LEG=servo python paper/final/pogo_flow/flow_strip.py      (the pogo env: needs log/dilc/flows/pogo/flows_pogo)
@@ -82,8 +82,6 @@ def main():
         pts = O.reshape(-1, 2)                                       # every drop's every apex (h, v)
         ax.plot(pts[:, 1], pts[:, 0], "o", color=ps.RUN, mec="white", mew=0.3, ms=2.4, zorder=6, clip_on=True)
         ax.plot(g[0], g[1], "*", color="white", mec=ps.INK, mew=0.6, ms=6.5, zorder=7)
-        ax.add_patch(plt.Rectangle((g[0] - tol[1], g[1] - tol[0]), 2 * tol[1], 2 * tol[0], fill=False, ec=ps.INK, lw=0.6,
-                                   ls=(0, (2.5, 1.5)), zorder=6))
         ax.set_xlim(vs[0], vs[-1])
         ax.set_ylim(hs[0], hs[-1])
         ax.set_title(ttl, fontsize=7.5, pad=2.5)
@@ -97,8 +95,15 @@ def main():
             s.set_color("#777777")
     axs[0].set_yticks([0.56, 0.62, 0.68])
     axs[0].set_ylabel("apex height (m)", fontsize=7, labelpad=1.5)
-    fig.supxlabel("apex speed (m/s)", fontsize=7, y=0.015)
-    fig.subplots_adjust(left=0.062, right=0.925, top=0.86, bottom=0.2, wspace=0.2)
+    fig.supxlabel("apex speed (m/s)", fontsize=7, x=0.36, y=0.015)
+    from matplotlib.lines import Line2D
+    fig.legend([Line2D([], [], ls="none", marker="*", color="white", mec=ps.INK, mew=0.6, ms=6.5),
+                Line2D([], [], ls="none", marker="o", color=ps.RUN, mec="white", mew=0.3, ms=3),
+                Line2D([], [], color=ps.INK, lw=0.8, marker=">", ms=2.5, alpha=0.75)],
+               ["goal", "apexes of 4 perturbed drops (20 hops each)", "next-apex flow"],
+               loc="lower right", bbox_to_anchor=(0.93, -0.01), ncol=3, frameon=False, fontsize=6, handlelength=1.4,
+               columnspacing=1.0, handletextpad=0.4)
+    fig.subplots_adjust(left=0.062, right=0.925, top=0.86, bottom=0.22, wspace=0.2)
     for a, b in zip(axs[:-1], axs[1:]):                              # left-to-right reading: an arrow between neighbours
         p, n = a.get_position(), b.get_position()
         fig.text((p.x1 + n.x0) / 2, p.y0 + p.height / 2, r"$\rightarrow$", ha="center", va="center", fontsize=7, color=ps.INK)
