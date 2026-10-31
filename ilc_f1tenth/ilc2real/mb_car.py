@@ -231,3 +231,28 @@ def mb_from_planar(xs, p):
     xm[NXM] = xs[6]
     xm[NXM + 1] = xs[7]
     return xm
+# Plastic at mu 0.4 (2026-10-31, user: the plastic tire's friction "is really underestimated at 0.2, should be closer to like 0.4"):
+# the 12 plastic validation cars with every friction doubled (the model, the plans and every network stay at mu 0.2, so all arms
+# face the same grippier car). p04_<car> for the named cars; the single-axis ones are "ax:mu=1.8" / "ax:mu=1.4" / "ax:mu=1.2".
+P04_CARS = {f'p04_{_n}': dict(REAL_CARS[_n], mb=dict(REAL_CARS[_n]['mb'], mu=2.0 * REAL_CARS[_n]['mb'].get('mu', 1.0)))
+            for _n in ('real_nom', 'real_mass', 'real_mu', 'real_act', 'real_lag', 'harsh_combo', 'harsh_steer', 'harsh_sense',
+                       'harsh_drift')}
+REAL_CARS.update(P04_CARS)
+PLASTIC04 = list(P04_CARS) + ['ax:mu=1.8', 'ax:mu=1.4', 'ax:mu=1.2']
+# Tier C at plastic mu 0.4 (2026-10-31, user: "what experiment would show our method is better than rma on cars" -> effects outside
+# the DR class, at the real plastic friction): TIER_C_CARS with friction doubled (wear degrades relative to it).
+P04C_CARS = {f'p04_{_n}': dict(REAL_CARS[_n], mb=dict(REAL_CARS[_n].get('mb', {}), mu=2.0 * REAL_CARS[_n].get('mb', {}).get('mu', 1.0)))
+             for _n in TIER_C_CARS}
+REAL_CARS.update(P04C_CARS)
+PLASTIC04_C = list(P04C_CARS)
+# Nominal mu 0.6 pipeline (2026-10-31, plans_nom06; the planner and the sim never see the tires): the plastic cars at mu 0.4 (every
+# friction x 0.4 / 0.6, the 12 validation cars' own spread kept), tier C at 0.4, rubber at 1.0 / 1.1 ("ax:mu=1.667" / "ax:mu=1.833,mass=1.1").
+_F = 0.4 / 0.6
+N04_CARS = {f'n04_{_n}': dict(REAL_CARS[_n], mb=dict(REAL_CARS[_n].get('mb', {}), mu=_F * REAL_CARS[_n].get('mb', {}).get('mu', 1.0)))
+            for _n in ('real_nom', 'real_mass', 'real_mu', 'real_act', 'real_lag', 'harsh_combo', 'harsh_steer', 'harsh_sense',
+                       'harsh_drift', *TIER_C_CARS)}
+REAL_CARS.update(N04_CARS)
+PLASTIC_N04 = [f'n04_{_n}' for _n in ('real_nom', 'real_mass', 'real_mu', 'real_act', 'real_lag', 'harsh_combo', 'harsh_steer',
+                                      'harsh_sense', 'harsh_drift')] + [f'ax:mu={_F * m:.4f}' for m in (0.9, 0.7, 0.6)]
+TIERC_N04 = [f'n04_{_n}' for _n in TIER_C_CARS]
+RUBBER_N06 = ['ax:mu=1.667', 'ax:mu=1.833,mass=1.1']

@@ -21,6 +21,8 @@ ap = argparse.ArgumentParser()
 ap.add_argument('--plans', nargs='+', required=True)
 ap.add_argument('--out', required=True)
 ap.add_argument('--init', default=None)
+ap.add_argument('--resume', default=None, help='(2026-10-31, user: "maybe you just have to train longer") an agent_<tag>.npz of the same mode: '
+                'also restore its critic and exploration log-std, so --init + --resume continues a run rather than restarting PPO')
 ap.add_argument('--mode', default='ppo', choices=('ppo', 'rma'))
 ap.add_argument('--dr', type=float, default=1.0)
 ap.add_argument('--iters', type=int, default=300)
@@ -102,6 +104,11 @@ if a.init:
     actor = [(jnp.array(W0), jnp.array(d['b0']))] + [(jnp.array(d[f'W{i}']), jnp.array(d[f'b{i}'])) for i in (1, 2)]
 critic = sj.init_mlp(k1, [n_in, 256, 256, 1])
 log_std = jnp.full(2, a.log_std)
+if a.resume:                                          # continue: the run's own critic and exploration level
+    _r = np.load(a.resume)
+    _nc = len([k for k in _r.files if k.startswith('cW')])
+    critic = [(jnp.array(_r[f'cW{i}']), jnp.array(_r[f'cb{i}'])) for i in range(_nc)]
+    log_std = jnp.array(_r['log_std'], jnp.float32)
 params = dict(actor=actor, critic=critic, log_std=log_std)
 opt = optax.chain(optax.clip_by_global_norm(1.0), optax.adam(a.lr))
 opt_state = opt.init(params)

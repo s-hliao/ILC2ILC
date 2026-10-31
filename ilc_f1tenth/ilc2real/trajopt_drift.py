@@ -174,6 +174,7 @@ def main():
     ap.add_argument('--steps', type=float, nargs='+', default=[0, 10, 18, 25])
     ap.add_argument('--N', type=int, default=0, help='intervals per lap (0: one per 6 cm)')
     ap.add_argument('--vstar', type=float, default=0.0)
+    ap.add_argument('--e-max', type=float, default=0.3, help='(2026-10-31, user: keep the reference path closely) the plan\'s |e_y| bound (m)')
     ap.add_argument('--mu-plan', type=float, default=1.0, help='friction scale the plan is solved for (conservative plans: < 1)')
     ap.add_argument('--vscale', type=float, default=1.0, help='scales the whole speed target (slower plans: < 1)')
     ap.add_argument('--tag', default='', help='suffix of the saved plan names, e.g. _mu80')
@@ -189,7 +190,7 @@ def main():
     os.makedirs(a.out, exist_ok=True)
     guess = None
     for b in [x for x in a.steps if x < a.beta] + [a.beta]:
-        sol, info = solve(tr, np.radians(b), N, p, guess, v_star=a.vstar or None, vscale=a.vscale, w=dict(b=a.w_beta))
+        sol, info = solve(tr, np.radians(b), N, p, guess, v_star=a.vstar or None, vscale=a.vscale, w=dict(b=a.w_beta), e_max=a.e_max)
         print(json.dumps(info), flush=True)
         if info['success'] or guess is None:
             guess = sol

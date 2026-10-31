@@ -27,6 +27,9 @@ def mlp_np(ps, o):
     return h @ W + b
 
 
+NO_CRASH = os.environ.get('F1T_NO_CRASH') == '1'
+
+
 def run(car_name, plan, policy=None, laps=1.0, s0=0.0, pert=None, seed=0, noise=True, T_max=None, ff=None,
         x_start=None, idx_start=None, action_noise=None, launch=None):
     """policy: list of (W, b) numpy (the network) or None (the plan's LQR). ff: (M, 2) normalized feedforward
@@ -136,7 +139,9 @@ def run(car_name, plan, policy=None, laps=1.0, s0=0.0, pert=None, seed=0, noise=
         X.append(xmeas); Xm.append(xt); OBS.append(obs); OBST.append(obs_true); MU.append(mu); A.append(a); ERR.append(err); ERRT.append(err_true)
         IDX.append(idx); APP.append([d_cmd, i_cmd])
         peak_ey = max(peak_ey, abs(float(err_true[0])))
-        if abs(err_true[0]) > max_ey or abs(err_true[1]) > sn.FAIL_EPSI or (launched and xt[3] < 0.3):
+        # F1T_NO_CRASH=1 (2026-10-31; user, for the long-stage test only: "not involve crashes at all in simulation"): no
+        # wall / spin / stall stop -- every run drives its full laps
+        if not NO_CRASH and (abs(err_true[0]) > max_ey or abs(err_true[1]) > sn.FAIL_EPSI or (launched and xt[3] < 0.3)):
             failed = True
             crash = 'wall' if abs(err_true[0]) > max_ey else ('spin' if abs(err_true[1]) > sn.FAIL_EPSI else 'stall')
             break

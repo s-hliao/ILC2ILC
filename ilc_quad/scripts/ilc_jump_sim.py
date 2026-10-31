@@ -710,7 +710,8 @@ class IlcJumpNode(Node):
         try:
             cmd = getattr(self, f"_tick_{self.phase}")(now, q, dq)
         except Exception as err:          # a bug mid-jump must not leave the last command held
-            self.get_logger().error(f"{self.phase} tick failed: {err!r}")
+            import traceback
+            self.get_logger().error(f"{self.phase} tick failed: {err!r}\n{traceback.format_exc()}")
             self._to_damp("controller error")
             cmd = self._tick_damp(now, q, dq)
         if cmd is not None:

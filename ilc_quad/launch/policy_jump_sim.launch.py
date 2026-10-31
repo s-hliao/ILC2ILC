@@ -32,6 +32,8 @@ ARGS = [
     ("transfer_mode", "retarget", "retarget (this task's plan + learned correction) or paper"),
     ("feedforward", "to_torque", "to_torque (TO torque + J^T dU) or force (J^T U only)"),
     ("margin", "0.85", "share of each hard limit the TO may use (Go1 validation: 0.85 for flat and 10 cm boxes, 0.9-1.0 for taller)"),
+    ("box_setback_front", "0.0", "the plan's front box setback (2026-10-31: the sbf banks' plans record it; 0 = box_setback)"),
+    ("stand_offset", "[0.0, 0.0, 0.0, 0.0]", "the stance before the jump, planar joint offsets from home [F thigh, F calf, R thigh, R calf] (rad): a perturbed start"),
     ("qu", "1e-4", "ILC step penalty Qu, Stages I-II"),
     ("qu_stage3", "1e-5", "ILC step penalty Qu, Stage III (safeguarded)"),
     ("ground_kp", "0.0", "floor stiffness per foot, N/m (0: the MJCF's contact); unknown to the ILC"),
@@ -80,6 +82,8 @@ def generate_launch_description():
         "transfer_mode": LaunchConfiguration("transfer_mode"),
         "feedforward": LaunchConfiguration("feedforward"),
         "margin": _float("margin"),
+        "box_setback_front": _float("box_setback_front"),
+        "stand_offset": ParameterValue(LaunchConfiguration("stand_offset"), value_type=None),
         "qu": _float("qu"),
         "qu_stage3": _float("qu_stage3"),
         "exit_when_done": True,
@@ -87,6 +91,7 @@ def generate_launch_description():
         "policy_member": LaunchConfiguration("policy_member"),
         "episode_dir": LaunchConfiguration("episode_dir"),
         "episode_tag": LaunchConfiguration("episode_tag"),
+        "imu_topic": "/imu",            # sim_node's IMU, as policy_jump_go1's default (the EKF policies need it)
         "use_sim_time": True,
     }
     with_box = IfCondition(LaunchConfiguration("box"))

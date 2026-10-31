@@ -36,6 +36,8 @@ ARGS = [
     ("transfer_from", "", "another task's trial npz or run folder to start from"),
     ("transfer_mode", "retarget", "retarget (this task's plan + learned correction) or paper"),
     ("margin", "0.85", "share of each hard limit the TO may use (Go1 validation: 0.85 for flat and 10 cm boxes, 0.9-1.0 for taller)"),
+    ("box_setback_front", "0.0", "the plan's front box setback (2026-10-31: the sbf banks' plans record it; 0 = box_setback)"),
+    ("stand_offset", "[0.0, 0.0, 0.0, 0.0]", "the stance before the jump, planar joint offsets from home [F thigh, F calf, R thigh, R calf] (rad): a perturbed start"),
     ("pose_latency", "0.006", "mocap latency, s (MEASURE it: the policy's state estimator dates every frame by it)"),
     ("mocap_offset", "[0.0, 0.0, 0.0]", "the tracked point in the base frame, m"),
     ("imu_topic", "/imu", "sensor_msgs/Imu, body frame (gyro rad/s, specific force m/s^2): the EKF policies' "
@@ -85,6 +87,8 @@ def generate_launch_description():
                      "transfer_from": LaunchConfiguration("transfer_from"),
                      "transfer_mode": LaunchConfiguration("transfer_mode"),
                      "margin": _float("margin"),
+                     "box_setback_front": _float("box_setback_front"),
+                     "stand_offset": ParameterValue(LaunchConfiguration("stand_offset"), value_type=None),
                      "pose_latency": _float("pose_latency"),
                      "imu_topic": LaunchConfiguration("imu_topic"),
                      "mocap_offset": ParameterValue(LaunchConfiguration("mocap_offset"), value_type=None),

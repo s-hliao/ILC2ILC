@@ -48,7 +48,8 @@ def prepare(argv):
     # the policy's): margin -- the box plans' is 0.9, the launch files' default 0.85
     cfg = json.loads(str(ref["config"]))
     json.dump(dict(goal=list(map(float, a.goal)), box_x_front=float(box["x_front"]) if box else 0.25,
-                   box_height=float(box["height"]) if box else 0.0, margin=float(cfg["margin"])), open(side, "w"),
+                   box_height=float(box["height"]) if box else 0.0, margin=float(cfg["margin"]),
+                   box_setback_front=float(cfg.get("box_setback_front", 0.0))), open(side, "w"),   # (2026-10-31) the sbf plans' setting
               indent=1)
     print(f"{a.out}: the plan for goal {a.goal}{' (EXTRAPOLATED past the bank: fly with care)' if extrap else ''}"
           + (f"; BOX: front face {box['x_front']:.3f} m ahead of the standing CoM, {box['height']:.3f} m tall ({side})"

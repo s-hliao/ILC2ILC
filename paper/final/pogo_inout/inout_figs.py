@@ -71,10 +71,13 @@ def style(ax):
 
 
 if __name__ == "__main__":
-    D = json.load(open(os.path.join(HERE, "inout_matched.json")))
-    fig, axs = plt.subplots(1, 2, figsize=(7.16, 2.9), sharey=True)
-    ymax = max(v[2] for a in D["arms"].values() for v in a.values())
+    # (2026-10-30) the frozen test pass (inout_test.json: test seed 4301 goals and drops, as the budget figures) when present;
+    # the validation-seed version (inout_matched.json) is kept in paper/backup/pogo_inout_val1030
+    f = os.path.join(HERE, "inout_test.json")
+    D = json.load(open(f if os.path.exists(f) else os.path.join(HERE, "inout_matched.json")))
+    fig, axs = plt.subplots(1, 2, figsize=(7.16, 2.9))   # own y scales: low-budget errors are ~10x the full-budget ones
     for ax, (title, arms, note) in zip(axs, PANELS):
+        ymax = max(D["arms"][a][g][2] for a in arms if a in D["arms"] for g, _ in SETS)
         style(ax)
         arms = [a for a in arms if a in D["arms"]]
         w = 0.8 / max(len(arms), 1)
@@ -88,10 +91,11 @@ if __name__ == "__main__":
                 for xi, yi in zip(x, v[:, 2]):
                     ax.text(xi, yi + 0.03 * ymax, note[a], ha="center", va="bottom", fontsize=5, color=MUTED, rotation=90)
         ax.set_xticks(np.arange(len(SETS)))
-        ax.set_xticklabels([f"{t}\n({D['goal_sets'][g]})" for g, t in SETS], fontsize=6.5)
+        ax.set_xticklabels([f"{t}\n({D['goal_sets'][g]} goals)" for g, t in SETS], fontsize=6.5)   # (2026-10-30, user: say what the count is)
         ax.set_title(title, fontsize=7.5, color=INK, pad=3)
         ax.set_ylim(0, ymax * 1.15)
-    axs[0].set_ylabel("normalized error", color=INK)
+    for ax in axs:
+        ax.set_ylabel("normalized error", color=INK)
     seen, hs, ls = set(), [], []
     for _, arms, _ in PANELS:
         for a in arms:

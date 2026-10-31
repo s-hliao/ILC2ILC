@@ -856,6 +856,17 @@ class Driver:
                       dq12=dq, imu_b0=getattr(node, "imu_b0", None))
         self.n_pushed = n + 1                        # this tick is recorded next, as pushed
         x = self.est.estimate(t_now)
+        # (2026-10-31) a late control tick (a gap of a whole 10 ms sample between joint-state ticks: CPU load in the desk
+        # sim, the bridge on the robot) skips samples, and X / A -- indexed by sample in obs_at -- fell behind k: an
+        # IndexError at the jump's first tick damped the robot. Keep them on the sample grid: a skipped sample gets this
+        # estimate and the force held through it (the previous sample's; the plan's before the first)
+        while len(self.X) < k:
+            self.X.append(x)
+            j = len(self.X) - 1
+            if j < ilc.Nc and len(self.U) <= j:
+                held = self.U[-1] if self.U else np.asarray(self.ref["u_ref"][j], float)
+                self.U.append(held)
+                self.A.append(self.bank.norm_action(held, j, self.ref["u_ref"]))
         self.X.append(x)
         if k >= ilc.Nc:
             if self.fd is not None:

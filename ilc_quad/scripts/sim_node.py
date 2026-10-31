@@ -15,6 +15,10 @@ it, leaving the control entirely to whatever you connect.
                                   *applied* torque (see below)
                 base_odom         Odometry, twist in the base frame
                 foot_contacts     Float64MultiArray, 4 normal forces FL FR RL RR
+                imu               Imu, base frame: gyro (rad/s) and specific force (m/s^2, gravity
+                                  included, the Go1 lowstate's convention), noise-free; the EKF
+                                  policies need it (2026-10-31: without it the desk stand-in's
+                                  estimate lagged and the 0.45 m jump landed 33 cm short)
                 /clock            monotonic sim time
     service     reset_trial       Trigger; returns the sim time of the reset
 
@@ -64,7 +68,7 @@ from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
 from rosgraph_msgs.msg import Clock
-from sensor_msgs.msg import JointState
+from sensor_msgs.msg import Imu, JointState
 from std_msgs.msg import Float64MultiArray
 from std_srvs.srv import Trigger
 
@@ -162,6 +166,9 @@ class MujocoSimNode(Node):
         self.contact_pub = self.create_publisher(
             Float64MultiArray, "foot_contacts", SENSOR_QOS
         )
+        self.imu_pub = self.create_publisher(Imu, "imu", SENSOR_QOS)
+        # world linear velocity at the previous tick: the accelerometer's finite difference
+        self.v_prev = None
         self.create_subscription(
             Float64MultiArray, "joint_torque_cmd", self._on_torque_cmd, SENSOR_QOS
         )
@@ -219,6 +226,7 @@ class MujocoSimNode(Node):
         """
         self.qm.reset_home()
         self.held_cmd = np.zeros((5, 12))
+        self.v_prev = None
         response.success = True
         response.message = f"{self.sim_time:.9f}"
         self.get_logger().info(f"trial reset at sim t={self.sim_time:.3f}s")
@@ -266,6 +274,28 @@ class MujocoSimNode(Node):
         contacts = Float64MultiArray()
         contacts.data = self.qm.foot_normal_forces().tolist()
         self.contact_pub.publish(contacts)
+
+        self.imu_pub.publish(self._imu(stamp))
+
+    def _imu(self, stamp) -> Imu:
+        """The trunk IMU as ilc_jump_lockstep models it: gyro = MuJoCo's body-frame angular
+        velocity, specific force = the world acceleration (finite difference over a tick) plus
+        gravity, rotated into the base frame."""
+        v = self.qm.base_velocity()
+        a = (v[:3] - self.v_prev) / self.control_period if self.v_prev is not None else np.zeros(3)
+        self.v_prev = v[:3].copy()
+        w, x, y, z = self.qm.base_quat()
+        R = np.array([[1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
+                      [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
+                      [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)]])
+        f_body = R.T @ (a + np.array([0.0, 0.0, 9.81]))
+        imu = Imu()
+        imu.header.stamp = stamp
+        imu.header.frame_id = self.base_frame
+        imu.orientation.w, imu.orientation.x, imu.orientation.y, imu.orientation.z = (float(c) for c in (w, x, y, z))
+        imu.angular_velocity.x, imu.angular_velocity.y, imu.angular_velocity.z = (float(c) for c in v[3:6])
+        imu.linear_acceleration.x, imu.linear_acceleration.y, imu.linear_acceleration.z = (float(c) for c in f_body)
+        return imu
 
     def _odometry(self, stamp) -> Odometry:
         """Base state as Odometry, with the twist moved into the base frame.
