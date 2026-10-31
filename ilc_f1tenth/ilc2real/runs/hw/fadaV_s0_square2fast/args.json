@@ -1,0 +1,53 @@
+{
+ "out": "runs/hw/fadaV_s0_square2fast",
+ "init": "runs/freePPOV_s0/policy_final.npz",
+ "plans": [
+  "mocap_square2fast_b0_free_v08",
+  "mocap_square2fast_b0_free_v09",
+  "mocap_square2fast_b0_free",
+  "mocap_figfast_b0_free_v08",
+  "mocap_figfast_b0_free_v09",
+  "mocap_figfast_b0_free"
+ ],
+ "goals": [
+  "mocap_square2fast_b0_free_v08"
+ ],
+ "cars": [
+  "real_nom",
+  "real_mass",
+  "real_mu",
+  "real_act",
+  "real_lag",
+  "ax:mu=0.9",
+  "ax:mu=0.7",
+  "ax:mu=0.6",
+  "harsh_combo",
+  "harsh_steer",
+  "harsh_sense",
+  "harsh_drift",
+  "ax:mu=4.5",
+  "ax:mu=5.5,mass=1.1"
+ ],
+ "data_iters": 60,
+ "lanes": 512,
+ "T": 160,
+ "a_off": 0.2,
+ "lam": 0.8,
+ "dims": [
+  0,
+  1,
+  2,
+  3,
+  4
+ ],
+ "horizon": 4,
+ "train_steps": 30000,
+ "iters": 10,
+ "rank": 4,
+ "adapt_steps": 500,
+ "eval_runs": 4,
+ "eval_laps": 5.0,
+ "seed": 0,
+ "gpu": "2",
+ "policy": "runs/hw/fadaV_s0_square2fast/idm.npz"
+}

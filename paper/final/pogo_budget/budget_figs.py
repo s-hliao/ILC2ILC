@@ -38,8 +38,8 @@ STY = {"DistILC": ("#2a78d6", "o", "-"),
        "PPO + DR": ("#eda100", "^", "-"),
        "PPO + DR + PPO on robot": ("#eda100", "^", "-"),
        "PPO": ("#eda100", "v", "--"),
-       "FADA (DR)": ("#6250d6", "P", "-"),          # (2026-10-30, user: "connect the fada line")
-       "FADA (DR) + adaptation": ("#6250d6", "P", "-"),
+       "FADA (DR)": ("#6250d6", "h", "-"),          # (2026-10-30, user: "connect the fada line")
+       "FADA (DR) + adaptation": ("#6250d6", "h", "-"),   # (2026-10-30, user: FADA's bullets less weird: P -> h)
        "RMA (DR)": (INK, "*", "-"),                 # (2026-10-30: a curve over sim hours, simdata_ext.py)
        "RMA (DR), zero-shot": (INK, "*", "none")}
 SIM_END = {"DistILC": 33.0, "DistILC + DR": 33.0}     # (2026-10-30, user: "end ours at around 30 sim hours")
@@ -81,10 +81,14 @@ def panel_fig(D, key, xf, xticks, xlabel, name, ytop=None):
         style(ax)
         for arm, per in D[key].items():
             pts = per.get(t)
+            if key == "sim" and arm == "RMA (DR)" and pts and D["sim"].get("PPO", {}).get(t):
+                # (2026-10-30, user: extend RMA) RMA's teacher starts from the same 1.8 h Raibert clone (runs/bc/policy_bc.npz) as
+                # every other arm: its curve begins at that shared start point, as PPO's / PPO + DR's do
+                pts = [D["sim"]["PPO"][t][0]] + pts
             if key == "sim" and arm in SIM_END and pts:
                 pts = [p for p in pts if p[0] <= SIM_END[arm]]
             if pts:
-                draw(ax, arm, pts, xf, LAB[key].get(arm, arm))
+                draw(ax, arm, pts, xf, LAB[key].get(arm, arm).replace(" (DR)", ""))   # (2026-10-30, user: no "(DR)" on RMA / FADA)
         ax.set_title(f"{title} ({len(D['tiers'][t])} robots)", fontsize=7.5, color=INK, pad=3)
         xt, xl = xticks
         ax.set_xticks(xf(np.array(xt, float)))
@@ -104,7 +108,7 @@ def panel_fig(D, key, xf, xticks, xlabel, name, ytop=None):
 if __name__ == "__main__":
     D = json.load(open(os.path.join(HERE, "budget_data.json")))
     panel_fig(D, "sim", np.log10, ([2, 5, 10, 30, 100, 500], ["2", "5", "10", "30", "100", "500"]),
-              "simulated hours (zero-shot)", "pogo_budget_sim", ytop=3.5)   # (2026-10-30, user: FADA's line runs out of frame)
+              "simulated hours (zero-shot)", "pogo_budget_sim", ytop=4.5)   # (2026-10-30, user: FADA's line runs out of frame; then "expand the range": 3.5 -> 4.5)
     real_x = lambda n: np.log2(1.0 + n)                       # 0 (zero-shot) at the left, rollouts on a log scale
     panel_fig(D, "real", real_x, ([0, 12, 36, 96, 384], ["0", "12", "36", "96", "384"]),
               "real rollouts per robot", "pogo_budget_real")

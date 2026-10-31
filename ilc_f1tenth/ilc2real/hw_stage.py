@@ -181,6 +181,8 @@ def run_manual(jobs):
 
 def run_jobs(jobs):
     assert a.backend != 'manual' or not any(isinstance(j['policy'], dict) for j in jobs), 'manual backend: MLP only'
+    if not jobs:                                      # (2026-10-30) e.g. the post-stage evaluation with no eval plans in
+        return []                                     # the bank: run_manual would fail on keys[0] before summary.json
     return run_manual(jobs) if a.backend == 'manual' else rc.run_many(jobs)
 
 DEFAULT_EVAL = [f'mocap_{t}_b{b}' for t in ('square2fast', 'figfast') for b in (25, 21, 14, 0)]
@@ -611,7 +613,7 @@ def main():
     json.dump(summary, open(os.path.join(a.out, 'summary.json'), 'w'), indent=1)
     for c in a.cars:
         print(c, json.dumps({k: (round(v['success'], 2), v['rms_ey'] and round(v['rms_ey'], 3),
-                                 v['rms_dbeta'] and round(v['rms_dbeta'], 1)) for k, v in summary['eval'][c].items()}))
+                                 v['rms_dbeta'] and round(v['rms_dbeta'], 1)) for k, v in summary['eval'].get(c, {}).items()}))
 
 
 if __name__ == '__main__':

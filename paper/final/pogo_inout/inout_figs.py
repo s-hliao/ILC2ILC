@@ -42,8 +42,8 @@ ARM = {"distilc_sim": (S + " (zero-shot)", "#9cc2ee"),                  # zero-s
        "ppo_dr_distilc_hw36": (f"PPO + DR + {H}", "#1baf7a"),
        "ppo_dr_ppo_hw36": (r"PPO + DR + PPO$_\mathrm{hw}$", "#eda100"),
        "ppo_dr_ppo_hw384": (r"PPO + DR + PPO$_\mathrm{hw}$", "#eda100"),
-       "fada_hw24": ("FADA (DR) + adaptation", "#6250d6"),
-       "rma": ("RMA (DR)", INK)}
+       "fada_hw24": ("FADA + adaptation", "#6250d6"),
+       "rma": ("RMA", INK)}
 PANELS = [("matched sim hours (11 h)", ["distilc_sim", "ppo_dr_10h", "ppo_10h"], {}),
           ("matched real rollouts (36 per robot)", ["distilc_hw36", "distilc_dr_hw36", "ppo_dr_distilc_hw36", "ppo_dr_ppo_hw36",
                                                     "fada_hw24"], {"fada_hw24": "24"}),
