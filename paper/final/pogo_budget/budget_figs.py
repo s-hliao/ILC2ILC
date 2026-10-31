@@ -81,9 +81,10 @@ def panel_fig(D, key, xf, xticks, xlabel, name, ytop=None):
         style(ax)
         for arm, per in D[key].items():
             pts = per.get(t)
-            if key == "sim" and arm == "RMA (DR)" and pts and D["sim"].get("PPO", {}).get(t):
-                # (2026-10-30, user: extend RMA) RMA's teacher starts from the same 1.8 h Raibert clone (runs/bc/policy_bc.npz) as
-                # every other arm: its curve begins at that shared start point, as PPO's / PPO + DR's do
+            if key == "sim" and arm in ("RMA (DR)", "FADA (DR)") and pts and D["sim"].get("PPO", {}).get(t):
+                # (2026-10-30, user: extend RMA, then FADA) RMA's teacher starts from the same 1.8 h Raibert clone
+                # (runs/bc/policy_bc.npz) as every other arm, and FADA's hours are that clone + PPO + DR to its snapshot + its own
+                # collection: both curves begin at that shared start point, as PPO's / PPO + DR's do
                 pts = [D["sim"]["PPO"][t][0]] + pts
             if key == "sim" and arm in SIM_END and pts:
                 pts = [p for p in pts if p[0] <= SIM_END[arm]]
