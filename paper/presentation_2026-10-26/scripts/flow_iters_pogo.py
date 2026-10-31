@@ -95,7 +95,7 @@ def main():
                 ps.arrows_scaled(ax, VV, HH, V[:, 1].reshape(HH.shape), V[:, 0].reshape(HH.shape), vs[-1] - vs[0],
                                  hs[-1] - hs[0], N - 1, ref=rl)
                 for j in range(o.shape[1]):
-                    ps.runs(ax, o[:, j, 1], o[:, j, 0], line=True)
+                    ps.runs(ax, o[:, j, 1], o[:, j, 0])   # (2026-10-30, user: no orange lines, the individual apex points)
                 late = o[fp.FP_FROM:]
                 if np.isfinite(late).all():
                     xb = late.reshape(-1, 2).mean(0)

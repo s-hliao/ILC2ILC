@@ -41,14 +41,21 @@ ARM = {"distilc_sim": (S + " (zero-shot)", "#9cc2ee"),                  # zero-s
        "distilc_dr_hw36": (f"{S} + DR + {H}", "#eb6834"),
        "ppo_dr_distilc_hw36": (f"PPO + DR + {H}", "#1baf7a"),
        "ppo_dr_ppo_hw36": (r"PPO + DR + PPO$_\mathrm{hw}$", "#eda100"),
-       "ppo_dr_ppo_hw384": (r"PPO + DR + PPO$_\mathrm{hw}$", "#eda100"),
-       "fada_hw24": ("FADA + adaptation", "#6250d6"),
-       "rma": ("RMA", INK)}
-PANELS = [("matched sim hours (11 h)", ["distilc_sim", "ppo_dr_10h", "ppo_10h"], {}),
-          ("matched real rollouts (36 per robot)", ["distilc_hw36", "distilc_dr_hw36", "ppo_dr_distilc_hw36", "ppo_dr_ppo_hw36",
-                                                    "fada_hw24"], {"fada_hw24": "24"}),
-          ("full budgets", ["distilc_hw36", "distilc_dr_hw36", "ppo_dr_distilc_hw36", "ppo_dr_ppo_hw384",
-                                                     "fada_hw24", "rma"], {"ppo_dr_ppo_hw384": "384", "rma": "514 h"})]
+       "fada_hw36": ("FADA + adaptation", "#6250d6"),
+       "rma": ("RMA (zero-shot)", INK),
+       "ppo_dr_sim": ("PPO + DR (zero-shot)", "#f5cd73")}
+for k, k0 in (("ppo_dr10_distilc_hw36", "ppo_dr_distilc_hw36"), ("ppo_dr10_ppo_hw36", "ppo_dr_ppo_hw36"), ("fada10_hw36", "fada_hw36"),
+              ("rma_low", "rma"), ("ppo_dr_10h", "ppo_dr_sim")):
+    ARM[k] = ARM[k0]                       # the low-budget arm is drawn as its full-budget counterpart
+# (2026-10-30, user: two panels, every arm zero-shot or + at most 36 real rollouts; RMA and FADA in the matched one too)
+# low: each baseline from its earliest snapshot at or above our 11 sim h (PPO + DR 10.3 h; RMA 16.7 h; FADA = the 10.3 h
+# source + its own 12.8 h); ours + DR's picks are 9.3 / 9.3 / 17.8 h
+PANELS = [("matched low budget: ~11 sim h, 36 real rollouts",
+           ["distilc_hw36", "distilc_dr_hw36", "ppo_dr_10h", "ppo_dr10_distilc_hw36", "ppo_dr10_ppo_hw36", "fada10_hw36", "rma_low"],
+           {"rma_low": "17 h", "fada10_hw36": "23 h"}),
+          ("full budgets, 36 real rollouts",
+           ["distilc_hw36", "distilc_dr_hw36", "ppo_dr_sim", "ppo_dr_distilc_hw36", "ppo_dr_ppo_hw36", "fada_hw36", "rma"],
+           {"ppo_dr_sim": "428 h", "rma": "514 h"})]
 SETS = [("IN", "flown"), ("HULL", "in hull"), ("OUT", "out of hull")]
 
 
@@ -65,7 +72,7 @@ def style(ax):
 
 if __name__ == "__main__":
     D = json.load(open(os.path.join(HERE, "inout_matched.json")))
-    fig, axs = plt.subplots(1, 3, figsize=(7.16, 2.9), sharey=True, gridspec_kw=dict(width_ratios=[3.6, 5, 6]))
+    fig, axs = plt.subplots(1, 2, figsize=(7.16, 2.9), sharey=True)
     ymax = max(v[2] for a in D["arms"].values() for v in a.values())
     for ax, (title, arms, note) in zip(axs, PANELS):
         style(ax)
