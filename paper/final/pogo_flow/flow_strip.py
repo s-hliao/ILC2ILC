@@ -71,7 +71,7 @@ def main():
     panels = [(D["V"][k], D["O"][k], rf"$\pi_{k}$" + (" (real, before)" if k == 0 else "")) for k in range(K + 1)]
     panels.insert(0, (Vs, D["Os"], r"sim, $\pi_0$ (reference)"))   # (2026-10-30, user: the reference on the left, as before)
 
-    fig, axs = plt.subplots(1, len(panels), figsize=(7.16, 1.52), sharey=True)
+    fig, axs = plt.subplots(1, len(panels), figsize=(7.16, 1.62), sharey=True)
     for i, (ax, (V, O, ttl)) in enumerate(zip(axs, panels)):
         dV = np.linalg.norm((V - Vs) / tol, axis=1)
         im = ps.background(ax, VV, HH, dV.reshape(HH.shape))
@@ -84,7 +84,10 @@ def main():
         ax.plot(g[0], g[1], "*", color="white", mec=ps.INK, mew=0.6, ms=6.5, zorder=7)
         ax.set_xlim(vs[0], vs[-1])
         ax.set_ylim(hs[0], hs[-1])
-        ax.set_title(ttl, fontsize=7.5, pad=2.5)
+        ax.set_title(ttl, fontsize=7.5, pad=9)
+        # (2026-10-30, user: the deviation back, as "mean error", in the panel's caption line rather than a box)
+        ax.text(0.5, 1.02, f"mean error {np.nanmean(dV):.2f} tol", transform=ax.transAxes, ha="center", va="bottom",
+                fontsize=6, color="#555555")
         ax.set_xticks([0.4, 0.8, 1.2])
         ax.tick_params(labelsize=6, length=2, width=0.5, pad=1.5)
         for s in ax.spines.values():
@@ -100,7 +103,7 @@ def main():
                ["goal", "apexes of 4 perturbed drops (20 hops each)", "next-apex flow"],
                loc="lower right", bbox_to_anchor=(0.93, -0.01), ncol=3, frameon=False, fontsize=6, handlelength=1.4,
                columnspacing=1.0, handletextpad=0.4)
-    fig.subplots_adjust(left=0.062, right=0.925, top=0.86, bottom=0.22, wspace=0.2)
+    fig.subplots_adjust(left=0.062, right=0.925, top=0.80, bottom=0.22, wspace=0.2)
     for a, b in zip(axs[1:-1], axs[2:]):                             # left-to-right reading: an arrow between the iterations
         p, n = a.get_position(), b.get_position()
         fig.text((p.x1 + n.x0) / 2, p.y0 + p.height / 2, r"$\rightarrow$", ha="center", va="center", fontsize=7, color=ps.INK)
