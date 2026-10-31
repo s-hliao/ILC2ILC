@@ -1,0 +1,11 @@
+% pogo_flow.pdf caption (2026-10-30); numbers from flow_strip_data.npz (mean over the 13 x 13 grid; fixed point = mean apex of hops 10-20)
+\caption{\textbf{The hardware stage re-converges the closed-loop flow.} Apex-to-apex return map of the pogo stick at the
+goal (0.8\,m/s, 0.62\,m; star): arrows give the next apex from each apex state, orange points are the apexes of four
+perturbed drops over 20 hops. Left: the nominal simulator under the simulation-trained policy $\pi_0$ (the reference).
+Then the deployment stick (a +0.05\,rad leg-angle calibration offset, outside the DR range of $\pm$0.03\,rad, and
+unmodelled leg damping, simulated by an independent finer-step simulator) under $\pi_0$ and after each stage
+iteration $\pi_1,\dots,\pi_4$ (6 real trials per iteration). Shading: deviation of the field from the reference,
+$\lVert V - V_{\mathrm{sim},\pi_0}\rVert$ in tolerance units (2\,cm apex height, 0.1\,m/s speed). The mean deviation
+over the plotted region falls from 4.21 at $\pi_0$ to 1.55, 1.51, 1.47 and 1.41 at $\pi_1$--$\pi_4$, while the drops'
+fixed point moves from 3.14 tolerances off the goal to 0.78, 0.16, 0.02 and 0.01: the stage restores the flow where
+the task needs it, near the goal, not the whole field.}

@@ -2,7 +2,7 @@
 version of presentation_2026-10-26/scripts/flow_iters_pogo.py; user: "it needs to be thin, along a line going left to
 right", no orange lines, the individual points instead).
   panels      the real offset stick under pi_0 (corrupted) .. pi_4 (ours, nominal sim, servo leg: runs/v3/nom_s0_curve),
-              then the sim under pi_0 (the reference the stage pulls toward)
+              after the sim under pi_0 (the reference the stage pulls toward), leftmost
   background  |V - V_sim,pi0| in tolerance units (2 cm apex, 0.1 m/s), white = the sim's field
   arrows      the apex-to-apex return map (next apex - apex) at the goal (0.8 m/s, 0.62 m)
   points      the apexes of 4 perturbed drops x 20 hops (where the old orbit lines turned); star = goal (2026-10-30, user: no tolerance box)
@@ -69,7 +69,7 @@ def main():
     rl = ps.ref_len(Vs[:, 1], Vs[:, 0], xs, ys)
     sub = slice(None, None, 2)                                       # arrows on every other grid node (7 x 7)
     panels = [(D["V"][k], D["O"][k], rf"$\pi_{k}$" + (" (real, before)" if k == 0 else "")) for k in range(K + 1)]
-    panels.append((Vs, D["Os"], r"sim, $\pi_0$ (reference)"))
+    panels.insert(0, (Vs, D["Os"], r"sim, $\pi_0$ (reference)"))   # (2026-10-30, user: the reference on the left, as before)
 
     fig, axs = plt.subplots(1, len(panels), figsize=(7.16, 1.52), sharey=True)
     for i, (ax, (V, O, ttl)) in enumerate(zip(axs, panels)):
@@ -85,9 +85,6 @@ def main():
         ax.set_xlim(vs[0], vs[-1])
         ax.set_ylim(hs[0], hs[-1])
         ax.set_title(ttl, fontsize=7.5, pad=2.5)
-        dev = "" if i == len(panels) - 1 else f"{np.nanmean(dV):.1f} tol"
-        ax.text(0.97, 0.04, dev, transform=ax.transAxes, ha="right", va="bottom", fontsize=6, color=ps.INK,
-                bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.8), zorder=8)
         ax.set_xticks([0.4, 0.8, 1.2])
         ax.tick_params(labelsize=6, length=2, width=0.5, pad=1.5)
         for s in ax.spines.values():
@@ -104,7 +101,7 @@ def main():
                loc="lower right", bbox_to_anchor=(0.93, -0.01), ncol=3, frameon=False, fontsize=6, handlelength=1.4,
                columnspacing=1.0, handletextpad=0.4)
     fig.subplots_adjust(left=0.062, right=0.925, top=0.86, bottom=0.22, wspace=0.2)
-    for a, b in zip(axs[:-1], axs[1:]):                              # left-to-right reading: an arrow between neighbours
+    for a, b in zip(axs[1:-1], axs[2:]):                             # left-to-right reading: an arrow between the iterations
         p, n = a.get_position(), b.get_position()
         fig.text((p.x1 + n.x0) / 2, p.y0 + p.height / 2, r"$\rightarrow$", ha="center", va="center", fontsize=7, color=ps.INK)
     p = axs[-1].get_position()
