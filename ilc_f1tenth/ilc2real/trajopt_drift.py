@@ -62,7 +62,7 @@ def spatial_rhs(p):
     return ca.Function('rhs', [z, u, k], [dz / sdot, 1 / sdot])
 
 
-def solve(track, beta_d, N, p, guess=None, w=None, e_max=0.3, v_star=None, max_iter=3000, kappa0=0.25, vscale=1.0):
+def solve(track, beta_d, N, p, guess=None, w=None, e_max=0.3, v_star=None, max_iter=3000, kappa0=0.25, vscale=1.0, a_max=0.0):
     w = {**dict(y=200.0, b=60.0, v=4.0, r=0.5, du=(2.0, 2e-4), u=(0.0, 1e-5)), **(w or {})}
     L = track.length
     h = L / N
@@ -72,7 +72,8 @@ def solve(track, beta_d, N, p, guess=None, w=None, e_max=0.3, v_star=None, max_i
     kap = track.at(s_nodes, track.kappa)
     beta_t = -beta_d * np.tanh(track.at(s_nodes, ks) / kappa0)
     V_d = v_star or track.design_speed
-    V_t = vscale * np.minimum(V_d, np.sqrt(A_LAT / np.maximum(np.abs(track.at(s_nodes, ks)), 0.05)))
+    a_lat = min(A_LAT, a_max) if a_max > 0 else A_LAT
+    V_t = vscale * np.minimum(V_d, np.sqrt(a_lat / np.maximum(np.abs(track.at(s_nodes, ks)), 0.05)))
     rhs = spatial_rhs(p)
     opti = ca.Opti()
     Z = opti.variable(NZ, N)                  # interval starts (periodic: z_N = z_0)
@@ -96,6 +97,10 @@ def solve(track, beta_d, N, p, guess=None, w=None, e_max=0.3, v_star=None, max_i
             J += wq * (w['y'] * zz[0] ** 2 + w['b'] * (beta - beta_t[k, j - 1]) ** 2 + w['v'] * (V - V_t[k, j - 1]) ** 2
                        + w['r'] * (zz[4] - r_t) ** 2)
             T += wq * dt_ds
+            if a_max > 0:                       # --a-max: the planned total acceleration |(a_x, a_y)| <= a_max
+                a_x = fz[2] / dt_ds - zz[3] * zz[4]
+                a_y = fz[3] / dt_ds + zz[2] * zz[4]
+                opti.subject_to(a_x ** 2 + a_y ** 2 <= a_max ** 2)
         opti.subject_to(znext == sum(D[r] * pts[r] for r in range(4)))
         du = U[:, (k + 1) % N] - U[:, k]
         J += (w['du'][0] * du[0] ** 2 + w['du'][1] * du[1] ** 2) / h
@@ -177,6 +182,8 @@ def main():
     ap.add_argument('--e-max', type=float, default=0.3, help='(2026-10-31, user: keep the reference path closely) the plan\'s |e_y| bound (m)')
     ap.add_argument('--mu-plan', type=float, default=1.0, help='friction scale the plan is solved for (conservative plans: < 1)')
     ap.add_argument('--vscale', type=float, default=1.0, help='scales the whole speed target (slower plans: < 1)')
+    ap.add_argument('--a-max', type=float, default=0.0, help='(2026-10-31) a hard bound on the planned total acceleration '
+                    '(m/s^2): slower corners, straights unchanged (0: none)')
     ap.add_argument('--tag', default='', help='suffix of the saved plan names, e.g. _mu80')
     ap.add_argument('--w-beta', type=float, default=60.0, help='the sideslip target\'s weight (0: no sideslip target -- a pure '
                     'path + pace plan, the sideslip whatever the optimum is; 2026-10-26 user: the reference is the track only)')
@@ -190,7 +197,7 @@ def main():
     os.makedirs(a.out, exist_ok=True)
     guess = None
     for b in [x for x in a.steps if x < a.beta] + [a.beta]:
-        sol, info = solve(tr, np.radians(b), N, p, guess, v_star=a.vstar or None, vscale=a.vscale, w=dict(b=a.w_beta), e_max=a.e_max)
+        sol, info = solve(tr, np.radians(b), N, p, guess, v_star=a.vstar or None, vscale=a.vscale, w=dict(b=a.w_beta), e_max=a.e_max, a_max=a.a_max)
         print(json.dumps(info), flush=True)
         if info['success'] or guess is None:
             guess = sol
@@ -202,7 +209,7 @@ def main():
                   f'delta {np.degrees(plan["z"][:, 7]).min():.1f}..{np.degrees(plan["z"][:, 7]).max():.1f}, '
                   f'I {plan["u"][:, 1].min():.1f}..{plan["u"][:, 1].max():.1f}, '
                   f'wheel slip {np.median(p["rw"] * plan["z"][:, 5] / plan["z"][:, 2] - 1):.2f}', flush=True)
-            np.savez(os.path.join(a.out, f'{a.track}_b{b:g}{a.tag}.npz'), info=json.dumps(dict(info, mu_plan=a.mu_plan, vscale=a.vscale, w_beta=a.w_beta)), N=N,
+            np.savez(os.path.join(a.out, f'{a.track}_b{b:g}{a.tag}.npz'), info=json.dumps(dict(info, mu_plan=a.mu_plan, vscale=a.vscale, w_beta=a.w_beta, a_max=a.a_max)), N=N,
                      Z=sol[0], Zc=np.stack(sol[1]), U=sol[2], **plan)
 
 

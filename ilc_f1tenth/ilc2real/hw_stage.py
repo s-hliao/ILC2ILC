@@ -55,6 +55,15 @@ ap.add_argument('--fit-noise', type=float, default=0.0, help='(2026-10-30) > 0: 
                 'normalized observation units), its target shifted by the pre-update network: y + mu(o + n) - mu(o), so the refit '
                 'keeps the network slope around the laps (one update changed the feedback gains by 2.4 x on the current channel, '
                 'while the GN step takes them as fixed)')
+ap.add_argument('--slip-max', type=float, default=0.0, help='(2026-10-31; user OK to test) > 0: a trial is cut for the GN step at its '
+                'first sample whose MEASURED axle slip angle (front or rear, from the measured state and the nominal geometry) '
+                'exceeds this (deg), minus 4 samples -- as a crash cuts it (ilc_core.pad_runs): in a spin the nominal model\'s '
+                'predictions fail (plastic figfast: measured -1233 vs predicted -3134 below 35 deg, +2152 vs -5006 above), and '
+                'everything after it follows from the spin. 0: off')
+ap.add_argument('--slope-dims', type=int, default=0, help='(2026-10-31) > 0: the slope anchor\'s directions v only over the first this '
+                'many observation entries -- 13 = the state part (8 deviations + 5 raw states: the network\'s FEEDBACK, which the GN '
+                'step holds fixed), leaving the track-preview entries (where the car is on the lap: the feedforward) free, as the '
+                'quad\'s --reg-jac anchors only the error states; 0: every entry (the old behaviour)')
 ap.add_argument('--slope-w', type=float, default=0.0, help='(2026-10-30, the anchored refit anchors the network SLOPE too; user OK) '
                 '> 0: the refit also penalizes changing the network\'s local slope at the trial states, this weight x the mean '
                 '|d/de [mu_new(o + e v)] - d/de [mu_old(o + e v)]|^2 over random directions v ~ N(0, I) (a JVP: an unbiased '
@@ -137,11 +146,30 @@ import numpy as np                               # noqa: E402
 import optax                                     # noqa: E402
 
 import bank                                      # noqa: E402
+import car_model as cm                           # noqa: E402
 import ilc_core                                  # noqa: E402
 import real_car as rc                            # noqa: E402
 import sim_jax as sj                             # noqa: E402
 
 PER_STEP = ('x', 'x_true', 'obs', 'obs_true', 'mu', 'a', 'err', 'err_true', 'idx', 'applied')
+
+
+
+def slip_cut(xs, valid):
+    """--slip-max: valid[k, t0 - 4:] = False from the first sample t0 whose measured axle slip exceeds a.slip_max (deg)."""
+    if a.slip_max <= 0:
+        return valid
+    lf, lr = cm.NOMINAL['lf'], cm.NOMINAL['lr']
+    vx = np.maximum(xs[:, :-1, 3], 0.3)
+    af = np.abs(xs[:, :-1, 8] - np.arctan2(xs[:, :-1, 4] + lf * xs[:, :-1, 5], vx))
+    ar = np.abs(np.arctan2(xs[:, :-1, 4] - lr * xs[:, :-1, 5], vx))
+    over = (np.degrees(np.maximum(af, ar)) > a.slip_max) & valid
+    valid = valid.copy()
+    for k in range(len(valid)):
+        hit = np.nonzero(over[k])[0]
+        if len(hit):
+            valid[k, max(hit[0] - 4, 0):] = False
+    return valid
 
 
 def run_manual(jobs):
@@ -155,7 +183,15 @@ def run_manual(jobs):
         k = f'{k0 + i:05d}'
         pol = j['policy']
         pf = os.path.join(sd, f'policy_{k}.npz')
-        np.savez(pf, **{f'W{n}': np.asarray(W) for n, (W, b) in enumerate(pol)}, **{f'b{n}': np.asarray(b) for n, (W, b) in enumerate(pol)})
+        if isinstance(pol, dict):                  # (2026-10-31) RMA: the trained actor (mode rma) + the frozen adaptation
+            ad = os.path.join(sd, 'rma_adapt.npz')  # module next to it, as policy_runtime.load_policy reads them
+            if not os.path.exists(ad):
+                np.savez(ad, **{f'W{n}': np.asarray(W) for n, (W, b) in enumerate(pol['adapt'])},
+                         **{f'b{n}': np.asarray(b) for n, (W, b) in enumerate(pol['adapt'])}, hist=int(pol['hist']))
+            np.savez(pf, **{f'W{n}': np.asarray(W) for n, (W, b) in enumerate(pol['actor'])},
+                     **{f'b{n}': np.asarray(b) for n, (W, b) in enumerate(pol['actor'])}, mode='rma')
+        else:
+            np.savez(pf, **{f'W{n}': np.asarray(W) for n, (W, b) in enumerate(pol)}, **{f'b{n}': np.asarray(b) for n, (W, b) in enumerate(pol)})
         tmp = os.path.join(sd, f'.req_{k}.json')
         json.dump(dict(plan=j['plan']['name'], policy=os.path.abspath(pf), laps=float(j['laps']),
                        launch=dict(v_hand=float(a.launch[0]), current=float(a.launch[1])), car=j['car_name']),
@@ -180,7 +216,8 @@ def run_manual(jobs):
 
 
 def run_jobs(jobs):
-    assert a.backend != 'manual' or not any(isinstance(j['policy'], dict) for j in jobs), 'manual backend: MLP only'
+    assert a.backend != 'manual' or not any(isinstance(j['policy'], dict) and 'actor' not in j['policy'] for j in jobs), \
+        'manual backend: MLP or RMA only'
     if not jobs:                                      # (2026-10-30) e.g. the post-stage evaluation with no eval plans in
         return []                                     # the bank: run_manual would fail on keys[0] before summary.json
     return run_manual(jobs) if a.backend == 'manual' else rc.run_many(jobs)
@@ -360,6 +397,7 @@ def main():
     tr_last = {c: {} for c in a.cars}          # --tr: goal -> (J measured, J predicted for the realized change) of the kept step
     tr_log = {c: [] for c in a.cars}
     tr_kept_it = {c: None for c in a.cars}
+    tr_win = {c: {} for c in a.cars}           # --slip-max: goal -> end of the kept step's valid window
     realize = {c: [] for c in a.cars}
     goal_now = {c: {g: g for g in a.goals} for c in a.cars}
     rung = {c: {g: 0 for g in a.goals} for c in a.cars}
@@ -469,6 +507,11 @@ def main():
                 continue
             if a.tr:                                   # rho from the J of this trial vs the kept step's prediction
                 xs_, idx_, acts_, err_, valid_ = ilc_core.pad_runs(rr, T)
+                if a.slip_max > 0:                     # the prediction's own window: spin inside it counts against the step
+                    for k in range(len(rr)):
+                        w_ = tr_win[c].get(gn_names[pid_c[k]])
+                        if w_ is not None:
+                            valid_[k, w_:] = False
                 _, J_now, _ = gn_call(c, rr, jnp.array(xs_), jnp.array(idx_), jnp.array(acts_),
                                       jnp.array(pid_c), jnp.array(valid_), jnp.array(err_))
                 J_now = {gn_names[pid_c[k]]: float(np.nan_to_num(np.asarray(J_now)[k])) for k in range(len(rr))}
@@ -499,6 +542,7 @@ def main():
             last_crashed[c] = crashed
             prev_params[c] = params[c]
             xs, idx, acts, err, valid = ilc_core.pad_runs(rr, T)
+            valid = slip_cut(xs, valid)
             if a.pace_target != 1.0 or a.pace_local > 0:   # the pace row against the target fraction of the plan's speed
                 for k in range(len(rr)):
                     pl_k = by_name[gn_names[pid_c[k]]]
@@ -547,6 +591,8 @@ def main():
                     ob, yb = O_[b], Y_[b]
                     os_ = ob                                    # the trial states (before any --fit-noise shift)
                     vs = jnp.array(rs.standard_normal(ob.shape), ob.dtype)
+                    if a.slope_dims > 0:
+                        vs = vs.at[:, a.slope_dims:].set(0.0)
                     ds = jvp_j(params[c], os_, vs) if a.slope_w > 0 else jnp.zeros(yb.shape, yb.dtype)
                     if a.fit_noise > 0:
                         on = ob + a.fit_noise * jnp.array(rs.standard_normal(ob.shape), ob.dtype)
@@ -564,6 +610,8 @@ def main():
                 f_ = float(np.clip(realized, 0.0, 1.0))
                 tr_last[c].update({gn_names[pid_c[k]]: (float(J[k]), float(J[k] - (2 * f_ - f_ ** 2) * (J[k] - Jp[k])), it)
                                    for k in range(len(rr)) if valid[k].any()})   # per goal: its last kept trial (goals cycle)
+                tr_win[c].update({gn_names[pid_c[k]]: int(np.nonzero(valid[k])[0][-1]) + 1
+                                  for k in range(len(rr)) if valid[k].any()})
                 tr_kept_it[c] = it
             if np.isfinite(float(l)) and all(np.isfinite(np.asarray(W)).all() for W, b in ps):
                 params[c] = ps                           # a non-finite fit is discarded
