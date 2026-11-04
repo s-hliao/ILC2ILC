@@ -95,6 +95,12 @@ ap.add_argument("--train-starts", type=float, default=0.0, metavar="S",
                 help="container: every hardware jump starts from its own posture, the front and rear leg pairs bent by "
                      "s_f, s_r ~ U(-S, S) x (hip +0.1, knee -0.2) rad (+-1: the test's crouch / tall / nose-up / "
                      "nose-down); its ILC step linearizes the GPU sim flown from the same start. 0: the nominal stance")
+ap.add_argument("--start-stance", type=float, nargs=2, default=None, metavar=("S_F", "S_R"),
+                help="(2026-11-01) with --train-starts: every goal's every jump from this ONE stance (s_f, s_r: the front / rear "
+                     "pair bent by s x (hip +0.1, knee -0.2) rad; 1 1 = crouch, the hardware arm's hw_session.py --start crouch)")
+ap.add_argument("--start-goals", nargs="+", default=None, metavar="G",
+                help="(2026-11-02) with --train-starts: only these goals practise from a perturbed stance, the others from the "
+                     "nominal one (arm B mixed: the nominal bias is corrected with real nominal trials). Default: every goal")
 ap.add_argument("--starts-fixed", action="store_true",
                 help="with --train-starts: each goal's start is drawn once and kept for every iteration (the ILC "
                      "repeated-initial-condition assumption: the gate / bold / stall checks then compare jumps from the same "
@@ -109,9 +115,10 @@ ap.add_argument("--anchor-pert", action="store_true",
                 help="anchor states also from 16 perturbed stances (sigma_q 0.08), not only the 16 nominal ones")
 ap.add_argument("--lr", type=float, default=1e-4)
 ap.add_argument("--seed", type=int, default=9001)
-ap.add_argument("--eval", default="val", choices=("val", "final", "holdout", "boxval", "boxfinal", "comboval", "combofinal", "planeval", "planefinal",
+ap.add_argument("--eval", default="val", choices=("val", "final", "holdout", "boxval", "boxfinal", "comboval", "combofinal", "planeval", "planefinal", "plane20",
                                        "planetrain", "none"))
 ap.add_argument("--perturbed", action="store_true")
+ap.add_argument("--rob-dir", default="final701", help="(2026-11-01) the perturbed evaluation's condition files: log/dilc/<DIR>/rob_<robot>.txt (final701: the original 8; final701h: half tall / nose-up, rear-feet blocks)")
 ap.add_argument("--target-base", default="flown", choices=("flown", "own"),
                 help="the step starts from the action the robot flew (after the controller's clipping: stays "
                      "feasible) or from the network's own output (unclipped)")
@@ -163,10 +170,26 @@ ap.add_argument("--nbr-grid", type=float, default=0.025, help="the neighbours' g
 ap.add_argument("--reps", type=int, default=1,
                 help="jumps per goal per iteration (seeds): gn steps on their mean landing error and sensitivity, the "
                      "safeguards on their mean J, every jump a target (the noise floor: --iters 5 --reps 2 is 30 jumps)")
-ap.add_argument("--jac-at", default="sim", choices=("sim", "real"),
+ap.add_argument("--fb-nbr-nominal", action="store_true", help="--jac-at fb: the neighbours' targets on the nominal sim's Jacobians along their own rollouts, not the flown trial's")
+ap.add_argument("--fb-damping", type=float, default=None,
+                help="--jac-at fb: the thigh / calf joint damping (N m s / rad per motor) in the full-body linearization (default: the model's); on hardware the value from fit_damping.py")
+ap.add_argument("--stages", type=int, nargs=2, default=None, metavar=("N1", "N2"),
+                help="(--update gn, --clip-mode weighted, --traj-rows > 0; 2026-11-01) Nguyen et al.'s staged update: Stage I for N1 iterations "
+                     "(the stance tracking rows only), Stage II for N2 (the rows from rear-only contact to take-off plus the landing's; the "
+                     "flight is ballistic, so these carry its rows), then Stage III (the landing's). The runaway rollback in Stage III only, "
+                     "as our JumpILC's safeguard; the fall rollback in all three")
+ap.add_argument("--jac-at", default="sim", choices=("sim", "real", "srb", "srbm", "fb"),
                 help="gn: the one-step Jacobians of the nominal sim along its own trajectory for the goal (sim), or with the "
                      "sim restored to each trial's measured states (real: mocap pose and joint encoders, the stance feet "
-                     "at the sim's contact depth), the trial's flown actions")
+                     "at the sim's contact depth), the trial's flown actions; srb: Nguyen et al.'s single rigid body along the "
+                     "executed trial (the episode's own A, B, the plan's lever arms); srbm: the same with the trial's MEASURED lever arms "
+                     "(eq. 24-26: A is constant, r_i the model's only trajectory dependence; foot - CoM from the encoders and mocap pitch, "
+                     "the pose aligned by --restore-latency); fb: the planar full-body model with planted feet along the executed trial, by "
+                     "autodiff (no nominal rollout, no finite differences; 2026-11-01: it predicts the measured force response, the SRB does not), the neighbours' targets too")
+ap.add_argument("--restore-latency", type=float, default=0.0,
+                help="(2026-11-01) with --jac-at real: the mocap pose's latency (s; the robot's pose_latency, on hardware the measured "
+                     "--pose-latency): the restored base pose is read at t + latency, so body and encoders agree (0: as before, "
+                     "where the 6-15 ms lag put a foot pair 15-22 mm into the ground at push-off and fd_at's Jacobian was 3-80 x off)")
 ap.add_argument("--backend", default="container", choices=("container", "manual"),
                 help="container: the sim robots fly (dilc_execute in the ilc_quad container); manual: a real robot -- "
                      "each iteration writes OUT/<robot>/it<k>/REQUEST.md (the jumps to fly with policy_jump_node) and "
@@ -265,7 +288,9 @@ EVAL = dict(val=([0.45, 0.4625, 0.5375, 0.55], 301), final=([0.4375, 0.4875, 0.5
                          (0.6375, 0.09)], 701),
             # planetrain (2026-10-30): the stage's own PRACTICED goals (stage_*.sh ALL), the ILC protocol's task (Nguyen et
             # al. score the jump they practice); fresh eval seed, so its episodes are not the stage's trials
-            planetrain=([0.45, 0.60, (0.50, 0.15), (0.60, 0.10), (0.50, 0.05), (0.575, 0.15)], 501))
+            planetrain=([0.45, 0.60, (0.50, 0.15), (0.60, 0.10), (0.50, 0.05), (0.575, 0.15)], 501),
+            # plane20 (2026-11-02): the high end of the bank, which planeval (top 16 cm) never reaches: three bank goals, two between them
+            plane20=([(0.50, 0.20), (0.55, 0.20), (0.60, 0.20), (0.525, 0.20), (0.575, 0.18)], 801))
 EVAL = {k: ([tuple(g) if isinstance(g, tuple) else (float(g), 0.0) for g in v[0]], v[1]) for k, v in EVAL.items()}
 gvec = lambda g: np.array(g, float)                                  # goal -> (x, h)
 gkey = lambda v: (round(float(v[0]), 4), round(float(v[1]), 4))     # a goal or an episode's goal -> dict key
@@ -375,6 +400,15 @@ def export(w, d):
 # ILC_QUAD_OVERLAY (a container path): an ilc_quad package put first on the robots' PYTHONPATH -- the box-fix reruns
 # (log/dilc/plane/fixbox) fly the fixed robots while other runs keep the installed ones
 OVERLAY = f"export PYTHONPATH={os.environ['ILC_QUAD_OVERLAY']}:$PYTHONPATH && " if os.environ.get("ILC_QUAD_OVERLAY") else ""
+# ILC_ROBOT_DAMPING (2026-11-01): the robots' thigh / calf joint damping, the overlay's ILC_SIM_DAMPING (Menagerie: 2; Unitree's URDF: 0): the networks and the GPU sim stay as trained
+if os.environ.get("ILC_ROBOT_DAMPING"):
+    OVERLAY += f"export ILC_SIM_DAMPING={os.environ['ILC_ROBOT_DAMPING']} && "
+# ILC_FREE_LANDING / ILC_LAND_ZMIN (2026-11-01): the bank's plans were solved with the landing joints free: the robots' node must build the same task config, and take the plan's landing height as the goal
+for _v in ("ILC_FREE_LANDING", "ILC_LAND_ZMIN", "ILC_FTH_MAX", "ILC_LAND_FEET"):
+    if os.environ.get(_v):
+        OVERLAY += f"export {_v}={os.environ[_v]} && "
+if os.environ.get("DILC_NODE_PARAMS"):     # (2026-11-01) e.g. ilc_landing_state:=tail: the robots' node reads it from its own environment
+    OVERLAY += f"export DILC_NODE_PARAMS='{os.environ['DILC_NODE_PARAMS']}' && "
 
 
 def flown(*args, **kw):
@@ -607,11 +641,77 @@ def clearance_rows(zs, w, gi, An, Bn, g):
     return rows, res, cmins
 
 
-def traj_rows(zs, w, gi, An, Bn):
+def srb_measured(z_):
+    """(A, B) (1, Nc, ...) normalized as An, Bn: Nguyen et al.'s SRB along this trial, its lever arms measured (the feet relative to the
+    CoM from the joint encoders and pitch at each control sample)."""
+    from ilc_mjx.jump import _pitch
+    t, quat, q = np.asarray(z_["rec_t"], float), np.asarray(z_["rec_quat"], float), np.asarray(z_["rec_q"], float)
+    X_, U_ = np.asarray(z_["logX"], float), np.asarray(z_["U"], float)
+    Am, Bm = np.zeros((Nc, 6, 6)), np.zeros((Nc, 6, 4))
+    fr = np.array([0.0, float(srb_maker.fb.foot_radius)])
+    for k in range(Nc):
+        i = min(k * env.tps, len(t) - 1); j = int(np.argmin(np.abs(t - (t[i] + a.restore_latency))))
+        sv = jnp.asarray(np.concatenate([[0.0, 0.0, float(_pitch(jnp.asarray(quat[j], jnp.float32)))], 0.5 * np.asarray(env.E).T @ q[i]]), jnp.float32)
+        c_, f_ = np.asarray(env.pl.com(sv), float), np.asarray(env.pl.feet(sv), float).reshape(2, 2)
+        A_, B_ = srb_maker.srb.f_lin(X_[k], U_[k], f_[0] - c_ - fr, f_[1] - c_ - fr, env.dt)
+        Am[k] = A_.full() * D[None, :] / D[:, None]; Bm[k] = B_.full() * A_SCALE[None, :] / D[:, None]
+        if k >= Ndc:                                            # the front legs are off the ground (eq. 12, E_phase)
+            Bm[k, :, :2] = 0.0
+    return Am[None], Bm[None]
+
+
+FBL = None
+
+
+def fb_lift(z_, g):
+    """(A, B, C, CN) of the trial z_ for goal g: 14-state full-body one-step Jacobians (B per action unit, the swing legs' zero), C (Nc, 6, 14) the normalized state's map, CN the take-off's."""
+    global FBL
+    if FBL is None:
+        from fullbody_lin import FullBodyLin
+        (gs_, gj_, gc_, _) = env.cfg.gains
+        if a.fb_damping is not None:
+            srb_maker.fb.damping = 2.0 * np.array([a.fb_damping] * 4)     # a motor pair's, as PlanarQuadModel's
+        FBL = FullBodyLin(srb_maker.fb, Ndc, Nc, env.N, env.dt, gc_[0], gc_[1], gj_[0], gj_[1])
+    r = {k_: np.asarray(v_)[0] for k_, v_ in env.references(np.array([gvec(g)])).items()}
+    X_, U_ = np.asarray(z_["logX"], float), np.asarray(z_["U"], float)
+    Eq = 0.5 * np.asarray(env.E).T
+    qt, dqt, n_ = np.asarray(z_["rec_q"], float), np.asarray(z_["rec_dq"], float), len(np.asarray(z_["rec_t"]))
+    Qk = lambda k: Eq @ qt[min(k * env.tps, n_ - 1)]
+    Dk = lambda k: Eq @ dqt[min(k * env.tps, n_ - 1)]
+    kpc, kdc, kpj, kdj = FBL.gains
+    A, B, C = [], [], []
+    h = env.dt / FBL.nsub
+    for k in range(Nc):
+        zk = FBL.state(X_[k], Qk(k), Dk(k))
+        fr = 1.0 if k < Ndc else 0.0
+        kp = np.array([kpc if fr else kpj] * 2 + [kpc] * 2); kd = np.array([kdc if fr else kdj] * 2 + [kdc] * 2)
+        Ac, Bc = FBL.jac(zk[:7], zk[7:], U_[k], r["tau"][k], r["u_ref"][k], r["q_ref"][k], r["qd_ref"][k], kp, kd, fr)
+        Ac, Bc = np.asarray(Ac), np.asarray(Bc) * A_SCALE[None, :] * mask[k][None, :]
+        Ad, Bd = np.eye(14), np.zeros((14, 4))
+        for _ in range(FBL.nsub):
+            Bd = Bd + h * Ad @ Bc; Ad = Ad @ (np.eye(14) + h * Ac)
+        A.append(Ad); B.append(Bd); C.append(np.asarray(FBL.C(zk[:7], zk[7:])[0]) / D[:, None])
+    zN = FBL.state(X_[Nc], Qk(Nc), Dk(Nc))
+    Cx, Co = FBL.C(zN[:7], zN[7:]); CN = np.array(Cx, float); CN[5] = np.asarray(Co).ravel()
+    return A, B, C, CN / D[:, None]
+
+
+def fb_sensitivity(lift, obs, w):
+    """G_N (3, Nc, 4) closed loop through the policy's feedback at obs, along the lifted trial."""
+    A, B, C, CN = lift
+    K = np.asarray(dpi_fn(jnp.asarray(np.asarray(obs, float)[:Nc], jnp.float32), w))[..., :6]
+    Z = np.zeros((14, Nc * 4))
+    for k in range(Nc):
+        Z = (A[k] + B[k] @ K[k] @ C[k]) @ Z
+        Z[:, 4 * k:4 * k + 4] += B[k]
+    return ((PHI[:3] * D[None, :]) @ CN @ Z).reshape(3, Nc, 4)
+
+
+def traj_rows(zs, w, gi, An, Bn, ks=None):
     """--traj-rows: (rows (m, Nc*4), residuals (m,)) in the landing's tolerance units, the trials' mean: the measured
     stance error of base x, z, pitch (obs[k, :3], normalized -> physical by D) at k = s, 2s, ... < Nc, and its
     closed-loop sensitivity d e_k / d a (the forward chain, the policy's feedback at each trial's states)."""
-    ks = np.arange(a.traj_rows, Nc, a.traj_rows)
+    ks = np.arange(a.traj_rows, Nc, a.traj_rows) if ks is None else ks
     R, E = [], []
     for z_ in zs:
         obs = np.asarray(z_["obs"], float)
@@ -667,6 +767,8 @@ def gate(w_old, w_new, O_real, g_lo, g_hi, it):
     xr = np.asarray(ref["x_ref"])
     tg = xr[:, env.N].copy()
     tg[:, :2] = xr[:, 0, :2] + np.concatenate([goals, goals])
+    if os.environ.get("ILC_FREE_LANDING"):   # ILC_FREE_LANDING (2026-11-01): the TO picked the landing height, the target is the plan's, not standing height + box
+        tg[:, 1] = xr[:, env.N, 1]
     tg[:, 2] = 0.0
     qe, rs = np.asarray(bank["qe"], float), float(bank["r_scale"])
     dyn = env.dyn_arrays(env.sample_dyn(len(q_off), np.random.default_rng(4242 + it))) if a.gate_dr else None
@@ -684,9 +786,11 @@ def gate(w_old, w_new, O_real, g_lo, g_hi, it):
                 f"max action change on the robot's states {da:.3f}")
 
 
-def request_jumps(pdir, robot, it, rdir, out, goals):
+def request_jumps(pdir, robot, it, rdir, out, goals, starts_it=None):
     """--backend manual: the jumps this iteration needs, written for the operator (REQUEST.md), then wait for their
-    episodes (policy_jump_node.py writes them) in rdir."""
+    episodes (policy_jump_node.py writes them) in rdir. starts_it (2026-11-01, --train-starts on hardware): {goal: the 4
+    planar stand offsets [front hip, front knee, rear hip, rear knee]} -- each goal's jumps from its own stance, as the
+    simulated arm; hw_session.py reads them from REQUEST.json (stand_offset per goal)."""
     os.makedirs(rdir, exist_ok=True)
     need = {gkey(g): a.reps for g in goals}
     lines = [f"# {robot}, iteration {it}: {len(goals) * a.reps} jumps", "",
@@ -698,16 +802,19 @@ def request_jumps(pdir, robot, it, rdir, out, goals):
         _gb = _GB(dict(bank, plans=[dict(p_, path=host_path(p_["path"])) for p_ in bank["plans"]]))
         margin = json.loads(str(_gb.reference(gvec(g))[0]["config"]))["margin"]   # the plan's: the node must match it
         box_args = (f" box_x_front:={bx[0]:.4f} box_height:={bx[1]:.4f}" if bx[1] >= 0.005 else "") + f" margin:={margin}"
+        so = (" stand_offset:=[" + ",".join(f"{v:.4f}" for v in starts_it[g]) + "]") if starts_it else ""
         lines += [f"## goal {gname(g)} m" + (f" -- BOX: front face {bx[0]:.3f} m ahead of the standing CoM, "
                                             f"{bx[1]:.3f} m tall" if bx[1] >= 0.005 else " (flat)"), "```",
                   f"python3 policy_jump_node.py prepare --policy {pdir} --goal {g[0]} {g[1]} --out {ref}",
                   f"ros2 launch ilc_quad policy_jump_go1.launch.py pose_topic:=<mocap topic> policy_dir:={pdir} \\",
-                  f"    reference_file:={ref} jump_dx:={g[0]} jump_dz:={g[1]}{box_args} episode_dir:={rdir} episode_tag:={robot}_it{it}",
+                  f"    reference_file:={ref} jump_dx:={g[0]} jump_dz:={g[1]}{box_args}{so} episode_dir:={rdir} episode_tag:={robot}_it{it}",
                   f"ros2 service call /start_trial std_srvs/srv/Trigger    # x{a.reps}", "```", ""]
     lines += ["A fall is data too: keep its episode (the update rolls that goal back). To abort the run, write "
               f"`{os.path.join(rdir, 'ABORT')}`.", ""]
     open(os.path.join(out, f"it{it}", "REQUEST.md"), "w").write("\n".join(lines))
-    json.dump(dict(robot=robot, it=it, policy=pdir, episode_dir=rdir, goals=goals, reps=a.reps),
+    json.dump(dict(robot=robot, it=it, policy=pdir, episode_dir=rdir, goals=goals, reps=a.reps,
+                   **(dict(starts=[[float(np.atleast_1d(g)[0]), float(np.atleast_1d(g)[1]) if len(np.atleast_1d(g)) > 1 else 0.0,
+                                    [float(v) for v in starts_it[g]]] for g in goals]) if starts_it else {})),
               open(os.path.join(out, f"it{it}", "REQUEST.json"), "w"), indent=1)
     print(f"[{robot}] it {it}: waiting for {len(goals) * a.reps} jumps -- {os.path.join(out, f'it{it}', 'REQUEST.md')}",
           flush=True)
@@ -760,6 +867,12 @@ def run_robot(robot):
         starts.append({g: [0.1 * f, -0.2 * f, 0.1 * r, -0.2 * r] for g, f, r in zip(a.goals, sf, sr)})
     if a.starts_fixed:
         starts = [dict(starts[0]) for _ in starts]
+    if a.start_goals is not None:                # only these goals perturbed; the rest from the nominal stance
+        sg = {tuple(np.round([float(v) for v in (x.split(",") + ["0"])[:2]], 4)) for x in a.start_goals}
+        starts = [{g: (s_[g] if tuple(np.round(gvec(g), 4)) in sg else [0.0, 0.0, 0.0, 0.0]) for g in s_} for s_ in starts]
+    if a.start_stance is not None:               # one named stance for every goal and jump (the hardware protocol)
+        f_, r_ = a.start_stance
+        starts = [{g: [0.1 * f_, -0.2 * f_, 0.1 * r_, -0.2 * r_] for g in a.goals} for _ in starts]
     jstart = {g: [] for g in a.goals}            # (J, start) of every jump, per goal (--revisit)
     g_lo, g_hi = None, None                       # (the gate's goals: anchor_goals)
     trials, best, hist = [], {g: None for g in a.goals}, []
@@ -839,7 +952,7 @@ def run_robot(robot):
             sel = [a.goals[i] for i in idx]
             say(f"it {it}: flies {' '.join(gname(g) for g in sel)} ({note})")
         if a.backend == "manual":
-            request_jumps(pdir, robot, it, rdir, out, sel)
+            request_jumps(pdir, robot, it, rdir, out, sel, {g: starts[it][g] for g in sel} if a.train_starts > 0 else None)
         else:
             # a flight that hangs returns no jumps: fly the missing goals again (same seeds, so the same jumps), and
             # abort rather than update without them (a run with skipped jumps is not the method)
@@ -954,6 +1067,8 @@ def run_robot(robot):
                 continue
             runaway = bool(a.rollback) and best[g] is not None and J > a.rollback[0] * best[g][0] \
                 and J > best[g][0] + a.rollback[1]
+            stg = 3 if a.stages is None else 1 if it < a.stages[0] else 2 if it < sum(a.stages) else 3
+            runaway = runaway and stg == 3
             rho = None
             if a.tr:
                 runaway = False
@@ -1014,7 +1129,7 @@ def run_robot(robot):
                     for z_ in zs:
                         rec = {k_[4:]: z_[k_] for k_ in z_.files if k_.startswith("rec_")}
                         ks = np.arange(Nc)
-                        Qr, Vr = env.restore(rec, ks, ks < Ndc, foot_z=sim["foot_z"][gi])
+                        Qr, Vr = env.restore(rec, ks, ks < Ndc, foot_z=sim["foot_z"][gi], latency=a.restore_latency)
                         refr = env.references(np.repeat([gvec(g)], Nc, 0))
                         Ar, Br = env.fd_at(Qr, Vr, ks, np.asarray(z_["act"], float)[:Nc], refr)
                         ok_ = np.isfinite(Ar).all((1, 2)) & np.isfinite(Br).all((1, 2))
@@ -1024,6 +1139,17 @@ def run_robot(robot):
                         Bnr = (Br / D[None, :, None])[None]
                         Sl.append(landing_sensitivity(z_, w, 0, Anr, Bnr).reshape(3, -1))
                     S = np.mean(Sl, 0)
+                elif a.jac_at == "fb":
+                    fb_ls = [fb_lift(z_, g) for z_ in zs]
+                    S = np.mean([fb_sensitivity(l_, z_["obs"], w).reshape(3, -1) for l_, z_ in zip(fb_ls, zs)], 0)
+                elif a.jac_at in ("srb", "srbm"):
+                    if a.jac_at == "srb":
+                        Asrb = np.mean([np.asarray(z_["A"], float) for z_ in zs], 0)[None]
+                        Bsrb = np.mean([np.asarray(z_["B"], float) for z_ in zs], 0)[None]
+                    else:
+                        ms_ = [srb_measured(z_) for z_ in zs]
+                        Asrb, Bsrb = np.mean([m_[0] for m_ in ms_], 0), np.mean([m_[1] for m_ in ms_], 0)
+                    S = np.mean([landing_sensitivity(z_, w, 0, Asrb, Bsrb).reshape(3, -1) for z_ in zs], 0)
                 else:
                     S = np.mean([landing_sensitivity(z_, w, gi, An, Bn).reshape(3, -1) for z_ in zs], 0)
                 e3 = np.mean([np.asarray(z_["info"], float)[:3] for z_ in zs], 0)   # measured landing error (m, m, rad)
@@ -1031,6 +1157,8 @@ def run_robot(robot):
                     xr_m = np.asarray(env.references(np.array([gvec(g)]))["x_ref"])[0]
                     tg_m = xr_m[env.N, :3].copy()
                     tg_m[:2] = xr_m[0, :2] + np.asarray(gvec(g))
+                    if os.environ.get("ILC_FREE_LANDING"):
+                        tg_m[1] = xr_m[env.N, 1]
                     tg_m[2] = 0.0
                     e3 = np.nan_to_num(np.asarray(sim["X"])[gi, env.N, :3] - tg_m)
                 obs0 = np.asarray(zs[0]["obs"], float)
@@ -1098,10 +1226,12 @@ def run_robot(robot):
                                if cmins else "")
                 if a.clip_mode == "weighted" and S.shape[0] == 3:   # no clearance rows: the landing rows still in tolerance
                     S, e3 = S * LW[:, None], e3 * LW                 # units (2026-10-30; was raw m / m / rad here)
-                if a.traj_rows > 0 and not clip_only:               # + the stance trajectory's rows (tolerance units)
+                if a.traj_rows > 0 and not clip_only and (a.stages is None or stg < 3):
+                    # + the stance trajectory's rows (tolerance units); --stages: Stage I these alone, Stage II from rear-only contact
                     assert a.clip_mode == "weighted", "--traj-rows needs --clip-mode weighted (tolerance units)"
-                    Rt, Et = traj_rows(zs, w, gi, An, Bn)
-                    S, e3 = np.vstack([S, Rt]), np.concatenate([e3, Et])
+                    ks_ = None if a.stages is None else np.arange(a.traj_rows if stg == 1 else Ndc, Nc, a.traj_rows)
+                    Rt, Et = (traj_rows(zs, w, 0, Asrb, Bsrb, ks_) if a.jac_at in ("srb", "srbm") else traj_rows(zs, w, gi, An, Bn, ks_))
+                    S, e3 = (Rt, Et) if stg == 1 else (np.vstack([S, Rt]), np.concatenate([e3, Et]))
                 stp = gn_step(S, e3, beta=a.clip_beta if clip_only else None)
                 ab_txt = ""
                 if a.abbeel > 0:
@@ -1110,6 +1240,8 @@ def run_robot(robot):
                     xr_g = np.asarray(ref_g["x_ref"])[0]
                     tg_g = xr_g[env.N, :3].copy()
                     tg_g[:2] = xr_g[0, :2] + np.asarray(gvec(g))
+                    if os.environ.get("ILC_FREE_LANDING"):
+                        tg_g[1] = xr_g[env.N, 1]
                     tg_g[2] = 0.0
                     bias_g = e3[:3] - np.nan_to_num(np.asarray(sim["X"])[gi, env.N, :3] - tg_g)
                     Dl = np.zeros((Nc, 4))
@@ -1167,7 +1299,8 @@ def run_robot(robot):
                         if not nok[j]:
                             continue
                         oj = np.asarray(nsim["obs"])[j][:Nc]
-                        Sj = landing_sensitivity(dict(obs=oj), w, j, nAn, nBn).reshape(3, -1)
+                        Sj = (np.mean([fb_sensitivity(l_, oj, w).reshape(3, -1) for l_ in fb_ls], 0) if a.jac_at == "fb" and not a.fb_nbr_nominal
+                              else landing_sensitivity(dict(obs=oj), w, j, nAn, nBn).reshape(3, -1))
                         if a.clip_mode == "weighted":            # (tolerance units, as the flown goal's own step)
                             sj = gn_step(Sj * LW[:, None], e3_land[:3] * LW).reshape(Nc, 4) * scale[g]
                         else:
@@ -1259,7 +1392,7 @@ def run_robot(robot):
             res[f"{a.eval}_{tag}_falls"] = int(sum(r["fell"] for r in rr))
             if a.perturbed:
                 for _ in range(3):
-                    rp = fly(pd_, f"/ilc_ws/log/dilc/final701/rob_{robot}.txt", goals, seed,
+                    rp = fly(pd_, f"/ilc_ws/log/dilc/{a.rob_dir}/rob_{robot}.txt", goals, seed,
                              os.path.join(out, f"eval_{a.eval}_rob_{tag}.json"), episodes=a.eval_episodes)
                     if rp:
                         break

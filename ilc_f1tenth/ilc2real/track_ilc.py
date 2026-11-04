@@ -26,6 +26,8 @@ ap.add_argument('--smooth', type=float, default=0.05, help='m: Gaussian smoothin
 ap.add_argument('--eval-runs', type=int, default=4)
 ap.add_argument('--eval-laps', type=float, default=5.0)
 ap.add_argument('--eval-seed', type=int, default=701)
+ap.add_argument('--eval-pert', default='uniform', choices=('uniform', 'normal'), help='(2026-10-31) the evaluation runs\' start '
+                'perturbation: uniform +-0.5 (as before) or N(0, 0.5) with seed eval_seed + run, as eval_free.py scores the networks')
 ap.add_argument('--seed', type=int, default=9001)
 ap.add_argument('--gpu', default=None)
 ap.add_argument('--policy', default=None, help='(2026-10-30, diagnostic) a network npz flies with the feedforward on top and gives '
@@ -115,8 +117,10 @@ def main():
             for k, pl in enumerate(plans):
                 r0 = np.random.default_rng(a.eval_seed + sum(map(ord, pl['name'])))
                 for j in range(a.eval_runs):
+                    pert, sd = ((r0.normal(size=5) * 0.5, a.eval_seed + j) if a.eval_pert == 'normal'
+                                else (r0.uniform(-0.5, 0.5, 5), a.eval_seed * 7 + j))
                     jobs.append(dict(car_name=c, plan=pl, policy=pol, laps=a.eval_laps, s0=(j / a.eval_runs) * float(pl['length']),
-                                     pert=r0.uniform(-0.5, 0.5, 5), seed=a.eval_seed * 7 + j, ff=ff[(c, k)]))
+                                     pert=pert, seed=sd, ff=ff[(c, k)]))
                     keys.append((c, pl['name']))
         res = rc.run_many(jobs)
         ev = {}
@@ -130,6 +134,10 @@ def main():
                             mean_abs_beta=float(np.mean([m['mean_abs_beta'] for m in ms if not m['failed']])) if any(not m['failed'] for m in ms) else None)
                     for n, ms in d.items()} for c, d in ev.items()}
         results['budgets'][str(budget)] = summ
+        # (2026-10-31) every evaluation run, for the per-run score max(rms e_y / 10 cm, (1 - pace) / 0.1), a crash = 5
+        results.setdefault('runs', {})[str(budget)] = [dict(car=c, plan=name, crash=str(m.get('crash', '') or ''), failed=bool(m['failed']),
+                                                            rms_ey=m.get('rms_ey'), pace=m.get('pace'))
+                                                       for (c, name), r, m in zip(keys, res, [rc.lap_metrics(r_, j_['plan']) for r_, j_ in zip(res, jobs)])]
         json.dump(results, open(os.path.join(a.out, 'summary.json'), 'w'), indent=1)
         print('BUDGET', budget, json.dumps({c: {n[6:]: round(v['success'], 2) for n, v in d.items()} for c, d in summ.items()}),
               flush=True)

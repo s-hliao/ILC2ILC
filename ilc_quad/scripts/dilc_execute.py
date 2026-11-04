@@ -924,6 +924,8 @@ def run_jump(bank: GoalBank, g, cond: str, seed: int, driver_kw: dict, land_time
     for k in ("box_clearance", "box_setback", "box_setback_front"):     # a box plan's own edge settings (2026-10-25)
         if k in cfg:
             argv += ["--param", f"{k}:={cfg[k]}"]
+    if "flight_spin_change" in cfg:    # a plan's own pitch-rate band (2026-11-01: the free-landing plans', 60 deg/s): the node must assume it too
+        argv += ["--param", f"flight_spin_change_deg:={math.degrees(cfg['flight_spin_change'])}"]
     argv += [x for p_ in os.environ.get("DILC_NODE_PARAMS", "").split() for x in ("--param", p_)]   # run --node-param
     if menagerie_root:
         argv += ["--menagerie-root", menagerie_root]
@@ -1024,6 +1026,8 @@ class EpisodeMaker:
         Phi = np.eye(6)
         target = x_ref[N].copy()
         target[:2] = x_ref[0, :2] + np.asarray(g, float)
+        if os.environ.get("ILC_FREE_LANDING"):   # ILC_FREE_LANDING (2026-11-01): the TO picked the landing height, the target is the plan's, not standing height + box
+            target[1] = x_ref[N, 1]
         target[2] = 0.0
         dtarget = dxr[N].copy()
         dtarget[:2] = np.eye(2)
@@ -1160,6 +1164,8 @@ class EpisodeMaker:
         rs = self.r_scale
         target = xr[N].copy()
         target[:2] = xr[0, :2] + np.asarray(g_label, float)
+        if os.environ.get("ILC_FREE_LANDING"):
+            target[1] = xr[N, 1]
         target[2] = 0.0
         grad_c = lambda e: 2 * rs * qe * e
         mca = np.zeros((Nc, 3, nu))
@@ -1717,6 +1723,8 @@ def landing_score(logX, x_ref, g, fell, qe, r_scale, reward_scale=0.01, fall_pen
     against the goal, pitch 0, the plan's landing velocities), scaled, plus a fall penalty."""
     target = np.array(x_ref[-1], float)
     target[:2] = x_ref[0, :2] + np.asarray(g, float)
+    if os.environ.get("ILC_FREE_LANDING"):
+        target[1] = x_ref[-1, 1]
     target[2] = 0.0
     e = np.asarray(logX[-1], float) - target
     return reward_scale * r_scale * float(e @ (qe * e)) + fall_penalty * float(fell), e

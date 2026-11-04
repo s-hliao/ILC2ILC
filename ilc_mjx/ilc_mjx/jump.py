@@ -29,6 +29,7 @@ entries instead of forked processes).
 """
 from __future__ import annotations
 
+import os
 import json
 from dataclasses import dataclass
 
@@ -683,25 +684,41 @@ class JumpEnv:
             a_off = z * sig_a / np.sqrt((z ** 2).sum((1, 2), keepdims=True) / (~np.asarray(self.swing)).sum())
         return q_off, a_off
 
-    def restore(self, rec, ks, contact_front, foot_z=None, window=0.025):
+    def restore(self, rec, ks, contact_front, foot_z=None, window=0.025, centered=False, auto_h=None, info=None, latency=0.0):
         """MuJoCo (qpos, qvel) at contact samples ks of a recorded jump (rec_* of a saved episode: the robot's own
         measurements -- mocap pose, joint encoders), for linearizing the nominal model along a real trial: base
         velocities by a causal least-squares slope over `window` (the controller estimator's), then the stance feet
         put on the ground (the base shifted down/up) and their velocities projected to zero (the smallest change in
         the mass metric), so measurement noise does not start the copies with a contact pop. foot_z (Nc, 4): the
         feet's heights in the nominal sim at each sample (rollout's foot_z; the soft contact's depth under load):
-        the stance feet are put at their mean (else exactly on the floor)."""
+        the stance feet are put at their mean (else exactly on the floor).
+        (2026-11-01) centered=True: the velocities from a CENTRED least-squares slope over `window` (the trial is complete; the
+        causal one lags ~window/2 through the push-off). auto_h (m): the front pair's contact per sample from the trial's own
+        kinematics -- down iff both front feet are within auto_h of the ground (foot height - radius, from the mocap pose and
+        the encoders) -- instead of contact_front (the nominal schedule: on the robots the front feet stay loaded ~6-8 samples
+        past it, where the schedule's restore and its one-step Jacobian were 2-17 x off). info: a dict, filled with the per-sample
+        front-contact flags and front foot heights used.
+        latency (s, 2026-11-01): the mocap pose's delay (the controller's pose_latency). The pose recorded at time t is the base
+        at t - latency, while the encoders are current: without the shift the restored body and legs disagree by 1-4 cm at push-off
+        speeds (one foot pair 15-22 mm into the ground), and fd_at's one-step Jacobian there was 3-80 x off the nominal. Offline
+        the whole trial is known, so the pose is read at t + latency (linear interpolation; the quaternion normalized)."""
         import mujoco
         m = self.m
         d = mujoco.MjData(m)
         t, pos, quat, q, dq = (np.asarray(rec[k_], float) for k_ in ("t", "pos", "quat", "q", "dq"))
+        if latency > 0:                                   # the base pose at the encoders' time
+            ta = np.clip(t + latency, t[0], t[-1])
+            pos = np.stack([np.interp(ta, t, pos[:, j]) for j in range(3)], 1)
+            qa = quat * np.sign((quat * quat[:1]).sum(1, keepdims=True))
+            quat = np.stack([np.interp(ta, t, qa[:, j]) for j in range(4)], 1)
+            quat = quat / np.linalg.norm(quat, axis=1, keepdims=True)
         qadr, vadr = np.asarray(self.qm.qpos_adr), np.asarray(self.qm.qvel_adr)
         feet = np.asarray(self.qm.foot_geom_ids)
         r_foot = float(m.geom_size[feet[0], 0])
         Q, V = [], []
         for k in ks:
             i = min(int(k) * self.tps, len(t) - 1)
-            sel = (t <= t[i] + 1e-9) & (t >= t[i] - window)
+            sel = (np.abs(t - t[i]) <= window / 2 + 1e-9) if centered else (t <= t[i] + 1e-9) & (t >= t[i] - window)
             tt = t[sel] - t[i]
             slope = lambda y: np.polyfit(tt, y, 1)[0] if len(tt) > 2 else np.zeros(y.shape[1:])
             v = slope(pos[sel])
@@ -717,10 +734,21 @@ class JumpEnv:
             d.qvel[:] = 0.0
             d.qvel[0:3], d.qvel[3:6] = v, 2.0 * prod[1:]
             d.qvel[vadr] = dq[i]
-            st = feet if (contact_front[k] if hasattr(contact_front, "__len__") else contact_front) else feet[2:]
             mujoco.mj_kinematics(m, d)
+            if auto_h is not None:
+                hf = d.geom_xpos[feet[:2], 2] - r_foot
+                front = bool(np.max(hf) < auto_h)
+                if info is not None:
+                    info.setdefault("front", []).append(front); info.setdefault("h_front", []).append(hf.tolist())
+            else:
+                front = bool(contact_front[k] if hasattr(contact_front, "__len__") else contact_front)
+            st = feet if front else feet[2:]
             st_i = np.searchsorted(feet, st) if foot_z is not None else None
-            z_tgt = float(np.mean(np.asarray(foot_z)[int(k), st_i])) if foot_z is not None else r_foot
+            if foot_z is not None and auto_h is not None:   # a stance foot the nominal sim has already lifted: the rear (stance) depth
+                fz_ = np.asarray(foot_z)[int(k)]
+                z_tgt = float(np.mean(np.minimum(fz_[st_i], np.max(fz_[2:]))))
+            else:
+                z_tgt = float(np.mean(np.asarray(foot_z)[int(k), st_i])) if foot_z is not None else r_foot
             d.qpos[2] -= np.mean(d.geom_xpos[st, 2]) - z_tgt               # the stance feet on the floor
             mujoco.mj_forward(m, d)
             J = []
@@ -779,21 +807,28 @@ class JumpEnv:
             Gr[j] = [gx_, gz_, -gx_ * (z_ - cz) + gz_ * (x_ - cx)]
         return C, Gr
 
-    def fd_at(self, qpos, qvel, ks, acts, ref):
+    def fd_at(self, qpos, qvel, ks, acts, ref, warm=0):
         """One-step FD Jacobians A (B, 6, 6), B (B, 6, 4) of the nominal model from given states (restore), entry b at
-        contact sample ks[b] with action acts[b] (normalized, as flown), its goal's reference ref (per entry)."""
-        if "fd_at" not in self._jit:
-            self._jit["fd_at"] = jax.jit(self._fd_at)
-        out = self._jit["fd_at"](jnp.asarray(qpos, jnp.float32), jnp.asarray(qvel, jnp.float32),
-                                 jnp.asarray(ks), jnp.asarray(acts, jnp.float32), ref, self.stand())
+        contact sample ks[b] with action acts[b] (normalized, as flown), its goal's reference ref (per entry).
+        warm (2026-11-01): the constraint solver runs cfg.solver_iters (4) iterations from qacc_warmstart; the rollout carries
+        it from tick to tick, a restored state starts from the stand's. warm > 0: that many forward passes first, each one's
+        qacc fed back as the warm start (0: as before)."""
+        key = ("fd_at", int(warm))
+        if key not in self._jit:
+            self._jit[key] = jax.jit(lambda *a_: self._fd_at(*a_, warm=int(warm)))
+        out = self._jit[key](jnp.asarray(qpos, jnp.float32), jnp.asarray(qvel, jnp.float32),
+                             jnp.asarray(ks), jnp.asarray(acts, jnp.float32), ref, self.stand())
         return tuple(np.asarray(x) for x in out)
 
-    def _fd_at(self, qpos, qvel, ks, acts, ref, tmpl):
+    def _fd_at(self, qpos, qvel, ks, acts, ref, tmpl, warm=0):
         nc = 11
         B = qpos.shape[0]
         dx = jax.tree_util.tree_map(lambda x: jnp.broadcast_to(x, (B,) + x.shape), tmpl)
         dx = dx.replace(qpos=qpos, qvel=qvel)
         dx = jax.vmap(lambda d, r: self.mjx.forward(self._model(r), d))(dx, ref)
+        for _ in range(warm):                            # converge the solver's warm start at the restored state
+            dx = jax.vmap(lambda d, r: self.mjx.forward(self._model(r), d.replace(qacc_warmstart=d.qacc)))(dx, ref)
+        dx = dx.replace(qacc_warmstart=dx.qacc) if warm else dx
         da = jnp.concatenate([jnp.zeros((1, 4)), self.cfg.eps_a * jnp.eye(4), jnp.zeros((6, 4))])
 
         def one(d, k, a, r):
@@ -934,6 +969,13 @@ class JumpEnv:
         clr = jnp.concatenate([jnp.swapaxes(CC[0], 0, 1), jnp.swapaxes(CF[0], 0, 1)], 1)                 # (B, N)
         clr_grad = jnp.concatenate([jnp.swapaxes(CC[1], 0, 1), jnp.swapaxes(CF[1], 0, 1)], 1)            # (B, N, 3)
         x_n = srb(dx, shift)
+        if os.environ.get("ILC_FREE_LANDING"):
+            # (2026-11-01) these plans touch down at N, and a jump touching down early stops short of its plan's height: measured at N, the z error then grows as the jump is lowered, the sign the ballistic
+            # G does not have. The node's ilc_landing_state:=tail, here: the error ten samples before N carried on in free flight (Nguyen et al. eq. 22: the error at the end of the flight phase)
+            k0 = self.N - 10
+            e0 = Xf[k0 - self.Nc] - ref["x_ref"][:, k0]
+            rN = ref["x_ref"][:, self.N]
+            x_n = jnp.concatenate([rN[:, :3] + e0[:, :3] + (self.N - k0) * self.dt * e0[:, 3:6], rN[:, 3:6] + e0[:, 3:6]], 1)
 
         # the landing: joint PD to the home pose; a fall is a trunk past max_tilt or sunk
         gl = self.cfg.gains[3]

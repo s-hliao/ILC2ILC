@@ -4,9 +4,11 @@ HW_RUNBOOK_N6_1031.md: envelope 0.5 m, plastic practised on square2fast (_a45; f
 practised on the R 1.00 m figure-eight (_x120), squareH held out; 3 stage iterations x 2-lap trials; networks PPO + DR
 (freePPON) and RMA (rmaN), seeds 0 and 1. Normalized error max(rms e_y / 10 cm, (1 - pace) / 0.1), a crash = 5; mean and
 95 % cluster-bootstrap CI over (seed, car) units (each unit: mean over its 4 x 5-lap validation runs).
-  car_hw_laps     error vs real laps (0 = the network's own zero-shot; per-iteration networks runs/hw/<stage>_it<k>)
-  car_hw_improve  stage minus own zero-shot per track, paired bootstrap (as pogo_inout)
-  car_hw_track    the practised track before and after, path coloured by |e_y| (as pogo_flow), PPO + DR, one car
+  car_hw_laps     error change vs the network's OWN zero-shot (%, paired per (seed, car)) over real laps (per-iteration
+                  networks runs/hw/<stage>_it<k>)
+  car_hw_improve  the same change after 6 real laps, per track, paired bootstrap (as pogo_inout)
+  car_hw_track    the practised track before and after (as pogo_flow): PPO + DR on the median-improvement car, lap-mean
+                  path with the lateral error exaggerated, coloured by the local score, the zero-shot path as a ghost
   car_hw_alonglap e_y, speed and steering along the lap, zero-shot vs stage, mean over the tire's cars
   car_hw_perlap   lap-by-lap error over the 5-lap run (the final multi-lap tracking test)
   car_hw_rho      the stage's positivity rho per iteration (supplementary)
@@ -136,7 +138,7 @@ def fig_laps():
                 x = np.array(ks) * LAPS_PER_IT
                 ax.fill_between(x, m[:, 1], m[:, 2], color=COL[net], alpha=0.13, lw=0)
                 ax.plot(x, m[:, 0], "-", color=COL[net], marker=MRK[net], ms=3.5, mec="white", mew=0.4, lw=1.3)
-                ax.annotate(f"{m[-1, 0]:+.0f} %", (x[-1], m[-1, 0]), xytext=(4, -4 if net == "freePPON" else 4), textcoords="offset points", va="center",
+                ax.annotate(f"{m[-1, 0]:+.0f} %", (x[-1], m[-1, 0]), xytext=(4, -5 if net == "freePPON" else 5), textcoords="offset points", va="center",
                             fontsize=6.5, color=COL[net])
                 top = min(top, m[:, 1].min())
                 rep[f"{tire} {role} {NETS[net]}"] = dict(laps=x.tolist(), pct=m[:, 0].round(1).tolist(),
@@ -170,17 +172,21 @@ def fig_improve():
                 if 0 not in S or ITERS not in S:
                     continue
                 cars = set(S[0]) & set(S[ITERS])
-                d = [S[ITERS][u] - S[0][u] for u in cars]
+                d = [100 * (S[ITERS][u] / S[0][u] - 1) for u in cars]       # paired, vs the unit's own zero-shot
                 m, lo, hi = boot(d)
                 xx = j + (q - 0.5) * w
                 ax.bar(xx, m, w * 0.92, color=COL[net], alpha=0.85 if net == "freePPON" else 0.75, lw=0)
                 ax.errorbar(xx, m, yerr=[[m - lo], [hi - m]], color=B.INK, capsize=1.8, lw=0.8, ls="none")
-                rep[f"{tire} {role} {NETS[net]}"] = [round(m, 3), round(lo, 3), round(hi, 3), len(d)]
+                ax.annotate(f"{m:+.0f} %", (xx, lo if m < 0 else hi), xytext=(0, -3 if m < 0 else 3), textcoords="offset points",
+                            ha="center", va="top" if m < 0 else "bottom", fontsize=6.5, color=B.INK)
+                rep[f"{tire} {role} {NETS[net]}"] = [round(m, 1), round(lo, 1), round(hi, 1), len(d)]
         ax.set_xticks(range(len(ROLE)))
         ax.set_xticklabels([f"{r}\n({TRACK_LAB[EV[tire][r][0]]})" for r in ROLE], color=B.INK)
         ax.set_title(f"{tire} tires", fontsize=7.5, color=B.INK, pad=3)
         ax.tick_params(axis="x", length=0)
-    axs[0].set_ylabel("stage $-$ own zero-shot\n(normalized error; < 0 is better)", color=B.INK)
+    lo_ = min(v[1] for v in rep.values()); hi_ = max(v[2] for v in rep.values())
+    axs[0].set_ylim(lo_ - 0.18 * (hi_ - lo_), max(hi_, 0) + 0.18 * (hi_ - lo_))   # room for the labels beyond the CIs
+    axs[0].set_ylabel("error vs own zero-shot (%)\nafter 6 real laps (< 0 is better)", color=B.INK)
     legend_below(fig, [plt.Rectangle((0, 0), 1, 1, color=COL[n], lw=0, label=f"{NETS[n]} + {B.HW_N}") for n in NETS], 2)
     fig.tight_layout(rect=(0, 0.08, 1, 1), w_pad=1.0)
     save(fig, "car_hw_improve")
@@ -315,7 +321,8 @@ def binned(rs, key, edges, plan):
         s = r["s"]
         m = lap_of(r, plan["length"]) >= 1             # drop the first lap (the launch)
         v = np.abs(r[key]) if key == "ey" else wheel(r[key]) if key == "steer" else r[key]
-        h = np.histogram(s[m], edges, weights=v[m])[0] / np.maximum(np.histogram(s[m], edges)[0], 1)
+        n = np.histogram(s[m], edges)[0]
+        h = np.where(n > 0, np.histogram(s[m], edges, weights=v[m])[0] / np.maximum(n, 1), np.nan)   # empty bin: no data, not 0
         out.append(h)
     return np.array(out)
 
@@ -349,7 +356,7 @@ def fig_alonglap(runs, plans):
                     rs = [r for r in runs if r["tire"] == tire and r["net"] == net and r["k"] == k and not r["crash"]]
                     if not rs:
                         continue
-                    ax.plot(c, binned(rs, key, edges, pl).mean(0), color=COL[net], ls=ls, lw=1.0 if k else 0.8, alpha=a)
+                    ax.plot(c, np.nanmean(binned(rs, key, edges, pl), 0), color=COL[net], ls=ls, lw=1.0 if k else 0.8, alpha=a)
                     if key == "steer":
                         sat_pct[(net, k)] = 100 * np.mean([np.mean(np.abs(r["steer"]) > 0.34) for r in rs])
             if key == "steer":

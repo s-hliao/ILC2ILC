@@ -39,7 +39,9 @@ ap.add_argument("--path-map", default="", metavar="HOST=LOCAL",
 # (2026-10-31; user: the quad hardware results are PPO+DR zero-shot, PPO+DR + stage, "and then perturbed starts"): the robot stands
 # in one of the simulated evaluation's test postures before every jump (dilc_execute NAMED: planar joint offsets from the home pose)
 STARTS = {"nominal": [0.0, 0.0, 0.0, 0.0], "crouch": [0.1, -0.2, 0.1, -0.2], "tall": [-0.1, 0.2, -0.1, 0.2],
-          "noseup": [0.0, 0.0, 0.1, -0.2], "nosedn": [0.1, -0.2, 0.0, 0.0]}
+          "noseup": [0.0, 0.0, 0.1, -0.2], "nosedn": [0.1, -0.2, 0.0, 0.0],
+          # (2026-11-01; user: "make the tall and nose up conditions less extreme") the softened evaluation's half offsets
+          "tallh": [-0.05, 0.1, -0.05, 0.1], "noseuph": [0.0, 0.0, 0.05, -0.1]}
 ap.add_argument("--start", default="nominal", choices=tuple(STARTS),
                 help="the stance before every jump: nominal, or a perturbed start (the evaluation's crouch / tall / noseup / nosedn)")
 ap.add_argument("--iters", type=int, default=0, help="stop after this many iterations (0: until deploy.py is done)")
@@ -86,21 +88,32 @@ def aborted():
     return os.path.exists(os.path.join(a.run, "ABORT"))
 
 
+def stance_for(req, g):
+    """(2026-11-01) the goal's own stance when deploy.py drew one per goal (--train-starts: REQUEST.json "starts"), else --start"""
+    for x, h, off in req.get("starts", []):
+        if gkey((x, h)) == gkey(g):
+            return off
+    return STARTS[a.start]
+
+
 def fly(req, g, n):
     gx, gh = g
     ref = os.path.join(req["episode_dir"], f"ref_{gx:.4f}" + (f"_{gh:.4f}" if gh else "") + ".npz")
     subprocess.run([sys.executable, os.path.join(HERE, "policy_jump_node.py"), "prepare", "--policy", req["policy"],
                     "--goal", str(gx), str(gh), "--out", ref], check=True)
     bx = json.load(open(os.path.splitext(ref)[0] + "_box.json"))
+    if bx.get("ilc_landing_state") == "tail":             # (2026-11-01) a free-landing plan: the jump's score is against the plan's landing height (dilc_execute)
+        os.environ["ILC_FREE_LANDING"] = "2"
     if bx["box_height"] > 0:
         print(f"   BOX for this goal: front face {bx['box_x_front']:.3f} m ahead of the standing CoM, "
               f"{bx['box_height']:.3f} m tall -- place it before the first jump", flush=True)
     common = [f"policy_dir:={req['policy']}", f"reference_file:={ref}", f"jump_dx:={gx}", f"jump_dz:={gh}",
               f"box_x_front:={bx['box_x_front']}", f"box_height:={bx['box_height']}", f"margin:={bx['margin']}",
               f"box_setback_front:={bx.get('box_setback_front', 0.0)}",     # (2026-10-31) else the node re-solves a different box plan
+              f"flight_spin_change_deg:={bx.get('flight_spin_change_deg', 20.0)}", f"ilc_landing_state:={bx.get('ilc_landing_state', 'all')}",   # (2026-11-01) the free-landing plans'
               f"episode_dir:={req['episode_dir']}", f"episode_tag:={req['robot']}_it{req['it']}", f"max_trials:={n}",
               f"menagerie_root:={a.menagerie_root}",
-              "stand_offset:=[" + ", ".join(map(str, STARTS[a.start])) + "]"]
+              "stand_offset:=[" + ", ".join(map(str, stance_for(req, g))) + "]"]
     if a.backend == "sim":
         # the sim scene only has a box with box:=true (else its height is forced to 0 and the box plan is refused)
         r = subprocess.run(["ros2", "launch", "ilc_quad", "policy_jump_sim.launch.py", *common,

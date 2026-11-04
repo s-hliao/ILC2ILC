@@ -131,6 +131,27 @@ ap.add_argument('--session-dir', default='', help='--backend manual: the directo
 ap.add_argument('--launch', type=float, nargs=2, default=[1.0, 8.0], metavar=('V_HAND', 'CURRENT'),
                 help='--backend manual: the slow-start launch (the car starts at rest): fixed current (A) until |V| >= '
                 'V_HAND m/s, then the network; the launch phase is cut from the data the ILC learns from')
+ap.add_argument('--z-marg', type=float, default=0.0, help='(2026-11-01, RMA only; user: "until the rma adaptation works") > 0: '
+                'this fraction of each refit batch is also taken at another trial sample\'s estimator output z_hat (the '
+                'target shifted by the network\'s own change in z, as --fit-noise): the correction at o is held across the '
+                'estimator\'s spread of z_hat on the car instead of only at the z_hat it read at that instant')
+ap.add_argument('--sat', choices=('keep', 'drop', 'clip', 'hinge'), default='keep', help='(2026-11-01) the steering target where the '
+                'network\'s output is past the steering limit (|a_steer| > 1, the smooth clamp flat: the GN\'s B ~ 0 there, so its '
+                'step is ~0 and the target is the raw output). keep: as before (the refit pins the past-limit output); drop: '
+                'no steering target there (the current target stays); clip: the steering target clipped to +-(1 + --sat-margin), '
+                'which the clamp applies the same to within --sat-margin\'s tolerance; hinge: one-sided, the output only kept past '
+                '+-(1 + --sat-margin) on its side (every such output applies the same steering): no pull toward any value')
+ap.add_argument('--sat-margin', type=float, default=0.1)
+ap.add_argument('--sim-launch', type=int, default=0, help='(2026-11-01; diagnostic fidelity, the update is unchanged) 1: --backend sim '
+                'trials start as on the car: the slow rolling launch (v0 0.6 m/s, then the launch controller until --launch V_HAND at '
+                'CURRENT A, car_session_sim.py\'s protocol) and the launch phase cut from the trial (run_manual\'s handover cut)')
+ap.add_argument('--skip-launch', type=float, default=0.0, help='(2026-11-01; approved by the user 2026-11-02: hardware uses 0.5) > 0: each trial counts '
+                'for the GN step (and the trust region\'s J) only from the first sample whose speed error |V - V_plan| is below this '
+                '(m/s): on the car the network takes over at the launch\'s 1 m/s and its first part is the acceleration to the plan '
+                'speed, not the task (the ILC trial starts on the plan)')
+ap.add_argument('--dump', type=int, default=0, help='(2026-11-01, diagnostic only; the update is unchanged) 1: save each '
+                'refit\'s newest trial states, plan index, requested change (GN step) and realized change per car to '
+                'DIR/its/fit_it<k>_<car>.npz')
 ap.add_argument('--save-its', type=int, default=0, help='1: also save every iteration\'s network per car (DIR/its/'
                 'it<k>_<car>_policy.npz, k = 0 the start network .. iters; RMA: + its/rma_adapt.npz) and each car\'s goal '
                 'rungs per iteration (DIR/its/its.json); 0 (default): only the final networks, as before')
@@ -153,6 +174,17 @@ import sim_jax as sj                             # noqa: E402
 
 PER_STEP = ('x', 'x_true', 'obs', 'obs_true', 'mu', 'a', 'err', 'err_true', 'idx', 'applied')
 
+
+
+def launch_cut(err, valid):
+    """--skip-launch: valid[k, :t0] = False before the first sample t0 whose speed error |err V| < a.skip_launch."""
+    if a.skip_launch <= 0:
+        return valid
+    valid = valid.copy()
+    for k in range(len(valid)):
+        ok = np.nonzero((np.abs(err[k, :, 5]) < a.skip_launch) & valid[k])[0]
+        valid[k, :ok[0] if len(ok) else valid.shape[1]] = False
+    return valid
 
 
 def slip_cut(xs, valid):
@@ -220,7 +252,17 @@ def run_jobs(jobs):
         'manual backend: MLP or RMA only'
     if not jobs:                                      # (2026-10-30) e.g. the post-stage evaluation with no eval plans in
         return []                                     # the bank: run_manual would fail on keys[0] before summary.json
-    return run_manual(jobs) if a.backend == 'manual' else rc.run_many(jobs)
+    if a.backend == 'manual':
+        return run_manual(jobs)
+    if not a.sim_launch:
+        return rc.run_many(jobs)
+    out = rc.run_many([dict(j, launch=dict(v0=0.6, v_hand=float(a.launch[0]), current=float(a.launch[1]))) for j in jobs])
+    for r in out:                                     # as run_manual: the network's part of the trial only
+        h = max(int(r.get('handover', 0)), 0)
+        for n in PER_STEP:
+            if n in r:
+                r[n] = r[n][h:]
+    return out
 
 DEFAULT_EVAL = [f'mocap_{t}_b{b}' for t in ('square2fast', 'figfast') for b in (25, 21, 14, 0)]
 
@@ -379,9 +421,12 @@ def main():
     jvp_j = jax.jit(jvp_)
 
     @jax.jit
-    def fit_step(ps, st, o, y, w, oa, ya, wa, os_, vs, ds, wsl):
+    def fit_step(ps, st, o, y, w, oa, ya, wa, os_, vs, ds, wsl, m, hs):
         def loss(ps):
-            l = jnp.sum(w[:, None] * (policy_fn(ps, o) - y) ** 2) / (jnp.sum(w) + 1e-9)
+            p_ = policy_fn(ps, o)
+            l = jnp.sum(w[:, None] * m * (p_ - y) ** 2) / (jnp.sum(w) + 1e-9)
+            if a.sat == 'hinge':                       # past-limit samples: stay past the limit on their side (hs = +-1, else 0)
+                l = l + jnp.sum(w * jnp.abs(hs) * jax.nn.relu(1.0 + a.sat_margin - hs * p_[:, 0]) ** 2) / (jnp.sum(w) + 1e-9)
             if a.slope_w > 0:                           # (traced only when on: --slope-w 0 is the old refit exactly)
                 l = l + wsl * jnp.mean(jnp.sum((jvp_(ps, os_, vs) - ds) ** 2, -1))
             return l + wa * jnp.mean((policy_fn(ps, oa) - ya) ** 2)
@@ -507,6 +552,7 @@ def main():
                 continue
             if a.tr:                                   # rho from the J of this trial vs the kept step's prediction
                 xs_, idx_, acts_, err_, valid_ = ilc_core.pad_runs(rr, T)
+                valid_ = launch_cut(err_, valid_)
                 if a.slip_max > 0:                     # the prediction's own window: spin inside it counts against the step
                     for k in range(len(rr)):
                         w_ = tr_win[c].get(gn_names[pid_c[k]])
@@ -542,7 +588,7 @@ def main():
             last_crashed[c] = crashed
             prev_params[c] = params[c]
             xs, idx, acts, err, valid = ilc_core.pad_runs(rr, T)
-            valid = slip_cut(xs, valid)
+            valid = launch_cut(err, slip_cut(xs, valid))
             if a.pace_target != 1.0 or a.pace_local > 0:   # the pace row against the target fraction of the plan's speed
                 for k in range(len(rr)):
                     pl_k = by_name[gn_names[pid_c[k]]]
@@ -564,7 +610,18 @@ def main():
             for k, r in enumerate(rr):
                 m = min(len(r['obs']), T)
                 v = valid[k, :m]
-                data[c].append(dict(obs=aug(r)[:m][v], y=(r['mu'][:m] + step[k, :m])[v], it=it))
+                y_ = (r['mu'][:m] + step[k, :m])[v]
+                msk = np.ones_like(y_)
+                past = np.abs(r['mu'][:m][v][:, 0]) > 1.0
+                hsg = np.zeros(len(y_))
+                if a.sat in ('drop', 'hinge'):
+                    msk[past, 0] = 0.0
+                if a.sat == 'hinge':
+                    hsg[past] = np.sign(r['mu'][:m][v][past, 0])
+                elif a.sat == 'clip':
+                    y_[past, 0] = np.clip(y_[past, 0], -1.0 - a.sat_margin, 1.0 + a.sat_margin)
+                data[c].append(dict(obs=aug(r)[:m][v], y=y_, msk=msk, hs=hsg, y_step=(r['mu'][:m] + step[k, :m])[v], it=it,
+                                    idx=np.asarray(r['idx'])[:m][v], goal=gn_names[pid_c[k]]))
                 mm = rc.lap_metrics(r, by_name[gn_names[pid_c[k]]])
                 trials[c].append(dict(it=it, goal=gn_names[pid_c[k]], failed=mm.get('failed'), rms_ey=mm.get('rms_ey'),
                                       rms_dbeta=mm.get('rms_dbeta'), J=float(J[k]), J_pred=float(Jp[k]),
@@ -573,13 +630,15 @@ def main():
             O = np.concatenate([d['obs'] for d in data[c]])
             Y = np.concatenate([d['y'] for d in data[c]])
             W = np.concatenate([np.full(len(d['obs']), a.age_decay ** (it - d['it'])) for d in data[c]])
+            M_ = jnp.array(np.concatenate([d['msk'] for d in data[c]]))
+            H_ = jnp.array(np.concatenate([d['hs'] for d in data[c]]))
             Ya = np.asarray(policy_fn(params[c], jnp.array(O_anchor)))
             wa = a.anchor_w * a.anchor_n0 / (a.anchor_n0 + len(data[c]))
             ps, st = params[c], opt.init(params[c])
             O_, Y_, W_, Oa_, Ya_ = map(jnp.array, (O, Y, W, O_anchor, Ya))
             new = [d for d in data[c] if d['it'] == it]
             On = jnp.array(np.concatenate([d['obs'] for d in new]))
-            Yn = np.concatenate([d['y'] for d in new])
+            Yn = np.concatenate([d['y_step'] for d in new])     # the realized fraction: of the GN step itself
             m0 = np.asarray(policy_fn(params[c], On))
             tgt = Yn - m0
             n_steps, hist_r = 0, []
@@ -598,7 +657,13 @@ def main():
                         on = ob + a.fit_noise * jnp.array(rs.standard_normal(ob.shape), ob.dtype)
                         yb = yb + policy_fn(params[c], on) - policy_fn(params[c], ob)
                         ob = on
-                    ps, st, l = fit_step(ps, st, ob, yb, W_[b], Oa_[ba], Ya_[ba], wa, os_, vs, ds, a.slope_w)
+                    if a.z_marg > 0 and rma:
+                        bz = jnp.array(rs.integers(0, len(O), len(b)))
+                        sel = jnp.array(rs.uniform(size=len(b)) < a.z_marg)[:, None]
+                        on = jnp.where(sel, ob.at[:, -nz:].set(O_[bz][:, -nz:]), ob)
+                        yb = yb + policy_fn(params[c], on) - policy_fn(params[c], ob)
+                        ob = on
+                    ps, st, l = fit_step(ps, st, ob, yb, W_[b], Oa_[ba], Ya_[ba], wa, os_, vs, ds, a.slope_w, M_[b], H_[b])
                 n_steps += chunk
                 realized = float(np.sum((np.asarray(policy_fn(ps, On)) - m0) * tgt) / max(np.sum(tgt ** 2), 1e-12))
                 hist_r.append(realized)
@@ -606,6 +671,11 @@ def main():
                         (len(hist_r) > 5 and realized - hist_r[-6] < 0.003):
                     break
             realize[c].append(dict(it=it, realized=realized, steps=n_steps))
+            if a.dump:                                 # diagnostic: requested vs realized change on the newest trials
+                os.makedirs(os.path.join(a.out, 'its'), exist_ok=True)
+                np.savez(os.path.join(a.out, 'its', f'fit_it{it}_{c}.npz'), obs=np.asarray(On), tgt=tgt,
+                         real=np.asarray(policy_fn(ps, On)) - m0, m0=m0, idx=np.concatenate([d['idx'] for d in new]),
+                         goal=np.concatenate([[d['goal']] * len(d['obs']) for d in new]), realized=realized, steps=n_steps)
             if a.tr:                                   # J(f) of a GN projection step: J - (2f - f^2)(J - J_pred)
                 f_ = float(np.clip(realized, 0.0, 1.0))
                 tr_last[c].update({gn_names[pid_c[k]]: (float(J[k]), float(J[k] - (2 * f_ - f_ ** 2) * (J[k] - Jp[k])), it)

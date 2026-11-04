@@ -1,6 +1,8 @@
 """The Go1 as ilc_quad builds it (QuadModel: torque actuators, canonical joint order), on the GPU."""
 from __future__ import annotations
 
+import os
+
 import numpy as np
 
 from . import MENAGERIE
@@ -10,7 +12,14 @@ def quad_model(robot="go1", box=None):
     """box: dict(x_front, height[, length, width]) -- a static box in the world (QuadModel's, as the CPU robots
     have it); JumpEnv moves and resizes it per jump."""
     from ilc_quad.sim_quad_model import QuadModel
-    return QuadModel(robot, MENAGERIE, box=box)
+    qm = QuadModel(robot, MENAGERIE, box=box)
+    if os.environ.get("ILC_SIM_DAMPING"):      # (2026-11-01) the overlay's switch on the GPU sim: thigh / calf dof_damping, N m s / rad (Menagerie 2, Unitree URDF 0)
+        import mujoco
+        for j in range(qm.model.njnt):
+            nm = mujoco.mj_id2name(qm.model, mujoco.mjtObj.mjOBJ_JOINT, j) or ""
+            if "thigh" in nm or "calf" in nm:
+                qm.model.dof_damping[qm.model.jnt_dofadr[j]] = float(os.environ["ILC_SIM_DAMPING"])
+    return qm
 
 
 def mjx_model(qm, feet_only_contacts=False, iterations=None, ls_iterations=None, legs_hit_box=False):

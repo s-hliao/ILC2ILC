@@ -23,6 +23,7 @@ reference_file must be the policy's plan for the goal (the bank's interpolation,
 """
 import argparse
 import json
+import math
 import os
 import sys
 
@@ -49,7 +50,9 @@ def prepare(argv):
     cfg = json.loads(str(ref["config"]))
     json.dump(dict(goal=list(map(float, a.goal)), box_x_front=float(box["x_front"]) if box else 0.25,
                    box_height=float(box["height"]) if box else 0.0, margin=float(cfg["margin"]),
-                   box_setback_front=float(cfg.get("box_setback_front", 0.0))), open(side, "w"),   # (2026-10-31) the sbf plans' setting
+                   box_setback_front=float(cfg.get("box_setback_front", 0.0)),   # (2026-10-31) the sbf plans' setting
+                   flight_spin_change_deg=math.degrees(cfg["flight_spin_change"]) if "flight_spin_change" in cfg else 20.0,   # (2026-11-01) the free-landing plans': 60, and their landing sample
+                   ilc_landing_state="tail" if cfg.get("free_landing") else "all"), open(side, "w"),
               indent=1)
     print(f"{a.out}: the plan for goal {a.goal}{' (EXTRAPOLATED past the bank: fly with care)' if extrap else ''}"
           + (f"; BOX: front face {box['x_front']:.3f} m ahead of the standing CoM, {box['height']:.3f} m tall ({side})"

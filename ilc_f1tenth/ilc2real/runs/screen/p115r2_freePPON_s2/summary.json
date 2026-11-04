@@ -1,0 +1,240 @@
+{
+ "args": {
+  "policy": "runs/freePPON_s2/policy_final.npz",
+  "out": "runs/screen/p115r2_freePPON_s2",
+  "cars": [
+   "ax:mu=1.667",
+   "ax:mu=1.833,mass=1.1"
+  ],
+  "goals": [
+   "mocap_fig8R100_b0_free_x115"
+  ],
+  "eval_plans": null,
+  "anchor_plans": [
+   "mocap_square2fast_b0_free_x120",
+   "mocap_fig8R100_b0_free_x120"
+  ],
+  "rollback": 0.7,
+  "tr": 1,
+  "tr_lo": 0.25,
+  "tr_hi": 0.75,
+  "tr_max": 0.4,
+  "fit_realize": 0.9,
+  "fit_max_steps": 8000,
+  "fit_noise": 0.0,
+  "slip_max": 0.0,
+  "slope_dims": 0,
+  "slope_w": 1.0,
+  "crash_rollback": 1,
+  "max_crashes": 0,
+  "record": "",
+  "iters": 3,
+  "beta": 0.5,
+  "delta": 0.05,
+  "cap": 0.1,
+  "jac": "closed",
+  "objective": "task",
+  "err_scale": [
+   0.1,
+   1000000000.0,
+   1000000000.0,
+   1000000000.0,
+   1000000000.0,
+   0.24
+  ],
+  "train_starts": 0.0,
+  "goal_cycle": 1,
+  "goal_order": "cycle",
+  "pace_local": 0.0,
+  "pace_target": 1.0,
+  "trial_laps": 2,
+  "anchor_w": 20.0,
+  "anchor_n0": 6.0,
+  "age_decay": 0.5,
+  "steps": 800,
+  "lr": 0.0001,
+  "fallback_suffix": "",
+  "fallback_after": 2,
+  "fallback_on": "fail",
+  "fallback_ey": 0.1,
+  "fallback_revert": 0,
+  "eval_runs": 0,
+  "eval_laps": 5.0,
+  "eval_seed": 301,
+  "seed": 9002,
+  "gpu": "3",
+  "backend": "sim",
+  "session_dir": "",
+  "launch": [
+   1.0,
+   8.0
+  ],
+  "z_marg": 0.0,
+  "sat": "keep",
+  "sat_margin": 0.1,
+  "dump": 0,
+  "save_its": 1
+ },
+ "cars": {},
+ "eval": {},
+ "switched": {
+  "ax:mu=1.667": {},
+  "ax:mu=1.833,mass=1.1": {}
+ },
+ "rungs": {
+  "ax:mu=1.667": {
+   "mocap_fig8R100": ""
+  },
+  "ax:mu=1.833,mass=1.1": {
+   "mocap_fig8R100": ""
+  }
+ },
+ "trials": {
+  "ax:mu=1.667": [
+   {
+    "it": 0,
+    "goal": "mocap_fig8R100_b0_free_x115",
+    "failed": false,
+    "rms_ey": 0.09260046420509412,
+    "rms_dbeta": 11.133847364138974,
+    "J": 267.730224609375,
+    "J_pred": 122.88977813720703,
+    "crash": "",
+    "peak_ey": 0.18882036149462986
+   },
+   {
+    "it": 1,
+    "goal": "mocap_fig8R100_b0_free_x115",
+    "failed": false,
+    "rms_ey": 0.0736813284554901,
+    "rms_dbeta": 10.717721830187763,
+    "J": 164.40899658203125,
+    "J_pred": 84.08062744140625,
+    "crash": "",
+    "peak_ey": 0.14886885311594575
+   },
+   {
+    "it": 2,
+    "goal": "mocap_fig8R100_b0_free_x115",
+    "failed": false,
+    "rms_ey": 0.06427201808707735,
+    "rms_dbeta": 10.482983521684359,
+    "J": 128.71600341796875,
+    "J_pred": 84.60118103027344,
+    "crash": "",
+    "peak_ey": 0.12190258211630423
+   }
+  ],
+  "ax:mu=1.833,mass=1.1": [
+   {
+    "it": 0,
+    "goal": "mocap_fig8R100_b0_free_x115",
+    "failed": false,
+    "rms_ey": 0.08547663043376835,
+    "rms_dbeta": 10.876790464952595,
+    "J": 240.4174041748047,
+    "J_pred": 238.66709899902344,
+    "crash": "",
+    "peak_ey": 0.18345411021037977
+   },
+   {
+    "it": 2,
+    "goal": "mocap_fig8R100_b0_free_x115",
+    "failed": false,
+    "rms_ey": 0.0873220269396728,
+    "rms_dbeta": 10.90447015037733,
+    "J": 243.69046020507812,
+    "J_pred": 157.91036987304688,
+    "crash": "",
+    "peak_ey": 0.1916250956670186
+   }
+  ]
+ },
+ "real_laps": {
+  "ax:mu=1.667": 5.961267605633801,
+  "ax:mu=1.833,mass=1.1": 6.110719874804386
+ },
+ "rollbacks": {
+  "ax:mu=1.667": [],
+  "ax:mu=1.833,mass=1.1": [
+   {
+    "it": 1,
+    "prog": 2.0402973395931174,
+    "last": 2.035211267605635,
+    "cap": 0.05,
+    "new_crash": []
+   }
+  ]
+ },
+ "tr": {
+  "ax:mu=1.667": [
+   {
+    "it": 1,
+    "rho": 0.8522863582274635,
+    "r": 0.1,
+    "goals": [
+     "mocap_fig8R100_b0_free_x115"
+    ]
+   },
+   {
+    "it": 2,
+    "rho": 0.6237801003253066,
+    "r": 0.2,
+    "goals": [
+     "mocap_fig8R100_b0_free_x115"
+    ]
+   }
+  ],
+  "ax:mu=1.833,mass=1.1": [
+   {
+    "it": 1,
+    "rho": -2.585460473550232,
+    "r": 0.1,
+    "goals": [
+     "mocap_fig8R100_b0_free_x115"
+    ]
+   }
+  ]
+ },
+ "realize": {
+  "ax:mu=1.667": [
+   {
+    "it": 0,
+    "realized": 0.5962403498687491,
+    "steps": 2800
+   },
+   {
+    "it": 1,
+    "realized": 0.4636530902686173,
+    "steps": 3000
+   },
+   {
+    "it": 2,
+    "realized": 0.4206297103265512,
+    "steps": 2200
+   }
+  ],
+  "ax:mu=1.833,mass=1.1": [
+   {
+    "it": 0,
+    "realized": 1.9814207572829536,
+    "steps": 800
+   },
+   {
+    "it": 2,
+    "realized": 0.4814554965603612,
+    "steps": 2000
+   }
+  ]
+ },
+ "crashes": {
+  "ax:mu=1.667": [],
+  "ax:mu=1.833,mass=1.1": []
+ },
+ "frozen": {
+  "ax:mu=1.667": false,
+  "ax:mu=1.833,mass=1.1": false
+ },
+ "safety_ey": 0.5,
+ "seconds": 128.80793404579163
+}

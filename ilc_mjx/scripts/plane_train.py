@@ -162,6 +162,8 @@ def targets_of(G, ref):
     xr = np.asarray(ref["x_ref"])
     tg = xr[:, N, :3].copy()
     tg[:, :2] = xr[:, 0, :2] + G
+    if os.environ.get("ILC_FREE_LANDING"):   # ILC_FREE_LANDING (2026-11-01): the TO picked the landing height, the target is the plan's, not standing height + box
+        tg[:, 1] = xr[:, N, 1]
     tg[:, 2] = 0.0
     return tg
 
