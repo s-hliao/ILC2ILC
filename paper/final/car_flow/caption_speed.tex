@@ -1,0 +1,11 @@
+% car_flow_speed.pdf caption (2026-11-05); numbers printed by flow_car.py speed (car_flow_speed_data.npz)
+\caption{\textbf{The hardware stage pulls the car's speed back toward the plan on a held-out track.} Speed flow of the plastic-tire
+car along one lap of the held-out peanut (clockwise; never practised). From each point (arc length, speed minus the plan's speed),
+with the car on the path and every other state on the plan, the arrow shows where it is 0.4\,s later; orange points are four
+speed-perturbed starts every 0.2\,s, the dotted line the speed they settle at. Top: the nominal car (friction $\mu$ 0.6, at which the
+network and plans were made) under the PPO+DR network $\pi_0$ (the reference). Below: the plastic car (every friction $\times$0.4/0.6)
+under $\pi_0$ and after each stage iteration $\pi_1$--$\pi_3$ (2 laps each on a different track). Shading: deviation of the speed flow from
+the reference in tolerance units (10\,\% of the plan's mean speed, 0.23\,m/s). The settled speed rises from $-$0.18\,m/s at $\pi_0$ to
+$-$0.16, $-$0.15 and $-$0.10\,m/s (reference $-$0.09) and the mean deviation falls from 0.36 to 0.30, 0.26 and 0.22. Lateral
+tracking is unchanged (rms $e_y$ 2.3 $\rightarrow$ 2.2\,cm): on plastic the stage's gain is lap pace (0.920 $\rightarrow$ 0.953).
+One stage run (network seed 0, stage seed 9001), one car of twelve; its held-out error falls 41\,\%, the twelve-car mean 27\,\%.}
