@@ -32,6 +32,8 @@ NO_CRASH = os.environ.get('F1T_NO_CRASH') == '1'
 # safety envelope no longer ends the run; the time spent outside it is returned as dev_time (s). Spin-outs and stalls still end it.
 # Simulation only: on the real car the room's envelope stays a stop (net_runner.py safety_ey).
 DEV_TIME = os.environ.get('F1T_DEV_TIME') == '1'
+SPIN_RHO = float(os.environ.get('F1T_SPIN_RHO') or 0.0)   # (2026-11-06, user: "an analytical yaw rate where if it's spinning out then
+SPIN_STEPS = int(os.environ.get('F1T_SPIN_STEPS') or 4)   # its above, everything else is fine"): > 0 replaces the wall / heading / stall ends
 # F1T_MU_PATCH="LO,HI,F" (2026-11-05, user: "half of the orca track has lower friction, so the ilc can correct the policy on a repeatable
 # surface"): the tire-road friction is scaled by F wherever the car's arc length along the plan is within [LO, HI) of the lap (fractions);
 # a fixed place on the track, the same every lap. Only the "real" car: the sim and the plans never see it. Unset: no patch.
@@ -85,7 +87,7 @@ def run(car_name, plan, policy=None, laps=1.0, s0=0.0, pert=None, seed=0, noise=
     launched, handover = not launch, (0 if not launch else -1)
     X, Xm, OBS, MU, A, ERR, ERRT, IDX, APP, OBST = [], [], [], [], [], [], [], [], [], []
     pname = plan.get('name', '')
-    prog, failed, crash, peak_ey, dev_steps = 0.0, False, '', 0.0, 0
+    prog, failed, crash, peak_ey, dev_steps, spin_n = 0.0, False, '', 0.0, 0, 0
     hist, last_a = [], np.zeros(2)
     for t in range(T):
         xt = mc.planar(xm)
@@ -152,7 +154,15 @@ def run(car_name, plan, policy=None, laps=1.0, s0=0.0, pert=None, seed=0, noise=
         # wall / spin / stall stop -- every run drives its full laps
         if abs(err_true[0]) > max_ey:
             dev_steps += 1
-        if not NO_CRASH and ((abs(err_true[0]) > max_ey and not DEV_TIME) or abs(err_true[1]) > sn.FAIL_EPSI
+        if SPIN_RHO > 0:                              # (2026-11-06, user) the ONLY end: a spin-out, the yaw rate above SPIN_RHO x the
+            # friction-limited yaw rate mu g / |v| for SPIN_STEPS control periods in a row (drifting, sliding, off the track,
+            # heading off the path, slow: all fine)
+            rho_t = abs(xt[5]) * math.hypot(xt[3], xt[4]) / (c['fiala'][2] * 9.81)
+            spin_n = spin_n + 1 if rho_t > SPIN_RHO else 0
+            if spin_n >= SPIN_STEPS:
+                failed, crash = True, 'spin'
+                break
+        elif not NO_CRASH and ((abs(err_true[0]) > max_ey and not DEV_TIME) or abs(err_true[1]) > sn.FAIL_EPSI
                              or (launched and xt[3] < 0.3)):
             failed = True
             crash = 'wall' if abs(err_true[0]) > max_ey else ('spin' if abs(err_true[1]) > sn.FAIL_EPSI else 'stall')

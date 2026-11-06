@@ -44,6 +44,7 @@ from .robot import HIP_IDX, PLANAR_TO_CANONICAL, expand
 
 TICK = 0.002
 FLAT_X_FRONT = 0.25        # a flat plan in a mixed bank: a box of height 0, front face this far before its goal
+OBS_MEM = int(os.environ["ILC_OBS_MEM"]) if os.environ.get("ILC_OBS_MEM") else None   # (2026-11-06) see JumpEnv.obs
 BOX_MIN = 0.005            # an interpolated box lower than this is none (dilc_execute.GoalBank.reference: the same)
 BOX_DEPTH = 0.3            # the GPU box's geom reaches this far under the floor (no thin box)
 
@@ -70,6 +71,14 @@ class Config:
     estimator: str = "line"     # "ekf": the robots' planar trunk EKF (dilc_execute.EkfEstimator, planar_ekf: the IMU
                                 # predicts, the 500 Hz mocap corrects, one step per TO sample); the bank's "estimator"
                                 # key overrides this (the bank is what the robots read)
+
+
+def rec_index(t, k, dt):
+    """(2026-11-06) the record sample at policy step k: the last one at or before k * dt (the controller runs step k at t = k dt
+    from the jump's start, dilc_execute.py). The robots record at irregular ticks (median 4 ms, gaps to 32 ms), so the old index
+    k * tps (one sample per 2 ms tick) read the hardware record ~1.6x too late; on the sim's 2 ms grid both give the same sample."""
+    i = int(np.searchsorted(np.asarray(t, float), k * dt + 1e-6, side="right")) - 1
+    return min(max(i, 0), len(t) - 1)
 
 
 def _quat_mul(a, b):
@@ -594,9 +603,12 @@ class JumpEnv:
     def obs(self, err_hist, prev_a, k, goal_obs):
         """dilc_execute.GoalBank.obs_at: [error, time, goal, the previous H errors, the previous action]."""
         parts = [err_hist[0], jnp.array([2.0 * k / self.Nc - 1.0]), goal_obs]
-        parts += [err_hist[j] for j in range(1, self.H + 1)]
+        # ILC_OBS_MEM=m (2026-11-06, memory ablation): the observation keeps its size, but the history slots beyond the m most recent
+        # errors are zeros, and with m = 0 the previous action too (a memoryless policy: its weights on those inputs are zero)
+        mem = OBS_MEM if OBS_MEM is not None else self.H
+        parts += [err_hist[j] if j <= mem else jnp.zeros_like(err_hist[j]) for j in range(1, self.H + 1)]
         if self.PA:
-            parts.append(prev_a)
+            parts.append(prev_a if (OBS_MEM is None or mem > 0) else jnp.zeros_like(prev_a))
         return jnp.concatenate(parts)
 
     # -- finite differences -------------------------------------------------------------------
@@ -717,7 +729,7 @@ class JumpEnv:
         r_foot = float(m.geom_size[feet[0], 0])
         Q, V = [], []
         for k in ks:
-            i = min(int(k) * self.tps, len(t) - 1)
+            i = rec_index(t, int(k), self.dt)
             sel = (np.abs(t - t[i]) <= window / 2 + 1e-9) if centered else (t <= t[i] + 1e-9) & (t >= t[i] - window)
             tt = t[sel] - t[i]
             slope = lambda y: np.polyfit(tt, y, 1)[0] if len(tt) > 2 else np.zeros(y.shape[1:])
@@ -792,7 +804,7 @@ class JumpEnv:
         if h < BOX_MIN:
             return C, Gr
         for j, k in enumerate(ks):
-            cx, cz = pose(min(int(k) * self.tps, len(t) - 1))
+            cx, cz = pose(rec_index(t, int(k), self.dt))
             P = d.geom_xpos[cg][:, None, :] + np.einsum("gij,gpj->gpi", d.geom_xmat[cg].reshape(-1, 3, 3), loc)
             px, pz = P[..., 0], P[..., 2]
             a_, b_ = xf - px, pz - h

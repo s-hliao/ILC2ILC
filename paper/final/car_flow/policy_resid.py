@@ -27,22 +27,34 @@ pl = bank.load_bank([V["plan"]])[0]
 P = sn.PlanNP(pl)
 L = float(pl["length"])
 pols = [fc.load_policy(f"{fc.RUN}/its/it{k}_{fc.CAR}_policy.npz") for k in range(4)]
-assert V.get("base") == "orbit"
-r0 = rc.run(fc.CAR, pl, pols[0], laps=1.05, s0=0.0, pert=np.zeros(5), seed=0, noise=False)
-orbit = {int(i): (np.asarray(x, float), float(e[0])) for i, x, e in zip(r0["idx"], r0["x_true"], r0["err_true"])}
-oi = np.array(sorted(orbit))
+ORBIT = V.get("base") == "orbit"
+if ORBIT:
+    r0 = rc.run(fc.CAR, pl, pols[0], laps=1.05, s0=0.0, pert=np.zeros(5), seed=0, noise=False)
+    orbit = {int(i): (np.asarray(x, float), float(e[0])) for i, x, e in zip(r0["idx"], r0["x_true"], r0["err_true"])}
+    oi = np.array(sorted(orbit))
 ss = np.linspace(0, L, fc.NS, endpoint=False)
 es = fc.GRID
 U = np.zeros((4, len(ss), len(es), 2))
 for i, s in enumerate(ss):
     ig = int(round(s / P.ds)) % P.M
-    j = int(oi[np.argmin(np.abs((oi - ig + P.M // 2) % P.M - P.M // 2))])
-    xo, eo = orbit[j]
-    th = pl["x"][j][2]
+    if ORBIT:
+        j = int(oi[np.argmin(np.abs((oi - ig + P.M // 2) % P.M - P.M // 2))])
+        xo, eo = orbit[j]
+        th = pl["x"][j][2]
     for jj, e in enumerate(es):
-        x = xo.copy()
-        x[0] += -math.sin(th) * (e - eo)
-        x[1] += math.cos(th) * (e - eo)
+        if ORBIT:
+            x = xo.copy()
+            x[0] += -math.sin(th) * (e - eo)
+            x[1] += math.cos(th) * (e - eo)
+        else:                       # (2026-11-06) flow_car.py's start(): on the path, the plan's speed + e (vx, vy, r, wheel scaled)
+            j = ig
+            x = np.asarray(pl["x"][j], float).copy()
+            if V["var"] == "lat":
+                x[0] += -math.sin(x[2]) * e
+                x[1] += math.cos(x[2]) * e
+            else:
+                f = (math.hypot(x[3], x[4]) + e) / math.hypot(x[3], x[4])
+                x[3:7] *= f
         idx = P.project(j, x[:2])
         obs, _ = P.features(idx, x)
         for k in range(4):

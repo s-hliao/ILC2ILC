@@ -13,7 +13,8 @@ import car_model as cm
 import sim_jax as sj
 
 
-def make_gn(P, T, policy_fn, beta=0.5, delta=0.05, cap=0.05, jac_mode='closed', feedback='policy', err_scale=None, nz=0):
+def make_gn(P, T, policy_fn, beta=0.5, delta=0.05, cap=0.05, jac_mode='closed', feedback='policy', err_scale=None, nz=0,
+            zphi=None, zh=0):
     """Returns gn(params, xs (n, T+1, 10), idx (n, T), a (n, T, 2) normalized, pid (n,), valid (n, T), err (n, T, NE))
     -> step (n, T, 2), J, J_pred. feedback: 'policy' (K from policy_fn(params, obs)), 'expert' (the plan's LQR,
     for the per-track ILC baseline), 'none'. nz > 0: the network also takes a per-step context z (n, T, nz), appended
@@ -60,6 +61,53 @@ def make_gn(P, T, policy_fn, beta=0.5, delta=0.05, cap=0.05, jac_mode='closed', 
         e_pred = e + G @ step
         return step.reshape(T, 2) * Vf[:, None], 0.5 * jnp.sum(e ** 2), 0.5 * jnp.sum(e_pred ** 2)
 
+    if zphi is not None:
+        # (2026-11-06, runs/screen/CAR_SIGNIF_1106.md B) RMA: the policy reaction through z_hat = phi(h_t), h_t the last zh entries of
+        # [obs_k[:8], a_{k-1}] (oldest first), not held fixed: the chain carries each impulse's history of observation and action changes,
+        # du_t = K_t dx_t + Kz_t Jphi(h_t) dh_t (+ the impulse itself), dx_{t+1} = A_t dx_t + B_t du_t. HV (n, T, zh*10): the measured h_t.
+        jphi_ = [(jnp.asarray(W), jnp.asarray(b)) for W, b in zphi]
+
+        def lane_z(params, X, I, Ap, q, V, E, Z, HV):
+            def one(x, i, a, z):
+                A = jax.jacfwd(lambda xx: sj.step(xx, a * sj.A_SCALE + sj.A_OFF, p1))(x)
+                B = jax.jacfwd(lambda aa: sj.step(x, aa * sj.A_SCALE + sj.A_OFF, p1))(a)
+                C = jax.jacfwd(lambda xx: sj.features(P, q, i, xx)[1])(x)
+                K = jax.jacfwd(lambda xx: policy_fn(params, jnp.concatenate([sj.features(P, q, i, xx)[0], z])))(x)
+                Kz = jax.jacfwd(lambda zz: policy_fn(params, jnp.concatenate([sj.features(P, q, i, x)[0], zz])))(z)
+                Co = jax.jacfwd(lambda xx: sj.features(P, q, i, xx)[0][:8])(x)
+                return A, B, C, K, Kz, Co
+            A, B, C, K, Kz, Co = jax.vmap(one)(X[:-1], I, Ap, Z)
+            Jp = jax.vmap(jax.jacfwd(lambda h: sj.mlp(jphi_, h)))(HV)              # (T, nz, zh*10)
+
+            def body(carry, t):
+                Vc, Ob, Ab, dp = carry
+                do8 = jnp.einsum('ij,kjl->kil', Co[t], Vc)
+                Ob = jnp.concatenate([Ob[:, 1:], do8[:, None]], 1)
+                Ab = jnp.concatenate([Ab[:, 1:], dp[:, None]], 1)
+                dh = jnp.concatenate([Ob, Ab], 2).reshape(T, zh * 10, 2)
+                dz = jnp.einsum('ij,kjl->kil', Jp[t], dh)
+                du = jnp.einsum('ij,kjl->kil', K[t], Vc) + jnp.einsum('ij,kjl->kil', Kz[t], dz)
+                du = du.at[t].set(jnp.eye(2))
+                rows = jnp.einsum('ij,kjl->kil', C[t], Vc)
+                Vn = jnp.einsum('ij,kjl->kil', A[t], Vc) + jnp.einsum('ij,kjl->kil', B[t], du)
+                return (Vn, Ob, Ab, du), rows
+            init = (jnp.zeros((T, sj.NXS, 2)), jnp.zeros((T, zh, 8, 2)), jnp.zeros((T, zh, 2, 2)), jnp.zeros((T, 2, 2)))
+            _, rows = jax.lax.scan(body, init, jnp.arange(T))
+            w = 1.0 / jnp.array(sj.ERR_SCALE if err_scale is None else err_scale)
+            Vf = V.astype(jnp.float32)
+            G = rows * w[None, None, :, None] * Vf[:, None, None, None] * Vf[None, :, None, None]
+            G = jnp.transpose(G, (0, 2, 1, 3)).reshape(T * sj.NE, T * 2)
+            e = (E * w[None, :] * Vf[:, None]).reshape(-1)
+            H = G.T @ G
+            n = H.shape[0]
+            lam = delta * jnp.trace(H) / n + 1e-9
+            step = -beta * jnp.linalg.solve(H + lam * jnp.eye(n), G.T @ e)
+            rms = jnp.sqrt(jnp.sum(step ** 2) / (2 * jnp.maximum(jnp.sum(Vf), 1.0)))
+            step = step * jnp.minimum(1.0, cap / (rms + 1e-12))
+            e_pred = e + G @ step
+            return step.reshape(T, 2) * Vf[:, None], 0.5 * jnp.sum(e ** 2), 0.5 * jnp.sum(e_pred ** 2)
+        lane_z.raw = lane_z
+        return jax.jit(jax.vmap(lane_z, in_axes=(None, 0, 0, 0, 0, 0, 0, 0, 0)))
     if nz:
         return jax.jit(jax.vmap(lane, in_axes=(None, 0, 0, 0, 0, 0, 0, 0)))
     return jax.jit(jax.vmap(lane, in_axes=(None, 0, 0, 0, 0, 0, 0)))

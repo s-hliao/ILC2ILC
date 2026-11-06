@@ -3,7 +3,7 @@
 Every number is simulation-to-simulation: the "real" cars and robots are separate simulators with changed physics; the sim and planner
 stay nominal. Change = the stage's error after practice vs the SAME network's zero-shot (negative = better), bootstrap 95 % CI over runs.
 Rules were written before each result (files named per section); every result is reported, including the ones that failed.
-All numbers final as of 2026-11-05 20:07.
+All numbers final as of 2026-11-05 20:07; ETHZMobil track-edge wording 2026-11-06.
 
 ## 1. Car
 
@@ -18,8 +18,11 @@ What improves (measured, all cells): on plastic the gain is LAP PACE (11 of 12 c
 slightly worse within the 10 cm tolerance; rubber: e_y 8.1 -> 7.4 cm. Write the claim as "restores lap pace", not "improves tracking".
 
 ### 1b. Practised harder track: ETHZMobil (BayesRace) x4.3, 55 m, sim only (runs/screen/ETHZ_RULES.md)
-Zero-shot tracks 4-5x worse laterally than on the peanut (plans reach 5.55 m/s, training 3.88 m/s). One-lap trials.
-| practise + score on ETHZMobil (9 runs: 3 network seeds x 3 stage seeds) | score | change | runs better | rms e_y | outside the tube |
+Zero-shot tracks 4-5x worse laterally than on the peanut (plans reach 5.55 m/s, training 3.88 m/s). One-lap trials. Track edges are
++-0.99 m from the plan (2x the mocap room's 0.5 m envelope); the last column counts time more than 0.5 m off the plan. Off the track
+(replay of every evaluation lap, logs/maxey_*.jsonl on ube): rubber never (largest offset 0.77 m); plastic yes, on the three lowest-grip
+cars only (ax:mu=0.4000 / 0.4667, n04_harsh_combo): PPO+DR 0.22 -> 0.13 s per lap beyond the edges, RMA 0.01 -> 0.04 s.
+| practise + score on ETHZMobil (9 runs: 3 network seeds x 3 stage seeds) | score | change | runs better | rms e_y | time > 0.5 m off the plan (per lap) |
 |---|---|---|---|---|---|
 | rubber, RMA + stage | 2.51 -> 1.78 | **-29.0 % [-31.5, -26.1]** | 9/9 | 25.1 -> 17.8 cm | 0.87 -> 0.07 s |
 | rubber, PPO+DR + stage | 2.26 -> 1.71 | **-24.0 % [-26.1, -21.9]** | 9/9 | 22.6 -> 17.1 cm | 0.65 -> 0.03 s |
@@ -27,8 +30,10 @@ Zero-shot tracks 4-5x worse laterally than on the peanut (plans reach 5.55 m/s, 
 | plastic, RMA + stage | 1.20 -> 1.23 | +1.0 % [-3.5, +6.2] (n.s.) | 6/9 | 10.1 -> 11.2 cm | 0.18 -> 0.30 s |
 Here the gain IS lateral tracking (unlike the peanut). Cost: practising ETHZMobil slightly worsens the held-out peanut on plastic (PPO+DR
 +2.7 % [+2.0, +3.5], RMA +5.1 % [+4.2, +6.1]); rubber PPO+DR -1.7 % [-3.1, -0.5], RMA +6.0 % (n.s.).
-Figure: car_flow_ethz_orbit_1s.pdf (caption_ethz.tex): the flow converges in every iteration; the stage moves the line it converges to
-toward the plan (10.7 -> 9.1 cm) and the perturbed laps 21.5 -> 15.7 cm rms, 4/4 -> 1/4 leaving the tube.
+Figures (drawn to the +-0.99 m track edges): car_flow_ethz_orbit_1s_w.pdf (caption_ethz.tex) and car_flow_ethz_resid.pdf
+(caption_ethz_resid.tex; the steering change vs zero-shot, mean 0.7 / 1.4 / 2.4 deg, max 16 deg): the flow converges in every iteration;
+the stage moves the line it converges to toward the plan (10.8 -> 9.1 cm) and the perturbed laps 21.5 -> 15.7 cm rms; none of the
+figure's laps (rubber) leaves the track; 4/4 -> 1/4 pass more than 0.5 m from the plan.
 
 ### 1c. Speed ladders on the held-out peanut (runs/screen/SPEED_LADDER.md)
 Higher plan speed raises the zero-shot error but the stage's gain FADES above the practised speed.
@@ -39,7 +44,7 @@ Higher plan speed raises the zero-shot error but the stage's gain FADES above th
 
 ### 1d. Flow figures (paper/final/car_flow/flow_car.py)
 - car_flow_speed.pdf: plastic, peanut, speed flow (0.4 s): the settled speed -0.18 -> -0.10 m/s (reference -0.09).
-- car_flow_ethz_orbit_1s.pdf: see 1b. A 0.4 s horizon is too short for the car's policy to show (the drift is set by the current
+- car_flow_ethz_orbit_1s_w.pdf, car_flow_ethz_resid.pdf: see 1b. A 0.4 s horizon is too short for the car's policy to show (the drift is set by the current
   heading); the lateral figures use 1.0 s on the car's own orbit.
 
 ### 1e. Void
@@ -61,16 +66,73 @@ steering at its limit on 15 % of the lap). All ORCA results (held-out, rubber la
 | 0.1 | it75 + anchor, update gain 1.2 (check, not selectable) | -0.20 [-0.36, -0.07] (-> 1.08) | -0.03 [-0.10, +0.05] | 12 |
 What improves at d = 2 and 1.0: both distance and height bias (d=2: -4.3 -> -2.2 cm, +3.3 -> +1.9 cm), no falls.
 
-Damping 0.1, measured cause: the update's sensitivity (from the sim) overstates the robot's by ~4.7x (step per unit error 7.6x smaller
-than at d=2, the robot's real response only 1.6x larger), so it takes steps ~4.7x too small; their effect sits below the jump-to-jump
-noise (height spread 2.4 cm vs 1.4 at d=2). Practised goals still improve (partly rollback keeping lucky trials); the shared held-out
-bias barely moves. Tested: gain 2.3 (0.5 x 4.7) enlarges the steps to d=2's size and helps nominal jumps but fails on perturbed
-starts; gain 1.2 (a pre-declared check) is the best on every measure, adoptable only after a confirmation on new seeds.
+Damping 0.1, measured (sens_direct.py: the update's own sensitivity S recomputed exactly as deploy.py does, its predicted landing
+change S @ (pi_k - pi_{k-1}) vs the robot's measured change between consecutive practice jumps; 354 jump pairs at d=0.1, 360 at d=2):
+- the update's steps are ~4x smaller at d=0.1 (median |da| 0.084 vs 0.350);
+- at d=2 the robot follows the prediction at full size (fitted response 0.99 x the prediction, 95 % CI [0.61, 1.48]); at d=0.1 it
+  barely follows it (0.12 x, CI [-0.09, 0.41]; only 3 run groups, so the CI is rough); there, using the prediction is worse than
+  predicting no change (4.42 vs 4.02 cm rms);
+- jump-to-jump landing changes are the same size at both dampings (median 2.55 vs 2.52 cm): the earlier "larger noise at d=0.1" and
+  "sensitivity overstated 4.7x" statements were inferences and are withdrawn; replaced by the two measurements above.
+Practised goals still improve; the shared held-out bias barely moves. Tested: gain 2.3 helps nominal jumps but fails on perturbed starts;
+gain 1.2 (a pre-declared check) is the best on every measure, adoptable only after the confirmation on new seeds (running).
 
 Perturbed-start study (d = 2, one constant perturbation per stage, 12 runs each): same-condition change: block 1.5 cm -0.82, crouch
 -0.28, nose-up -2.57, nose-down -0.42, tall -0.20 (all significant); nose-up costs +1.38 at the nominal stance (stance leak, measured).
 
 ## 3. Disclose
 - Car: pace, not tracking (1a); ETHZMobil is a practised-track result; ORCA void (1e).
+- Car, plastic: the lowest-grip car (ax:mu=0.4000) never gets within 0.5 m/s of square2fast's plan speed, so --skip-launch 0.5 keeps none of
+  its trial; PPO+DR's network for it is unchanged by the stage in 2 of 3 runs (runs/screen/PFAST_RULES.md).
+- Car RMA: the stage's sensitivity holds z_hat fixed; measured, that misses 14-45 % of RMA's action response within 8 periods and 84-105 %
+  at 16 (runs/screen/RMA_SENS_1106.md). Not fixed (user decision); the RMA gains are with this approximation.
 - Quad: the deployed d=2 network lacked the baseline audit's cost cap (both reported); d=0.1 result per section 2; how many stage
   variants were tried, each judged by a rule fixed before its result; r5 cannot reach 20 cm.
+
+## 4. Night of 2026-11-06 (every rule written before its result; files named per item)
+
+### 4a. Quad: the update's sensitivity through the policy's memory (stage_fl/ARMB_VARIANTS_1102.md)
+The quad networks observe their last 3 errors and previous action (dilc_train.py, 2026-10-03); the stage's chain models the policy's
+feedback through the current error only. Measured in the exact GPU sim: that feedback model has 100-120 % error vs the policy's true
+action response; a chain through the whole observation (--fb-memory) predicts single action impulses much better (direction cos 0.78
+vs 0.23 at d=0.1). BUT as the stage's update it is worse, at both dampings (12 runs each, seeds 9001-9003, paired):
+  d=0.1 nominal: deployed -0.13 [-0.23, -0.04], with the fix -0.06 [-0.11, -0.01]; perturbed -0.09 vs +0.00
+  d=2   nominal: deployed -0.33 [-0.45, -0.20], with the fix -0.11 [-0.21, +0.00]; perturbed -0.12 vs -0.06
+and it predicts the robots' landing change between jumps worse (offline on the same data, d=0.1 cos 0.13 vs 0.21; d=2 fit 0.02 vs 0.99).
+The deployed update stays. The memory omission is real but is NOT by itself the cause of the small d=0.1 gain.
+Measured cause of the small d=0.1 gain (stage_fl/ARMB_VARIANTS_1102.md): each update's effect is below the robots' trial-to-trial noise.
+The predicted landing change per update is 0.3-0.9 cm vs a 2.8 cm rms jump-to-jump change, the d=0.1 steps are ~6x smaller than d=2's
+(median 0.011 vs 0.070), and no sensitivity variant (old / memory chain, feedback at robot / sim observations) predicts the robots'
+jump-to-jump change better than predicting none at d=0.1. In the exact sim the memory chain does predict the update's effect better
+(cos 0.92 vs 0.54 at d=0.1); at d=2 the old chain under-predicts its effect ~3x, which made its steps ~3x larger than intended (helpful
+with gain 0.5). Lever left: the step size (gain 1.2 measured -0.20, best; its confirmation was stopped -- open).
+Theory text: the paper's K = d pi / d x assumes a memoryless policy; the networks have memory -> state augmentation paragraph needed.
+
+### 4b. Quad memory ablation, d=0.1 (mem/MEMORY_ABLATION_1106.md) -- stage results pending
+m0 (memoryless), m1, m3 trained with the deployed PPO+DR step from a masked init, extended while improving: final DR score m0 9.6
+(it300), m1 6.6 (it300), m3 8.6 (it25) -- a memoryless network trains to the same level. The GPU DR evaluation is NOT repeatable (the
+same weights scored 62 then 78, 17 then 31), so these picks are partly noise. Stage runs (deployed update) on the it<=100 picks are
+running; the it300 networks of m0 / m1 get a second, labelled evaluation (queued).
+At the first picks (deployed update, 12 runs each): m0 it100 zero-shot 4.28, -0.01 [-0.27, +0.24] (fails); m1 it100 2.32, +0.31
+[+0.04, +0.57] (the stage hurts; fails); m3 it25 1.37, -0.10 [-0.18, -0.03], perturbed -0.10 [-0.15, -0.05] (passes). The lower-memory
+networks were far less trained here; the it300 evaluation decides whether memory matters.
+m0 it300 (memoryless, DR 9.6): nominal 2.17 -> 1.38, -0.79 [-1.06, -0.56] (~6x the memory networks' change; the update's chain is exact
+for a memoryless policy); perturbed -0.06 [-0.31, +0.20]. Not selected by the rule (perturbed CI upper > +0.10; end point 1.38 above
+m3's 1.27 and the deployed 1.16, from a worse zero-shot). m1 it300 (DR 6.6): 3.05 -> 2.55, -0.50 [-0.83, -0.18]; perturbed +0.22
+[-0.15, +0.55], falls 2 -> 9 %: fails. Pick by the rule: m3, the deployed layout (only passing variant). The well-trained lower-memory
+networks converge much more on the nominal stance but from worse zero-shots and without improving perturbed starts; the GPU DR score did
+not predict the robots' zero-shot. Full table: mem/MEMORY_ABLATION_1106.md.
+
+### 4c. Car (runs/screen/PFAST_RULES.md, RMA_SENS_1106.md, CAR_SIGNIF_1106.md)
+- Fast practice-track rungs: only rubber peanut x1.5 PPO+DR gains clearly (-21.7 % [-30.8, -11.0]); plastic square2fast x1.2 VOID (the
+  car cannot reach the plan's speed: --skip-launch keeps no sample); rubber fig8 x1.4: the stage spent its gain on pace (J 1293 -> 849),
+  lateral flat. No faster plastic rung is reachable by every car; at x1.0 the lowest-grip car is never updated in 2 of 3 PPO+DR runs.
+- RMA: the stage holds z_hat fixed; that misses 14-45 % of RMA's reaction within 8 periods, 84-105 % at 16. A chain through the
+  adaptation module (hw_stage --z-path 1) passes both gates (reproduces the old chain with the path off: 2e-5; matches an independent
+  numpy implementation: 4e-5) and changes the step by 31 % on a 1.5 s trial. Paired runs pending.
+- Longer practice (8 iterations, sim only; the headline stays at 3; held-out peanut, 3 runs per cell, all runs better at every iteration):
+  plastic PPO+DR it3 -25.2 % [-28.7, -21.1] -> it8 -33.6 % [-39.6, -28.6]; plastic RMA -9.5 -> -15.3 %; rubber PPO+DR -7.7 -> -8.2 %;
+  rubber RMA -4.9 -> -4.7 % (rubber's zero-shot is already inside tolerance on the held-out peanut, score 0.76). Plastic gains are pace
+  (0.885 -> 0.944) with lateral 4.7 -> 6.5 cm (inside the 10 cm tolerance).
+- RMA with the z-path chain (paired with the runs above): plastic it3 -11.4 % [-13.2, -10.5] (vs -9.5), it8 -19.2 % (vs -15.3); rubber it3
+  -5.6 % [-10.8, -0.0] (vs -4.9), it8 -6.1 % (vs -4.7). Passes its rule on both tires; small effect, CIs overlap.

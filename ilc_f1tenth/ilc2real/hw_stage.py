@@ -55,6 +55,8 @@ ap.add_argument('--fit-noise', type=float, default=0.0, help='(2026-10-30) > 0: 
                 'normalized observation units), its target shifted by the pre-update network: y + mu(o + n) - mu(o), so the refit '
                 'keeps the network slope around the laps (one update changed the feedback gains by 2.4 x on the current channel, '
                 'while the GN step takes them as fixed)')
+ap.add_argument('--z-path', type=int, default=0, help='(2026-11-06, runs/screen/CAR_SIGNIF_1106.md B) RMA only, 1: the GN chain\'s '
+                'policy reaction through the adaptation module z_hat = phi(history) (ilc_core zphi), not with z_hat held fixed')
 ap.add_argument('--slip-max', type=float, default=0.0, help='(2026-10-31; user OK to test) > 0: a trial is cut for the GN step at its '
                 'first sample whose MEASURED axle slip angle (front or rear, from the measured state and the nominal geometry) '
                 'exceeds this (deg), minus 4 samples -- as a crash cuts it (ilc_core.pad_runs): in a spin the nominal model\'s '
@@ -370,7 +372,8 @@ def main():
 
     def gn_for(cap):
         if cap not in gns:
-            gns[cap] = ilc_core.make_gn(P, T, policy_fn, a.beta, a.delta, cap, a.jac, err_scale=ERRS, nz=nz)
+            gns[cap] = ilc_core.make_gn(P, T, policy_fn, a.beta, a.delta, cap, a.jac, err_scale=ERRS, nz=nz,
+                                        zphi=rma['adapt'] if (rma and a.z_path) else None, zh=rma['hist'] if rma else 0)
         return gns[cap]
 
     def gn_call(c, rr, *args):                       # RMA: + each lap's measured z_hat, padded as pad_runs
@@ -382,6 +385,18 @@ def main():
             if m:
                 Z[k, :m] = aug(r)[:m, -nz:]
                 Z[k, m:] = Z[k, m - 1]
+        if a.z_path:                                 # + each lap's measured history h_t (rma_zhat's buffer), padded the same way
+            Hn = rma['hist']
+            HV = np.zeros((len(rr), T, Hn * 10))
+            for k, r in enumerate(rr):
+                m = min(len(r['obs']), T)
+                if m:
+                    o_, a_ = np.asarray(r['obs'])[:m], np.asarray(r['a'])[:m]
+                    f = np.concatenate([o_[:, :8], np.concatenate([np.zeros((1, 2)), a_[:-1]])], 1)
+                    f = np.concatenate([np.zeros((Hn - 1, 10)), f])
+                    HV[k, :m] = np.lib.stride_tricks.sliding_window_view(f, (Hn, 10))[:, 0].reshape(m, Hn * 10)
+                    HV[k, m:] = HV[k, m - 1]
+            return gn_for(cap[c])(params[c], *args, jnp.array(Z), jnp.array(HV))
         return gn_for(cap[c])(params[c], *args, jnp.array(Z))
 
     # trust-region pool: nominal-sim states of the bank's plans flown by the starting network
@@ -603,6 +618,8 @@ def main():
             step, J, Jp = gn_call(c, rr, jnp.array(xs), jnp.array(idx), jnp.array(acts), jnp.array(pid_c),
                                   jnp.array(valid), jnp.array(err))
             step, J, Jp = np.asarray(step), np.asarray(J), np.asarray(Jp)
+            if os.environ.get('F1T_GN_DUMP'):              # (2026-11-06 debug) the GN step's inputs and outputs
+                np.savez(f"{os.environ['F1T_GN_DUMP']}_{c}_it{it}.npz", xs=xs, idx=idx, acts=acts, err=err, valid=valid, step=step, J=J, Jp=Jp)
             bad = ~(np.isfinite(step).all(axis=(1, 2)) & np.isfinite(J))
             valid[bad] = False                          # a non-finite step (an odd measured state) gives no targets
             step = np.nan_to_num(step)

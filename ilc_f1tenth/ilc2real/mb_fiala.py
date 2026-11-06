@@ -169,6 +169,7 @@ def vehicle_dynamics_mb_fiala(x: np.ndarray, u_init: np.ndarray, params: np.ndar
     E_r = params[54]  # rear compliance nonlinearity
 
     KIN_THRESH = 0.5
+    U_FLOOR = 0.1                 # (2026-11-06) m/s: the slip denominators' floor (see the longitudinal slip below)
 
     # consider steering and acceleration constraints - outside of the integration
     u[0] = steering_constraint(
@@ -246,10 +247,13 @@ def vehicle_dynamics_mb_fiala(x: np.ndarray, u_init: np.ndarray, params: np.ndar
         s_lr = 0.0
         s_rr = 0.0
     else:
-        s_lf = 1 - R_w * x[23] / u_w_lf
-        s_rf = 1 - R_w * x[24] / u_w_rf
-        s_lr = 1 - R_w * x[25] / u_w_lr
-        s_rr = 1 - R_w * x[26] / u_w_rr
+        # (2026-11-06) a wheel whose own forward speed reaches 0 in a slide (body still above KIN_THRESH, yaw turning the inside wheel
+        # backward) made these divide by zero -> the run ended as 'numerics'; floored at U_FLOOR (no effect while every wheel rolls
+        # forward faster than it)
+        s_lf = 1 - R_w * x[23] / max(u_w_lf, U_FLOOR)
+        s_rf = 1 - R_w * x[24] / max(u_w_rf, U_FLOOR)
+        s_lr = 1 - R_w * x[25] / max(u_w_lr, U_FLOOR)
+        s_rr = 1 - R_w * x[26] / max(u_w_rr, U_FLOOR)
 
     # lateral slip angles
     # switch to kinematic model for small velocities
@@ -262,24 +266,24 @@ def vehicle_dynamics_mb_fiala(x: np.ndarray, u_init: np.ndarray, params: np.ndar
         alpha_LF = (
             np.arctan(
                 (x[10] + lf * x[5] - x[14] * (R_w - x[16]))
-                / (x[3] + 0.5 * T_f * x[5])
+                / ((x[3] + 0.5 * T_f * x[5]) if abs((x[3] + 0.5 * T_f * x[5])) >= U_FLOOR else (U_FLOOR if (x[3] + 0.5 * T_f * x[5]) >= 0.0 else -U_FLOOR))
             )
             - x[2]
         )
         alpha_RF = (
             np.arctan(
                 (x[10] + lf * x[5] - x[14] * (R_w - x[16]))
-                / (x[3] - 0.5 * T_f * x[5])
+                / ((x[3] - 0.5 * T_f * x[5]) if abs((x[3] - 0.5 * T_f * x[5])) >= U_FLOOR else (U_FLOOR if (x[3] - 0.5 * T_f * x[5]) >= 0.0 else -U_FLOOR))
             )
             - x[2]
         )
         alpha_LR = np.arctan(
             (x[10] - lr * x[5] - x[19] * (R_w - x[21]))
-            / (x[3] + 0.5 * T_r * x[5])
+            / ((x[3] + 0.5 * T_r * x[5]) if abs((x[3] + 0.5 * T_r * x[5])) >= U_FLOOR else (U_FLOOR if (x[3] + 0.5 * T_r * x[5]) >= 0.0 else -U_FLOOR))
         )
         alpha_RR = np.arctan(
             (x[10] - lr * x[5] - x[19] * (R_w - x[21]))
-            / (x[3] - 0.5 * T_r * x[5])
+            / ((x[3] - 0.5 * T_r * x[5]) if abs((x[3] - 0.5 * T_r * x[5])) >= U_FLOOR else (U_FLOOR if (x[3] - 0.5 * T_r * x[5]) >= 0.0 else -U_FLOOR))
         )
 
     # auxiliary suspension movement

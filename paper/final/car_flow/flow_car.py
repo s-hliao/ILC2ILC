@@ -38,6 +38,12 @@ VARIANTS = {
                   stem="car_flow_speed", label="plastic car"),
     # the largest held-out score drop of PPO+DR's 108 plastic cells (9 runs x 12 cars; 0.82 -> 0.38, -54 %); SELECTED as the best
     # example -- disclose as such (the 216-cell median, both networks, is -19 %)
+    # (2026-11-06, user: the plastic cost must "start a lot higher" and the car "get significantly faster"): of 36 plastic candidates
+    # (12 cars x PLSL it3, LONG it8, PFAST x1.10 it3; plastic_J.py, two noise-free laps), the largest absolute drop of the stage's own
+    # cost J among those without a failed lap -- PFAST_plastic_freePPON_s0_ss9001 n04_harsh_sense on the peanut x1.10 (practised):
+    # J 617 -> 352 (-43 %), speed 2.10 -> 2.18 m/s, e_y 8.8 -> 6.0 cm. SELECTED as the best case; disclose as such
+    "speed_hicost": dict(plan="mocap_peanutM_b0_free_a33_x110", run="PFAST_plastic_freePPON_s0_ss9001", car="n04_harsh_sense", var="speed",
+                         stem="car_flow_speed_hicost", label="plastic car (harsh sense)"),
     "speed_best": dict(plan="mocap_peanutM_b0_free_a33", run="PLSLr2_freePPON_s0", car="n04_real_mass", var="speed",
                        stem="car_flow_speed_best", label="plastic car, mass changed (best of 108)"),
     # (2026-11-05, user: "show more than this, you said -54 %"): the same cell, the speed axis zoomed to where the car drives,
@@ -60,7 +66,7 @@ VARIANTS = {
     # (2026-11-05) the same with a 1.0 s horizon: over 0.4 s the sideways drift is set by the heading the car already has (identical
     # starting states in every row), the policy acting through steering -> yaw -> heading needs longer; the pogo's arrow is one hop
     "ethz_orbit_1s": dict(plan="ethzmobil43_b0_free", run="ETHZ_rubber_freePPON_s0_ss9001", car="ax:mu=1.667", var="lat",
-                          stem="car_flow_ethz_orbit_1s", label="rubber car", ref=False, bg="push", ns=60, base="orbit", H=1.0,
+                          stem="car_flow_ethz_orbit_1s_w", label="rubber car", ref=False, bg="push", ns=60, base="orbit", H=1.0, tube=0.99,
                           track="practised ETHZMobil lap"),
     # (2026-11-05, user: "color shading ... should show magnitude of difference between the final version and the previous versions"):
     # the same flow, shaded by |flow - the FINAL policy's flow| (lateral, tolerance units of 0.1 m): pogo_flow's convention with the
@@ -75,7 +81,7 @@ VARIANTS = {
     # (2026-11-05, user: "show how the policy has changed as a residual from the initial zero-shot policy"): the shading is the policy's
     # own change, pi_k - pi_0 of the steering command (deg) at each starting state (policy_resid.py); arrows and the zero-push line as before
     "ethz_resid": dict(plan="ethzmobil43_b0_free", run="ETHZ_rubber_freePPON_s0_ss9001", car="ax:mu=1.667", var="lat",
-                       stem="car_flow_ethz_resid", data="car_flow_ethz_orbit_1s", resid="car_flow_ethz_orbit_1s_resid", label="rubber car",
+                       stem="car_flow_ethz_resid", data="car_flow_ethz_orbit_1s_w", resid="car_flow_ethz_orbit_1s_w_resid", tube=0.99, label="rubber car",
                        ref=False, bg="resid", ns=60, base="orbit", H=1.0, track="practised ETHZMobil lap"),                                                         # (2026-11-05: all four perturbed starts shown, user)
     # (2026-11-05, for the stage videos): the held-out peanut, plastic nominal car (the same run and car as "plastic" / "speed"), the
     # 1.0 s horizon on its own zero-shot orbit, and the policy-residual shading (policy_resid.py peanut_orbit_1s)
@@ -85,6 +91,25 @@ VARIANTS = {
     "peanut_resid": dict(plan="mocap_peanutM_b0_free_a33", run="PLSL_freePPON_s0", car="n04_real_nom", var="lat",
                          stem="car_flow_peanut_resid", data="car_flow_peanut_orbit_1s", resid="car_flow_peanut_orbit_1s_resid",
                          label="plastic car", ref=False, bg="resid", ns=40, base="orbit", H=1.0, track="held-out peanut lap"),
+    # (2026-11-06, user: "show the rubber peanut"): the rubber car practising the peanut at x1.5 (PFAST2, median run s0: -23.3 %,
+    # e_y 34.4 -> 26.4 cm), the 1.0 s horizon on its own zero-shot orbit, push shading (data) and the policy-residual shading (video)
+    "peax150_orbit_1s": dict(plan="mocap_peanutM_b0_free_x150", run="PFAST2_rubber_peax150_freePPON_s0_ss9001", car="ax:mu=1.667",
+                             var="lat", stem="car_flow_peax150_orbit_1s", label="rubber car", ref=False, bg="push", ns=40, base="orbit",
+                             H=1.0, track="practised peanut lap (x1.5)"),
+    "peax150_resid": dict(plan="mocap_peanutM_b0_free_x150", run="PFAST2_rubber_peax150_freePPON_s0_ss9001", car="ax:mu=1.667",
+                          var="lat", stem="car_flow_peax150_resid", data="car_flow_peax150_orbit_1s",
+                          resid="car_flow_peax150_orbit_1s_resid", label="rubber car", ref=False, bg="resid", ns=40, base="orbit",
+                          H=1.0, track="practised peanut lap (x1.5)"),
+    # (2026-11-06, user: the plastic video's cost is "insanely small" -- the nominal plastic car on the held-out peanut tracks to 2 cm and
+    # its held-out gain is pace only): the plastic car where lateral tracking improves from a large start, the practised ETHZMobil.
+    # Pick rule, fixed before rendering: the median run of the 9 (ETHZ_plastic_freePPON_s2_ss9003, -18.2 %); in it the car with the
+    # largest zero-shot cost among those without failed laps (ax:mu=0.4667: score 4.14 -> 3.25, -21 %; e_y 41.4 -> 32.5 cm)
+    "ethzp_orbit_1s": dict(plan="ethzmobil43_b0_free_a33", run="ETHZ_plastic_freePPON_s2_ss9003", car="ax:mu=0.4667", var="lat",
+                           stem="car_flow_ethzp_orbit_1s", label="plastic car (mu 0.4667)", ref=False, bg="push", ns=60, base="orbit",
+                           H=1.0, tube=0.99, track="practised ETHZMobil lap"),
+    "ethzp_resid": dict(plan="ethzmobil43_b0_free_a33", run="ETHZ_plastic_freePPON_s2_ss9003", car="ax:mu=0.4667", var="lat",
+                        stem="car_flow_ethzp_resid", data="car_flow_ethzp_orbit_1s", resid="car_flow_ethzp_orbit_1s_resid", tube=0.99,
+                        label="plastic car (mu 0.4667)", ref=False, bg="resid", ns=60, base="orbit", H=1.0, track="practised ETHZMobil lap"),
     "ethz_simref": dict(plan="ethzmobil43_b0_free", run="ETHZ_rubber_freePPON_s0_ss9001", car="ax:mu=1.667", var="lat",
                         stem="car_flow_ethz_simref", label="rubber car", ref=True, line=True, ns=60, base="orbit", H=1.0,
                         track="practised ETHZMobil lap"),
@@ -93,11 +118,15 @@ V = VARIANTS[sys.argv[1] if len(sys.argv) > 1 else "plastic"]
 DATA = os.path.join(HERE, f"{V.get('data', V['stem'])}_data.npz")
 PLAN, RUN, CAR = V["plan"], D + "/runs/screen/" + V["run"], V["car"]
 REF_CAR = "real_nom"
-TUBE, TOL, DT = 0.5, 0.10, 0.025
+TOL, DT = 0.10, 0.025
+# the tube: the mocap room's 0.5 m safety envelope; ETHZMobil (sim only) uses its own track edges (2026-11-06, user: "aren't the margins
+# typically a lot larger in the ethzmobil track? probably about 2x"): BayesRace width 0.46 m x 4.3 = 1.98 m -> +-0.99 m
+TUBE = V.get("tube", 0.5)
+TW = "tube" if TUBE == 0.5 else "track"                              # ETHZMobil: the real track edges
 H = V.get("H", 0.4)                                                  # the arrow's horizon (s)
 NS, NE = V.get("ns", 40), 11
 if V["var"] == "lat":
-    GRID = np.linspace(-0.45, 0.45, NE)                              # lateral offset e_y0 (m)
+    GRID = np.linspace(-0.9 * TUBE, 0.9 * TUBE, NE)                  # lateral offset e_y0 (m): 90 % of the tube
     STARTS = [(0.15, 0.30), (0.40, -0.30), (0.65, 0.15), (0.90, -0.15)]   # (lap fraction, e_y0)
 else:
     GRID = np.linspace(*V.get("grid", (-0.60, 0.30)), NE)            # speed error dV0 (m/s)
@@ -207,7 +236,8 @@ def main():
     KEEP = [m for m in range(O.shape[1]) if m not in V.get("drop_starts", ())]
     lat = V["var"] == "lat"
     tol = TOL if lat else 0.1 * float(Dd["vbar"])                    # 0.10 m, or 10 % of the plan's mean speed (pace_ok)
-    ylim = (-0.6, 0.6) if lat else (es[0] - 0.08, es[-1] + 0.08)
+    YM = 1.2 * TUBE                                                  # the plot's lateral range: the tube plus a margin
+    ylim = (-YM, YM) if lat else (es[0] - 0.08, es[-1] + 0.08)
     SS, EE = np.meshgrid(ss, es, indexing="ij")
     # one length factor for every row; in the speed panels the vertical axis is m/s, plotted on the same scale as m
     k_len = 0.85 * (ss[1] - ss[0]) * 2 / np.nanquantile(np.hypot(dS[0], dE[0]), 0.9)
@@ -260,8 +290,8 @@ def main():
             if V.get("line"):                                        # the line the flow pulls the car onto
                 ax.plot(ss, settle_line(dE[k]), color=ps.INK, lw=1.1, zorder=5)
         if lat:
-            ax.axhspan(TUBE, 0.6, color="#e9e7e2", zorder=1)
-            ax.axhspan(-0.6, -TUBE, color="#e9e7e2", zorder=1)
+            ax.axhspan(TUBE, YM, color="#e9e7e2", zorder=1)
+            ax.axhspan(-YM, -TUBE, color="#e9e7e2", zorder=1)
             for y in (-TUBE, TUBE):
                 ax.axhline(y, color="#777777", lw=0.6, ls="--", zorder=2)
         ax.axhline(0, color=ps.INK, lw=0.5, alpha=0.5, zorder=2)
@@ -276,7 +306,7 @@ def main():
             out = np.nonzero(np.abs(o[:, 1]) > TUBE)[0] if lat else []
             if len(out):                                             # leaves the tube: on the car, the kill switch
                 o = o[:out[0] + 1]
-                ax.plot(np.mod(o[-1, 0], L), np.clip(o[-1, 1], -0.58, 0.58), "x", color=ps.RUN, ms=4, mew=1.0, zorder=7)
+                ax.plot(np.mod(o[-1, 0], L), np.clip(o[-1, 1], -0.97 * YM, 0.97 * YM), "x", color=ps.RUN, ms=4, mew=1.0, zorder=7)
             tail.append(o[int(round(1.0 / DT)):, 1])                 # after 1 s: where the starts settle
             p = o[::8]                                               # every 0.2 s
             ax.plot(np.mod(p[:, 0], L), p[:, 1], "o", color=ps.RUN, mec="white", mew=0.3, ms=2.2, zorder=6)
@@ -288,7 +318,7 @@ def main():
                 ax.fill_between([0, L], settle[-1], 0, color=ps.RUN, alpha=0.22, lw=0, zorder=3)
         ax.set_xlim(0, L)
         ax.set_ylim(*ylim)
-        ax.set_yticks([-0.5, 0, 0.5] if lat else ([-0.3, -0.2, -0.1, 0, 0.1] if "grid" in V else [-0.6, -0.3, 0, 0.3]))
+        ax.set_yticks([-TUBE, 0, TUBE] if lat else ([-0.3, -0.2, -0.1, 0, 0.1] if "grid" in V else [-0.6, -0.3, 0, 0.3]))
         ax.tick_params(labelsize=6, length=2, width=0.5, pad=1.5)
         ax.set_title(ttl, fontsize=7.5, loc="left", pad=2)
         extra = "" if lat else f", settles at {settle[-1]:+.2f} m/s"
@@ -298,18 +328,18 @@ def main():
             nout = sum(np.any(np.abs(O[k, m][np.isfinite(O[k, m][:, 1]), 1]) > TUBE) for m in KEEP)
             tr = O[k][KEEP][:, int(round(1.0 / DT)):, 1]
             txt = (f"pulled onto a line {100 * np.nanmean(np.abs(settle_line(dE[k]))):.1f} cm off the plan on average; perturbed laps "
-                   f"{100 * np.sqrt(np.nanmean(tr ** 2)):.1f} cm rms, {nout} of {len(KEEP)} leave the tube")
+                   f"{100 * np.sqrt(np.nanmean(tr ** 2)):.1f} cm rms, {nout} of {len(KEEP)} leave the {TW}")
             if resid:
                 Rz = np.load(os.path.join(HERE, f"{V['resid']}.npz"))["U"]
                 tr = O[k][KEEP][:, int(round(1.0 / DT)):, 1]
                 txt = (f"steering change {np.degrees(np.abs(Rz[k, :, :, 0] - Rz[0, :, :, 0])).mean():.1f} deg mean "
                        f"(max {np.degrees(np.abs(Rz[k, :, :, 0] - Rz[0, :, :, 0])).max():.0f}); line {100 * np.nanmean(np.abs(settle_line(dE[k]))):.1f} cm "
-                       f"off the plan; laps {100 * np.sqrt(np.nanmean(tr ** 2)):.1f} cm rms, {nout}/{len(KEEP)} leave the tube")
+                       f"off the plan; laps {100 * np.sqrt(np.nanmean(tr ** 2)):.1f} cm rms, {nout}/{len(KEEP)} leave the {TW}")
             if vsfinal:
                 txt = f"difference from the final flow {np.nanmean(np.abs(dE[k] - dE[-1])) / TOL:.2f} tol (mean); " + txt
         elif drift:
             nout = sum(np.any(np.abs(O[k, m][np.isfinite(O[k, m][:, 1]), 1]) > TUBE) for m in KEEP)
-            txt = f"flow away from the plan at {100 * np.mean(outward(k) > 0):.0f} % of points; {nout} of {O.shape[1]} perturbed starts leave the tube"
+            txt = f"flow away from the plan at {100 * np.mean(outward(k) > 0):.0f} % of points; {nout} of {O.shape[1]} perturbed starts leave the {TW}"
         else:
             txt = f"mean error {np.nanmean(dev):.2f} tol{extra}"
         ax.text(1.0, 1.02, txt, transform=ax.transAxes, ha="right", va="bottom", fontsize=6, color="#555555")
@@ -321,12 +351,12 @@ def main():
     hs, ls_ = [], []
     if lat:
         hs += [Line2D([], [], color="#777777", lw=0.6, ls="--")]
-        ls_ += ["0.5 m tube (safety envelope)"]
+        ls_ += [(f"{TUBE:.2f} m tube (safety envelope)" if TUBE == 0.5 else f"track edges (+-{TUBE:.2f} m)")]
     hs += [Line2D([], [], ls="none", marker="o", color=ps.RUN, mec="white", mew=0.3, ms=3)]
     ls_ += [("4 laterally perturbed" if lat else "4 speed-perturbed") + " starts, every 0.2 s"]
     if lat:
         hs += [Line2D([], [], ls="none", marker="x", color=ps.RUN, mew=1.0, ms=4)]
-        ls_ += ["leaves the tube"]
+        ls_ += [f"leaves the {TW}"]
     else:
         hs += [Line2D([], [], color=ps.RUN, lw=0.8, ls=":")]
         ls_ += ["where they settle (after 1 s)"]

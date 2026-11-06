@@ -33,7 +33,7 @@ def main():
         if os.path.exists(out):
             continue
         jobs, meta = [], []
-        for k in (0, 3):
+        for k in tuple(int(x) for x in os.environ.get('LADDER_ITS', '0 3').split()):        # (2026-11-06) LADDER_ITS: the iterations scored
             for ci, c in enumerate(CARS):
                 f = f'{d}/its/it{k}_{c}_policy.npz'
                 if not os.path.exists(f):

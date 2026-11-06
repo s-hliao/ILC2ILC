@@ -1,0 +1,968 @@
+{
+ "args": {
+  "policy": "runs/freePPON_s0/policy_final.npz",
+  "out": "runs/screen/PFAST_plastic_freePPON_s0_ss9001",
+  "cars": [
+   "n04_real_nom",
+   "n04_real_mass",
+   "n04_real_mu",
+   "n04_real_act",
+   "n04_real_lag",
+   "n04_harsh_combo",
+   "n04_harsh_steer",
+   "n04_harsh_sense",
+   "n04_harsh_drift",
+   "ax:mu=0.6000",
+   "ax:mu=0.4667",
+   "ax:mu=0.4000"
+  ],
+  "goals": [
+   "mocap_peanutM_b0_free_a33_x110"
+  ],
+  "eval_plans": null,
+  "anchor_plans": [
+   "mocap_square2fast_b0_free_a45",
+   "mocap_figfast_b0_free_a45"
+  ],
+  "rollback": 0.7,
+  "tr": 1,
+  "tr_lo": 0.25,
+  "tr_hi": 0.75,
+  "tr_max": 0.4,
+  "fit_realize": 0.9,
+  "fit_max_steps": 8000,
+  "fit_noise": 0.0,
+  "slip_max": 0.0,
+  "slope_dims": 0,
+  "slope_w": 1.0,
+  "crash_rollback": 1,
+  "max_crashes": 0,
+  "record": "",
+  "iters": 3,
+  "beta": 0.5,
+  "delta": 0.05,
+  "cap": 0.1,
+  "jac": "closed",
+  "objective": "task",
+  "err_scale": [
+   0.1,
+   1000000000.0,
+   1000000000.0,
+   1000000000.0,
+   1000000000.0,
+   0.24
+  ],
+  "train_starts": 0.0,
+  "goal_cycle": 1,
+  "goal_order": "cycle",
+  "pace_local": 0.0,
+  "pace_target": 1.0,
+  "trial_laps": 2,
+  "anchor_w": 20.0,
+  "anchor_n0": 6.0,
+  "age_decay": 0.5,
+  "steps": 800,
+  "lr": 0.0001,
+  "fallback_suffix": "",
+  "fallback_after": 2,
+  "fallback_on": "fail",
+  "fallback_ey": 0.1,
+  "fallback_revert": 0,
+  "eval_runs": 0,
+  "eval_laps": 5.0,
+  "eval_seed": 701,
+  "seed": 9001,
+  "gpu": "0",
+  "backend": "sim",
+  "session_dir": "",
+  "launch": [
+   1.0,
+   8.0
+  ],
+  "z_marg": 0.0,
+  "sat": "keep",
+  "sat_margin": 0.1,
+  "sim_launch": 1,
+  "skip_launch": 0.5,
+  "dump": 0,
+  "save_its": 1
+ },
+ "cars": {},
+ "eval": {},
+ "switched": {
+  "n04_real_nom": {},
+  "n04_real_mass": {},
+  "n04_real_mu": {},
+  "n04_real_act": {},
+  "n04_real_lag": {},
+  "n04_harsh_combo": {},
+  "n04_harsh_steer": {},
+  "n04_harsh_sense": {},
+  "n04_harsh_drift": {},
+  "ax:mu=0.6000": {},
+  "ax:mu=0.4667": {},
+  "ax:mu=0.4000": {}
+ },
+ "rungs": {
+  "n04_real_nom": {
+   "mocap_peanutM": ""
+  },
+  "n04_real_mass": {
+   "mocap_peanutM": ""
+  },
+  "n04_real_mu": {
+   "mocap_peanutM": ""
+  },
+  "n04_real_act": {
+   "mocap_peanutM": ""
+  },
+  "n04_real_lag": {
+   "mocap_peanutM": ""
+  },
+  "n04_harsh_combo": {
+   "mocap_peanutM": ""
+  },
+  "n04_harsh_steer": {
+   "mocap_peanutM": ""
+  },
+  "n04_harsh_sense": {
+   "mocap_peanutM": ""
+  },
+  "n04_harsh_drift": {
+   "mocap_peanutM": ""
+  },
+  "ax:mu=0.6000": {
+   "mocap_peanutM": ""
+  },
+  "ax:mu=0.4667": {
+   "mocap_peanutM": ""
+  },
+  "ax:mu=0.4000": {
+   "mocap_peanutM": ""
+  }
+ },
+ "trials": {
+  "n04_real_nom": [
+   {
+    "it": 0,
+    "goal": "mocap_peanutM_b0_free_a33_x110",
+    "failed": false,
+    "rms_ey": 0.046844819922749144,
+    "rms_dbeta": 3.7427049298105666,
+    "J": 369.46978759765625,
+    "J_pred": 305.2105712890625,
+    "crash": "",
+    "peak_ey": 0.10288740217508939
+   },
+   {
+    "it": 1,
+    "goal": "mocap_peanutM_b0_free_a33_x110",
+    "failed": false,
+    "rms_ey": 0.05055149693696422,
+    "rms_dbeta": 4.023155120755149,
+    "J": 353.34002685546875,
+    "J_pred": 238.84780883789062,
+    "crash": "",
+    "peak_ey": 0.10892139760282324
+   },
+   {
+    "it": 2,
+    "goal": "mocap_peanutM_b0_free_a33_x110",
+    "failed": false,
+    "rms_ey": 0.040570557962477674,
+    "rms_dbeta": 3.5097590356765647,
+    "J": 261.5026550292969,
+    "J_pred": 94.99839782714844,
+    "crash": "",
+    "peak_ey": 0.07664296970316198
+   }
+  ],
+  "n04_real_mass": [
+   {
+    "it": 0,
+    "goal": "mocap_peanutM_b0_free_a33_x110",
+    "failed": false,
+    "rms_ey": 0.05470437753187088,
+    "rms_dbeta": 4.191429721605213,
+    "J": 416.248779296875,
+    "J_pred": 344.0837707519531,
+    "crash": "",
+    "peak_ey": 0.12060861487376365
+   },
+   {
+    "it": 1,
+    "goal": "mocap_peanutM_b0_free_a33_x110",
+    "failed": false,
+    "rms_ey": 0.046869523824366176,
+    "rms_dbeta": 3.6624448712863606,
+    "J": 331.660400390625,
+    "J_pred": 212.24072265625,
+    "crash": "",
+    "peak_ey": 0.09799282147254341
+   },
+   {
+    "it": 2,
+    "goal": "mocap_peanutM_b0_free_a33_x110",
+    "failed": false,
+    "rms_ey": 0.043048666551427715,
+    "rms_dbeta": 3.539432293721578,
+    "J": 263.40850830078125,
+    "J_pred": 108.57669067382812,
+    "crash": "",
+    "peak_ey": 0.08714338045943916
+   }
+  ],
+  "n04_real_mu": [
+   {
+    "it": 0,
+    "goal": "mocap_peanutM_b0_free_a33_x110",
+    "failed": false,
+    "rms_ey": 0.08993992115183178,
+    "rms_dbeta": 6.483384244499701,
+    "J": 786.4398193359375,
+    "J_pred": 692.015625,
+    "crash": "",
+    "peak_ey": 0.1850393406421504
+   },
+   {
+    "it": 1,
+    "goal": "mocap_peanutM_b0_free_a33_x110",
+    "failed": false,
+    "rms_ey": 0.08938552882103704,
+    "rms_dbeta": 6.268386442416168,
+    "J": 722.556884765625,
+    "J_pred": 513.3090209960938,
+    "crash": "",
+    "peak_ey": 0.18437222255409666
+   },
+   {
+    "it": 2,
+    "goal": "mocap_peanutM_b0_free_a33_x110",
+    "failed": false,
+    "rms_ey": 0.10740763482962425,
+    "rms_dbeta": 6.798299623781034,
+    "J": 682.1187133789062,
+    "J_pred": 496.8534240722656,
+    "crash": "",
+    "peak_ey": 0.2118683257482063
+   }
+  ],
+  "n04_real_act": [
+   {
+    "it": 0,
+    "goal": "mocap_peanutM_b0_free_a33_x110",
+    "failed": false,
+    "rms_ey": 0.08431724693735564,
+    "rms_dbeta": 5.3191537231560275,
+    "J": 584.3038330078125,
+    "J_pred": 449.47723388671875,
+    "crash": "",
+    "peak_ey": 0.1882304767402415
+   },
+   {
+    "it": 2,
+    "goal": "mocap_peanutM_b0_free_a33_x110",
+    "failed": false,
+    "rms_ey": 0.08434641171128736,
+    "rms_dbeta": 5.330443403026855,
+    "J": 591.4051513671875,
+    "J_pred": 551.706298828125,
+    "crash": "",
+    "peak_ey": 0.18386617072684597
+   }
+  ],
+  "n04_real_lag": [
+   {
+    "it": 0,
+    "goal": "mocap_peanutM_b0_free_a33_x110",
+    "failed": false,
+    "rms_ey": 0.054155479772695955,
+    "rms_dbeta": 3.9583694478928133,
+    "J": 398.02740478515625,
+    "J_pred": 328.560302734375,
+    "crash": "",
+    "peak_ey": 0.12185144701707001
+   },
+   {
+    "it": 1,
+    "goal": "mocap_peanutM_b0_free_a33_x110",
+    "failed": false,
+    "rms_ey": 0.05199692539119397,
+    "rms_dbeta": 3.771912145264474,
+    "J": 376.69244384765625,
+    "J_pred": 263.61163330078125,
+    "crash": "",
+    "peak_ey": 0.11713568567924432
+   }
+  ],
+  "n04_harsh_combo": [
+   {
+    "it": 0,
+    "goal": "mocap_peanutM_b0_free_a33_x110",
+    "failed": false,
+    "rms_ey": 0.1311363100615138,
+    "rms_dbeta": 8.652239510155223,
+    "J": 1045.7613525390625,
+    "J_pred": 915.1951904296875,
+    "crash": "",
+    "peak_ey": 0.2736335639104089
+   },
+   {
+    "it": 1,
+    "goal": "mocap_peanutM_b0_free_a33_x110",
+    "failed": false,
+    "rms_ey": 0.13858803462322214,
+    "rms_dbeta": 8.313234756075328,
+    "J": 1010.2711181640625,
+    "J_pred": 877.6013793945312,
+    "crash": "",
+    "peak_ey": 0.2845130708343413
+   }
+  ],
+  "n04_harsh_steer": [
+   {
+    "it": 0,
+    "goal": "mocap_peanutM_b0_free_a33_x110",
+    "failed": false,
+    "rms_ey": 0.12001833994843795,
+    "rms_dbeta": 2.409951967795775,
+    "J": 717.0908203125,
+    "J_pred": 615.6280517578125,
+    "crash": "",
+    "peak_ey": 0.24103996522361348
+   },
+   {
+    "it": 2,
+    "goal": "mocap_peanutM_b0_free_a33_x110",
+    "failed": false,
+    "rms_ey": 0.12059897525590899,
+    "rms_dbeta": 2.455472932473226,
+    "J": 739.4365844726562,
+    "J_pred": 699.03271484375,
+    "crash": "",
+    "peak_ey": 0.23859609024066156
+   }
+  ],
+  "n04_harsh_sense": [
+   {
+    "it": 0,
+    "goal": "mocap_peanutM_b0_free_a33_x110",
+    "failed": false,
+    "rms_ey": 0.09702948644937666,
+    "rms_dbeta": 6.515784979908753,
+    "J": 669.80908203125,
+    "J_pred": 535.8365478515625,
+    "crash": "",
+    "peak_ey": 0.21564314807601945
+   },
+   {
+    "it": 1,
+    "goal": "mocap_peanutM_b0_free_a33_x110",
+    "failed": false,
+    "rms_ey": 0.07057522036374896,
+    "rms_dbeta": 5.481977499671468,
+    "J": 505.30340576171875,
+    "J_pred": 355.5899963378906,
+    "crash": "",
+    "peak_ey": 0.1733036174938032
+   },
+   {
+    "it": 2,
+    "goal": "mocap_peanutM_b0_free_a33_x110",
+    "failed": false,
+    "rms_ey": 0.08273644304993213,
+    "rms_dbeta": 5.074466113680967,
+    "J": 489.0859375,
+    "J_pred": 329.4090576171875,
+    "crash": "",
+    "peak_ey": 0.19081558958771294
+   }
+  ],
+  "n04_harsh_drift": [
+   {
+    "it": 0,
+    "goal": "mocap_peanutM_b0_free_a33_x110",
+    "failed": false,
+    "rms_ey": 0.05469220873832815,
+    "rms_dbeta": 4.356018540726407,
+    "J": 430.9247741699219,
+    "J_pred": 370.8558044433594,
+    "crash": "",
+    "peak_ey": 0.12685308975544915
+   },
+   {
+    "it": 1,
+    "goal": "mocap_peanutM_b0_free_a33_x110",
+    "failed": false,
+    "rms_ey": 0.05385698772035393,
+    "rms_dbeta": 4.1515891393293884,
+    "J": 390.41339111328125,
+    "J_pred": 265.11376953125,
+    "crash": "",
+    "peak_ey": 0.12259529638932222
+   },
+   {
+    "it": 2,
+    "goal": "mocap_peanutM_b0_free_a33_x110",
+    "failed": false,
+    "rms_ey": 0.060771405698621064,
+    "rms_dbeta": 4.439066968112701,
+    "J": 344.3526611328125,
+    "J_pred": 121.17202758789062,
+    "crash": "",
+    "peak_ey": 0.12779986788607114
+   }
+  ],
+  "ax:mu=0.6000": [
+   {
+    "it": 0,
+    "goal": "mocap_peanutM_b0_free_a33_x110",
+    "failed": false,
+    "rms_ey": 0.06524856683249357,
+    "rms_dbeta": 5.023059977689115,
+    "J": 527.9303588867188,
+    "J_pred": 451.381591796875,
+    "crash": "",
+    "peak_ey": 0.14209678681793209
+   },
+   {
+    "it": 1,
+    "goal": "mocap_peanutM_b0_free_a33_x110",
+    "failed": false,
+    "rms_ey": 0.07331721929463934,
+    "rms_dbeta": 5.595443036437471,
+    "J": 520.050048828125,
+    "J_pred": 456.3064880371094,
+    "crash": "",
+    "peak_ey": 0.1622321182552094
+   }
+  ],
+  "ax:mu=0.4667": [
+   {
+    "it": 0,
+    "goal": "mocap_peanutM_b0_free_a33_x110",
+    "failed": false,
+    "rms_ey": 0.12417026380855341,
+    "rms_dbeta": 8.428099013927415,
+    "J": 1126.57763671875,
+    "J_pred": 995.0635986328125,
+    "crash": "",
+    "peak_ey": 0.24273195604641187
+   },
+   {
+    "it": 1,
+    "goal": "mocap_peanutM_b0_free_a33_x110",
+    "failed": false,
+    "rms_ey": 0.09557088199199609,
+    "rms_dbeta": 6.5318614434506905,
+    "J": 972.0869750976562,
+    "J_pred": 804.7501220703125,
+    "crash": "",
+    "peak_ey": 0.17691312353825644
+   }
+  ],
+  "ax:mu=0.4000": [
+   {
+    "it": 0,
+    "goal": "mocap_peanutM_b0_free_a33_x110",
+    "failed": false,
+    "rms_ey": 0.15956408818757026,
+    "rms_dbeta": 10.035719902004825,
+    "J": 1461.8486328125,
+    "J_pred": 1348.7535400390625,
+    "crash": "",
+    "peak_ey": 0.3301105147000099
+   },
+   {
+    "it": 2,
+    "goal": "mocap_peanutM_b0_free_a33_x110",
+    "failed": false,
+    "rms_ey": 0.15990298879798062,
+    "rms_dbeta": 10.025732156208601,
+    "J": 1480.639404296875,
+    "J_pred": 1427.861328125,
+    "crash": "",
+    "peak_ey": 0.32888836974742747
+   }
+  ]
+ },
+ "real_laps": {
+  "n04_real_nom": 5.019119608714988,
+  "n04_real_mass": 4.981325033348159,
+  "n04_real_mu": 4.6642952423299295,
+  "n04_real_act": 4.775900400177862,
+  "n04_real_lag": 4.958648288128059,
+  "n04_harsh_combo": 4.506447309915524,
+  "n04_harsh_steer": 4.591818586038244,
+  "n04_harsh_sense": 4.859493108048021,
+  "n04_harsh_drift": 4.953757225433528,
+  "ax:mu=0.6000": 4.8359270787016495,
+  "ax:mu=0.4667": 4.4353045798132555,
+  "ax:mu=0.4000": 4.232547799021792
+ },
+ "rollbacks": {
+  "n04_real_nom": [],
+  "n04_real_mass": [],
+  "n04_real_mu": [],
+  "n04_real_act": [
+   {
+    "it": 1,
+    "prog": 1.5962650066696327,
+    "last": 1.5891507336594062,
+    "cap": 0.05,
+    "new_crash": []
+   }
+  ],
+  "n04_real_lag": [
+   {
+    "it": 2,
+    "prog": 1.6656291685193432,
+    "last": 1.651400622498889,
+    "cap": 0.1,
+    "new_crash": []
+   }
+  ],
+  "n04_harsh_combo": [
+   {
+    "it": 2,
+    "prog": 1.5175633614939992,
+    "last": 1.5033348154735457,
+    "cap": 0.05,
+    "new_crash": []
+   }
+  ],
+  "n04_harsh_steer": [
+   {
+    "it": 1,
+    "prog": 1.5380168963984007,
+    "last": 1.5260115606936422,
+    "cap": 0.05,
+    "new_crash": []
+   }
+  ],
+  "n04_harsh_sense": [],
+  "n04_harsh_drift": [],
+  "ax:mu=0.6000": [
+   {
+    "it": 2,
+    "prog": 1.6184971098265906,
+    "last": 1.6118274788795042,
+    "cap": 0.05,
+    "new_crash": []
+   }
+  ],
+  "ax:mu=0.4667": [
+   {
+    "it": 2,
+    "prog": 1.482436638506004,
+    "last": 1.4846598488216995,
+    "cap": 0.1,
+    "new_crash": []
+   }
+  ],
+  "ax:mu=0.4000": [
+   {
+    "it": 1,
+    "prog": 1.408181413961762,
+    "last": 1.4112939084037364,
+    "cap": 0.05,
+    "new_crash": []
+   }
+  ]
+ },
+ "tr": {
+  "n04_real_nom": [
+   {
+    "it": 1,
+    "rho": 0.9173318337785137,
+    "r": 0.1,
+    "goals": [
+     "mocap_peanutM_b0_free_a33_x110"
+    ]
+   },
+   {
+    "it": 2,
+    "rho": 1.9531344108911919,
+    "r": 0.2,
+    "goals": [
+     "mocap_peanutM_b0_free_a33_x110"
+    ]
+   }
+  ],
+  "n04_real_mass": [
+   {
+    "it": 1,
+    "rho": 2.9680577893805804,
+    "r": 0.1,
+    "goals": [
+     "mocap_peanutM_b0_free_a33_x110"
+    ]
+   },
+   {
+    "it": 2,
+    "rho": 2.1930296956693978,
+    "r": 0.2,
+    "goals": [
+     "mocap_peanutM_b0_free_a33_x110"
+    ]
+   }
+  ],
+  "n04_real_mu": [
+   {
+    "it": 1,
+    "rho": 1.6796999624471611,
+    "r": 0.1,
+    "goals": [
+     "mocap_peanutM_b0_free_a33_x110"
+    ]
+   },
+   {
+    "it": 2,
+    "rho": 0.4841153741607943,
+    "r": 0.2,
+    "goals": [
+     "mocap_peanutM_b0_free_a33_x110"
+    ]
+   }
+  ],
+  "n04_real_act": [
+   {
+    "it": 1,
+    "rho": -1.181451200017347,
+    "r": 0.1,
+    "goals": [
+     "mocap_peanutM_b0_free_a33_x110"
+    ]
+   }
+  ],
+  "n04_real_lag": [
+   {
+    "it": 1,
+    "rho": 0.8460481873179422,
+    "r": 0.1,
+    "goals": [
+     "mocap_peanutM_b0_free_a33_x110"
+    ]
+   },
+   {
+    "it": 2,
+    "rho": -1.1305626841003131,
+    "r": 0.2,
+    "goals": [
+     "mocap_peanutM_b0_free_a33_x110"
+    ]
+   }
+  ],
+  "n04_harsh_combo": [
+   {
+    "it": 1,
+    "rho": 0.5198407235029386,
+    "r": 0.1,
+    "goals": [
+     "mocap_peanutM_b0_free_a33_x110"
+    ]
+   },
+   {
+    "it": 2,
+    "rho": -0.3357324868042098,
+    "r": 0.1,
+    "goals": [
+     "mocap_peanutM_b0_free_a33_x110"
+    ]
+   }
+  ],
+  "n04_harsh_steer": [
+   {
+    "it": 1,
+    "rho": -0.305166281370466,
+    "r": 0.1,
+    "goals": [
+     "mocap_peanutM_b0_free_a33_x110"
+    ]
+   }
+  ],
+  "n04_harsh_sense": [
+   {
+    "it": 1,
+    "rho": 2.187601760301024,
+    "r": 0.1,
+    "goals": [
+     "mocap_peanutM_b0_free_a33_x110"
+    ]
+   },
+   {
+    "it": 2,
+    "rho": 0.37818942136550254,
+    "r": 0.2,
+    "goals": [
+     "mocap_peanutM_b0_free_a33_x110"
+    ]
+   }
+  ],
+  "n04_harsh_drift": [
+   {
+    "it": 1,
+    "rho": 1.6098123247669218,
+    "r": 0.1,
+    "goals": [
+     "mocap_peanutM_b0_free_a33_x110"
+    ]
+   },
+   {
+    "it": 2,
+    "rho": 1.446572900443273,
+    "r": 0.2,
+    "goals": [
+     "mocap_peanutM_b0_free_a33_x110"
+    ]
+   }
+  ],
+  "ax:mu=0.6000": [
+   {
+    "it": 1,
+    "rho": 0.4932550916321876,
+    "r": 0.1,
+    "goals": [
+     "mocap_peanutM_b0_free_a33_x110"
+    ]
+   },
+   {
+    "it": 2,
+    "rho": -0.9232117758141852,
+    "r": 0.1,
+    "goals": [
+     "mocap_peanutM_b0_free_a33_x110"
+    ]
+   }
+  ],
+  "ax:mu=0.4667": [
+   {
+    "it": 1,
+    "rho": 2.1068124159330925,
+    "r": 0.1,
+    "goals": [
+     "mocap_peanutM_b0_free_a33_x110"
+    ]
+   },
+   {
+    "it": 2,
+    "rho": -1.5290910937009463,
+    "r": 0.2,
+    "goals": [
+     "mocap_peanutM_b0_free_a33_x110"
+    ]
+   }
+  ],
+  "ax:mu=0.4000": [
+   {
+    "it": 1,
+    "rho": -4.16440113682501,
+    "r": 0.1,
+    "goals": [
+     "mocap_peanutM_b0_free_a33_x110"
+    ]
+   }
+  ]
+ },
+ "realize": {
+  "n04_real_nom": [
+   {
+    "it": 0,
+    "realized": 0.1477273713244411,
+    "steps": 2000
+   },
+   {
+    "it": 1,
+    "realized": 0.2323329296000502,
+    "steps": 3400
+   },
+   {
+    "it": 2,
+    "realized": 0.11263125590783447,
+    "steps": 3400
+   }
+  ],
+  "n04_real_mass": [
+   {
+    "it": 0,
+    "realized": 0.22213259418442086,
+    "steps": 1800
+   },
+   {
+    "it": 1,
+    "realized": 0.140123175692244,
+    "steps": 3000
+   },
+   {
+    "it": 2,
+    "realized": 0.1594749584399646,
+    "steps": 1800
+   }
+  ],
+  "n04_real_mu": [
+   {
+    "it": 0,
+    "realized": 0.22720107252012225,
+    "steps": 2200
+   },
+   {
+    "it": 1,
+    "realized": 0.2248817162909992,
+    "steps": 1600
+   },
+   {
+    "it": 2,
+    "realized": 0.13498959915945888,
+    "steps": 2600
+   }
+  ],
+  "n04_real_act": [
+   {
+    "it": 0,
+    "realized": 0.3394550270886358,
+    "steps": 2200
+   },
+   {
+    "it": 2,
+    "realized": 0.22821142618718718,
+    "steps": 3200
+   }
+  ],
+  "n04_real_lag": [
+   {
+    "it": 0,
+    "realized": 0.20188290120408206,
+    "steps": 3400
+   },
+   {
+    "it": 1,
+    "realized": 0.15081748193804595,
+    "steps": 2400
+   }
+  ],
+  "n04_harsh_combo": [
+   {
+    "it": 0,
+    "realized": 0.3092663701927381,
+    "steps": 3200
+   },
+   {
+    "it": 1,
+    "realized": 0.189910952982273,
+    "steps": 1400
+   }
+  ],
+  "n04_harsh_steer": [
+   {
+    "it": 0,
+    "realized": 0.23296398595160508,
+    "steps": 3200
+   },
+   {
+    "it": 2,
+    "realized": 0.2610751691525893,
+    "steps": 2000
+   }
+  ],
+  "n04_harsh_sense": [
+   {
+    "it": 0,
+    "realized": 0.33765733168204576,
+    "steps": 4600
+   },
+   {
+    "it": 1,
+    "realized": 0.15526714325480304,
+    "steps": 2200
+   },
+   {
+    "it": 2,
+    "realized": 0.18502756006619578,
+    "steps": 3200
+   }
+  ],
+  "n04_harsh_drift": [
+   {
+    "it": 0,
+    "realized": 0.23772708392348982,
+    "steps": 2200
+   },
+   {
+    "it": 1,
+    "realized": 0.1363571718612948,
+    "steps": 2800
+   },
+   {
+    "it": 2,
+    "realized": 0.10960180573036739,
+    "steps": 2400
+   }
+  ],
+  "ax:mu=0.6000": [
+   {
+    "it": 0,
+    "realized": 0.11045255248208263,
+    "steps": 2800
+   },
+   {
+    "it": 1,
+    "realized": 0.17013608551416107,
+    "steps": 2400
+   }
+  ],
+  "ax:mu=0.4667": [
+   {
+    "it": 0,
+    "realized": 0.334850298072965,
+    "steps": 4600
+   },
+   {
+    "it": 1,
+    "realized": 0.1708611037404682,
+    "steps": 2800
+   }
+  ],
+  "ax:mu=0.4000": [
+   {
+    "it": 0,
+    "realized": 0.2246093735235844,
+    "steps": 2200
+   },
+   {
+    "it": 2,
+    "realized": 0.20243143275191045,
+    "steps": 3000
+   }
+  ]
+ },
+ "crashes": {
+  "n04_real_nom": [],
+  "n04_real_mass": [],
+  "n04_real_mu": [],
+  "n04_real_act": [],
+  "n04_real_lag": [],
+  "n04_harsh_combo": [],
+  "n04_harsh_steer": [],
+  "n04_harsh_sense": [],
+  "n04_harsh_drift": [],
+  "ax:mu=0.6000": [],
+  "ax:mu=0.4667": [],
+  "ax:mu=0.4000": []
+ },
+ "frozen": {
+  "n04_real_nom": false,
+  "n04_real_mass": false,
+  "n04_real_mu": false,
+  "n04_real_act": false,
+  "n04_real_lag": false,
+  "n04_harsh_combo": false,
+  "n04_harsh_steer": false,
+  "n04_harsh_sense": false,
+  "n04_harsh_drift": false,
+  "ax:mu=0.6000": false,
+  "ax:mu=0.4667": false,
+  "ax:mu=0.4000": false
+ },
+ "safety_ey": 0.5,
+ "seconds": 715.7892479896545
+}

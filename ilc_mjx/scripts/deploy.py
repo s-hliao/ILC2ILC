@@ -60,6 +60,12 @@ ap.add_argument("--tr-max", type=float, default=0.4)
 ap.add_argument("--gn-delta", type=float, default=0.1, help="damping, relative to tr(G_N G_N')/3")
 ap.add_argument("--est-window", type=float, default=0.0,
                 help="s: the sim's policy observes the robots' estimator (as the network was trained: jump.Config)")
+ap.add_argument("--fb-memory", type=int, default=0,
+                help="(2026-11-06) 1: the landing sensitivity's closed loop through the policy's WHOLE observation -- its current error, "
+                     "its H previous errors and its previous (stored, clipped) action -- not the current-error block alone. Measured "
+                     "in the GPU sim (scratchpad sens_decomp.py): the current-error-only feedback model has ~100 %% error vs the policy's "
+                     "true action response (the previous action and the history drive it), the landing sensitivity's direction cos "
+                     "0.23 -> 0.78 (d=0.1), 0.48 -> 0.90 (d=2) with it")
 ap.add_argument("--jac-delay", type=int, nargs=2, default=[0, 0], metavar=("DS", "DA"),
                 help="the loop delays (control samples) inside the closed-loop sensitivity: the policy's feedback acts on "
                      "the state DS samples old (mocap / estimator latency) and an action reaches the robot DA samples late "
@@ -113,6 +119,8 @@ ap.add_argument("--reg-jac", type=float, default=0.0,
                      "and trial states (not decayed): the update moves the actions' offset, not the sim's feedback")
 ap.add_argument("--anchor-pert", action="store_true",
                 help="anchor states also from 16 perturbed stances (sigma_q 0.08), not only the 16 nominal ones")
+ap.add_argument("--anchor-pert-n", type=int, default=16, help="(2026-11-06) --anchor-pert: the number of perturbed stances (default 16)")
+ap.add_argument("--anchor-pert-sigma", type=float, default=0.08, help="(2026-11-06) --anchor-pert: their joint-offset std, rad (default 0.08)")
 ap.add_argument("--lr", type=float, default=1e-4)
 ap.add_argument("--seed", type=int, default=9001)
 ap.add_argument("--eval", default="val", choices=("val", "final", "holdout", "boxval", "boxfinal", "comboval", "combofinal", "planeval", "planefinal", "plane20",
@@ -266,7 +274,7 @@ import jax.numpy as jnp  # noqa: E402
 import numpy as np  # noqa: E402
 
 from ilc_mjx import host_path  # noqa: E402
-from ilc_mjx.jump import Config, JumpEnv  # noqa: E402
+from ilc_mjx.jump import Config, JumpEnv, rec_index  # noqa: E402
 from ilc_mjx.robot import PLANAR_TO_CANONICAL  # noqa: E402
 
 WS, CWS = "/home/henry/ilc_ws", "/ilc_ws"
@@ -496,8 +504,40 @@ def delayed_chain(K, gi, An, Bn, upto=None):
     return Dn
 
 
+def memory_chain(obs, w, gi, An, Bn):
+    """--fb-memory: E (Nc+1, 6, Nc*4), d e_j / d a_k (normalized state per unit action impulse at sample k, channel c: column
+    4k+c), the closed loop through the policy's whole observation o_j = [e_j, time, goal, e_{j-1..j-H}, a_st_{j-1}]:
+    a_j = J_e e_j + sum_h J_h e_{j-h} + J_p a_st_{j-1} (+ the impulse), a_st_j = the stored action (clipped: its derivative 1 on
+    unclipped stance channels, 0 else, from obs[j+1]'s previous-action block vs the policy's own output), e_{j+1} = A_j e_j + B_j a_j."""
+    o = np.asarray(obs, float)
+    J = np.asarray(dpi_fn(jnp.asarray(o[:Nc], jnp.float32), w))                    # (Nc, 4, od)
+    H_, PA_ = env.H, env.PA
+    if PA_ and len(o) > Nc:
+        st = o[1:Nc + 1, -4:]
+        raw = np.asarray(actor_mean(w, jnp.asarray(o[:Nc], jnp.float32)))
+        lin = (np.abs(st - raw) < 1e-4) & (mask > 0)
+    else:
+        lin = mask > 0
+    nc = Nc * 4
+    E = np.zeros((Nc + 1, 6, nc))
+    Ast = np.zeros((Nc, 4, nc))
+    for j in range(Nc):
+        u = J[j][:, :6] @ E[j]
+        for h in range(1, H_ + 1):
+            if j - h >= 0:
+                u = u + J[j][:, 9 + 6 * (h - 1):9 + 6 * h] @ E[j - h]
+        if PA_ and j >= 1:
+            u = u + J[j][:, 9 + 6 * H_:9 + 6 * H_ + 4] @ Ast[j - 1]
+        u[:, 4 * j:4 * j + 4] += np.diag(mask[j])
+        Ast[j] = lin[j][:, None] * u
+        E[j + 1] = An[gi, j] @ E[j] + Bn[gi, j] @ u
+    return E
+
+
 def landing_sensitivity(z, w, gi, An, Bn):
     """G_N (3, Nc, 4): d (landing x, z, pitch) / d a_k, closed loop (the policy's feedback at the REAL states)."""
+    if a.fb_memory:
+        return ((PHI[:3] * D[None, :]) @ memory_chain(z["obs"], w, gi, An, Bn)[Nc]).reshape(3, Nc, 4)
     K = np.asarray(dpi_fn(jnp.asarray(np.asarray(z["obs"], float)[:Nc], jnp.float32), w))[..., :6]
     if any(a.jac_delay):
         return ((PHI[:3] * D[None, :]) @ delayed_chain(K, gi, An, Bn)[Nc]).reshape(3, Nc, 4)
@@ -650,7 +690,7 @@ def srb_measured(z_):
     Am, Bm = np.zeros((Nc, 6, 6)), np.zeros((Nc, 6, 4))
     fr = np.array([0.0, float(srb_maker.fb.foot_radius)])
     for k in range(Nc):
-        i = min(k * env.tps, len(t) - 1); j = int(np.argmin(np.abs(t - (t[i] + a.restore_latency))))
+        i = rec_index(t, k, env.dt); j = int(np.argmin(np.abs(t - (t[i] + a.restore_latency))))
         sv = jnp.asarray(np.concatenate([[0.0, 0.0, float(_pitch(jnp.asarray(quat[j], jnp.float32)))], 0.5 * np.asarray(env.E).T @ q[i]]), jnp.float32)
         c_, f_ = np.asarray(env.pl.com(sv), float), np.asarray(env.pl.feet(sv), float).reshape(2, 2)
         A_, B_ = srb_maker.srb.f_lin(X_[k], U_[k], f_[0] - c_ - fr, f_[1] - c_ - fr, env.dt)
@@ -675,9 +715,9 @@ def fb_lift(z_, g):
     r = {k_: np.asarray(v_)[0] for k_, v_ in env.references(np.array([gvec(g)])).items()}
     X_, U_ = np.asarray(z_["logX"], float), np.asarray(z_["U"], float)
     Eq = 0.5 * np.asarray(env.E).T
-    qt, dqt, n_ = np.asarray(z_["rec_q"], float), np.asarray(z_["rec_dq"], float), len(np.asarray(z_["rec_t"]))
-    Qk = lambda k: Eq @ qt[min(k * env.tps, n_ - 1)]
-    Dk = lambda k: Eq @ dqt[min(k * env.tps, n_ - 1)]
+    qt, dqt, tr_ = np.asarray(z_["rec_q"], float), np.asarray(z_["rec_dq"], float), np.asarray(z_["rec_t"], float)
+    Qk = lambda k: Eq @ qt[rec_index(tr_, k, env.dt)]
+    Dk = lambda k: Eq @ dqt[rec_index(tr_, k, env.dt)]
     kpc, kdc, kpj, kdj = FBL.gains
     A, B, C = [], [], []
     h = env.dt / FBL.nsub
@@ -1341,9 +1381,11 @@ def run_robot(robot):
         lam = a.anchor_w * a.anchor_n0 / (a.anchor_n0 + n_real)
         ga = anchor_goals(rng_seed=it)
         if a.anchor_pert:                                # the tube: nominal and perturbed stances
-            ga = np.concatenate([ga, ga])
-            q_a, _ = env.explore_noise(32, np.random.default_rng(5000 + it), 0.08, 0.0)
-            q_a[:16] = 0.0
+            n0_ = len(ga)
+            reps = 1 + -(-a.anchor_pert_n // n0_)                 # (2026-11-06) defaults (16, 0.08, n0_ 16): exactly as before
+            ga = np.concatenate([ga] * reps)
+            q_a, _ = env.explore_noise(len(ga), np.random.default_rng(5000 + it), a.anchor_pert_sigma, 0.0)
+            q_a[:n0_] = 0.0
             anc = env.rollout(w, env.references(ga), jax.random.PRNGKey(1000 + it), stochastic=False, q_offset=q_a)
         else:
             anc = env.rollout(w, env.references(ga), jax.random.PRNGKey(1000 + it), stochastic=False)
