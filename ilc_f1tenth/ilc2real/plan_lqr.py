@@ -48,8 +48,14 @@ def lqr_gains(plan, p, substeps=40, laps=6, q=Q_DIAG, r=R_DIAG):
             Acl = A[i] - B[i] @ K[i]
             P = Qd + K[i].T @ Rd @ K[i] + Acl.T @ P @ Acl
             P = 0.5 * (P + P.T)
-    eig = np.abs(np.linalg.eigvals(np.linalg.multi_dot([(A[i] - B[i] @ K[i]) for i in reversed(range(N))])))
-    open_eig = np.abs(np.linalg.eigvals(np.linalg.multi_dot([A[i] for i in reversed(range(N))])))
+    # the one-lap monodromy products M_{N-1} ... M_0 (a loop: np.linalg.multi_dot recurses past Python's limit on long laps,
+    # 2026-11-05, orca43's 15 350 grid steps; the same product)
+    Mc, Mo = np.eye(A.shape[1]), np.eye(A.shape[1])
+    for i in range(N):
+        Mc = (A[i] - B[i] @ K[i]) @ Mc
+        Mo = A[i] @ Mo
+    eig = np.abs(np.linalg.eigvals(Mc))
+    open_eig = np.abs(np.linalg.eigvals(Mo))
     return K, A, B, dict(closed_loop_lap_rho=float(eig.max()), open_loop_lap_rho=float(open_eig.max()))
 
 

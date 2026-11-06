@@ -28,6 +28,15 @@ def mlp_np(ps, o):
 
 
 NO_CRASH = os.environ.get('F1T_NO_CRASH') == '1'
+# F1T_DEV_TIME=1 (2026-11-05, user: "don't stop the trial at 0.5 m deviation, just mark it as deviation time"): leaving the
+# safety envelope no longer ends the run; the time spent outside it is returned as dev_time (s). Spin-outs and stalls still end it.
+# Simulation only: on the real car the room's envelope stays a stop (net_runner.py safety_ey).
+DEV_TIME = os.environ.get('F1T_DEV_TIME') == '1'
+# F1T_MU_PATCH="LO,HI,F" (2026-11-05, user: "half of the orca track has lower friction, so the ilc can correct the policy on a repeatable
+# surface"): the tire-road friction is scaled by F wherever the car's arc length along the plan is within [LO, HI) of the lap (fractions);
+# a fixed place on the track, the same every lap. Only the "real" car: the sim and the plans never see it. Unset: no patch.
+_mp = os.environ.get('F1T_MU_PATCH')
+MU_PATCH = tuple(float(v) for v in _mp.split(',')) if _mp else None
 
 
 def run(car_name, plan, policy=None, laps=1.0, s0=0.0, pert=None, seed=0, noise=True, T_max=None, ff=None,
@@ -76,7 +85,7 @@ def run(car_name, plan, policy=None, laps=1.0, s0=0.0, pert=None, seed=0, noise=
     launched, handover = not launch, (0 if not launch else -1)
     X, Xm, OBS, MU, A, ERR, ERRT, IDX, APP, OBST = [], [], [], [], [], [], [], [], [], []
     pname = plan.get('name', '')
-    prog, failed, crash, peak_ey = 0.0, False, '', 0.0
+    prog, failed, crash, peak_ey, dev_steps = 0.0, False, '', 0.0, 0
     hist, last_a = [], np.zeros(2)
     for t in range(T):
         xt = mc.planar(xm)
@@ -141,16 +150,26 @@ def run(car_name, plan, policy=None, laps=1.0, s0=0.0, pert=None, seed=0, noise=
         peak_ey = max(peak_ey, abs(float(err_true[0])))
         # F1T_NO_CRASH=1 (2026-10-31; user, for the long-stage test only: "not involve crashes at all in simulation"): no
         # wall / spin / stall stop -- every run drives its full laps
-        if not NO_CRASH and (abs(err_true[0]) > max_ey or abs(err_true[1]) > sn.FAIL_EPSI or (launched and xt[3] < 0.3)):
+        if abs(err_true[0]) > max_ey:
+            dev_steps += 1
+        if not NO_CRASH and ((abs(err_true[0]) > max_ey and not DEV_TIME) or abs(err_true[1]) > sn.FAIL_EPSI
+                             or (launched and xt[3] < 0.3)):
             failed = True
             crash = 'wall' if abs(err_true[0]) > max_ey else ('spin' if abs(err_true[1]) > sn.FAIL_EPSI else 'stall')
             break
+        if MU_PATCH is not None:                      # the patch below is applied to this step's unpatched friction
+            if '_fiala_base' not in c:
+                c['_fiala_base'] = c['fiala'].copy()
+            c['fiala'] = c['_fiala_base'].copy()
         if c.get('degrade'):                          # tire wear over the run's own laps (the harsh_drift car)
             dg = c['degrade']
             f = 1.0 - (1.0 - dg['to']) * min(1.0, max(prog, 0.0) / pl.L / dg['laps'])
             if '_fiala0' not in c:
                 c['_fiala0'] = c['fiala'].copy()
             c['fiala'] = c['_fiala0'] * np.array([f, f, f, 1.0])
+        if MU_PATCH is not None and MU_PATCH[0] <= (idx * pl.ds % pl.L) / pl.L < MU_PATCH[1]:
+            c['fiala'] = c['fiala'].copy()            # the low-friction patch: friction (fiala[2]) scaled inside [LO, HI) of the lap
+            c['fiala'][2] *= MU_PATCH[2]
         try:
             xm = mc.step(xm, d_cmd, i_cmd, c, DT)
         except (ZeroDivisionError, FloatingPointError):
@@ -164,6 +183,7 @@ def run(car_name, plan, policy=None, laps=1.0, s0=0.0, pert=None, seed=0, noise=
                 mu=np.array(MU),
                 a=np.array(A), err=np.array(ERR), err_true=np.array(ERRT), idx=np.array(IDX), applied=np.array(APP), progress=prog,
                 laps=prog / pl.L, failed=failed, crash=crash, peak_ey=peak_ey, max_ey=max_ey, steps=len(X), car=car_name,
+                dev_time=dev_steps * DT,
                 handover=handover,
                 plan=plan.get('name', ''))
 
@@ -206,7 +226,8 @@ def lap_metrics(r, plan, ey_ok=0.10, pace_ok=0.9):
     m = dict(laps=float(r['laps']), failed=bool(r['failed']), rms_ey=rms(e[:, 0]), rms_dbeta=rms(beta - beta_ref),
              mean_abs_beta=float(np.mean(np.abs(beta))), mean_abs_beta_ref=float(np.mean(np.abs(beta_ref))),
              rms_dv=rms(v - v_ref), pace=float(np.mean(v) / np.mean(v_ref)), per_lap_ey=per_lap,
-             crash=r.get('crash', ''), peak_ey=float(r.get('peak_ey', np.max(np.abs(e[:, 0])))))
+             crash=r.get('crash', ''), peak_ey=float(r.get('peak_ey', np.max(np.abs(e[:, 0])))),
+             dev_time=float(r.get('dev_time', 0.0)), dev_frac=float(r.get('dev_time', 0.0)) / max(len(e) * DT, DT))
     m['success'] = bool(not m['failed'] and m['rms_ey'] <= ey_ok and m['pace'] >= pace_ok)
     return m
 

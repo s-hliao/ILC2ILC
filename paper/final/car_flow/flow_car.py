@@ -36,23 +36,46 @@ VARIANTS = {
                    stem="car_flow_rubber", label="rubber car"),
     "speed": dict(plan="mocap_peanutM_b0_free_a33", run="PLSL_freePPON_s0", car="n04_real_nom", var="speed",
                   stem="car_flow_speed", label="plastic car"),
-    # the largest held-out score drop among the cells with iteration policies on this machine (48 cells: PLSL_freePPON_s0, s1;
-    # 1.04 -> 0.56); SELECTED as the best example -- disclose as such (the 216-cell median is -19 %)
-    "speed_best": dict(plan="mocap_peanutM_b0_free_a33", run="PLSL_freePPON_s1", car="ax:mu=0.6000", var="speed",
-                       stem="car_flow_speed_best", label="plastic car, friction x0.6 (best of 48)"),
+    # the largest held-out score drop of PPO+DR's 108 plastic cells (9 runs x 12 cars; 0.82 -> 0.38, -54 %); SELECTED as the best
+    # example -- disclose as such (the 216-cell median, both networks, is -19 %)
+    "speed_best": dict(plan="mocap_peanutM_b0_free_a33", run="PLSLr2_freePPON_s0", car="n04_real_mass", var="speed",
+                       stem="car_flow_speed_best", label="plastic car, mass changed (best of 108)"),
+    # (2026-11-05, user: "show more than this, you said -54 %"): the same cell, the speed axis zoomed to where the car drives,
+    # the reference's level in every row, the gap to the plan's speed as a share of the zero-shot gap
+    "speed_best_zoom": dict(plan="mocap_peanutM_b0_free_a33", run="PLSLr2_freePPON_s0", car="n04_real_mass", var="speed",
+                            stem="car_flow_speed_best_zoom", label="plastic car, mass changed (best of 108)",
+                            grid=(-0.36, 0.12), starts=[(0.15, -0.30), (0.40, 0.08), (0.65, -0.20), (0.90, 0.0)]),
+    # (2026-11-05, ETHZ_RULES.md): the PRACTISED ETHZMobil track (x4.3, 55 m, sim only), rubber car, the MEDIAN rubber PPO+DR run of
+    # replicate 1 by score change (s0: -24.9 %; s2 -30.2, s1 -21.2). No reference row (a nominal-friction car cannot drive the rubber
+    # plan); the shading is the lateral drift instead: moving away from the plan (warm) or back toward it (cool) over the 0.4 s
+    "ethz": dict(plan="ethzmobil43_b0_free", run="ETHZ_rubber_freePPON_s0_ss9001", car="ax:mu=1.667", var="lat", stem="car_flow_ethz",
+                 label="rubber car", ref=False, bg="drift", ns=60, track="practised ETHZMobil lap"),
+    # the same, but the flow ON THE CAR'S OWN ORBIT: at each arc length the zero-shot car's actual state there (its speed, heading
+    # error, sideslip, yaw rate, wheel speed; one noise-free lap) shifted sideways across the tube -- the plan-state slice above
+    # misses the states this car drives (7 % over the plan's pace). Shading: the signed sideways push; the black line: where the push
+    # is zero (the line the flow pulls the car onto)
+    "ethz_orbit": dict(plan="ethzmobil43_b0_free", run="ETHZ_rubber_freePPON_s0_ss9001", car="ax:mu=1.667", var="lat",
+                       stem="car_flow_ethz_orbit", label="rubber car", ref=False, bg="push", ns=60, base="orbit",
+                       track="practised ETHZMobil lap"),
+    # (2026-11-05) the same with a 1.0 s horizon: over 0.4 s the sideways drift is set by the heading the car already has (identical
+    # starting states in every row), the policy acting through steering -> yaw -> heading needs longer; the pogo's arrow is one hop
+    "ethz_orbit_1s": dict(plan="ethzmobil43_b0_free", run="ETHZ_rubber_freePPON_s0_ss9001", car="ax:mu=1.667", var="lat",
+                          stem="car_flow_ethz_orbit_1s", label="rubber car", ref=False, bg="push", ns=60, base="orbit", H=1.0,
+                          track="practised ETHZMobil lap"),
 }
 V = VARIANTS[sys.argv[1] if len(sys.argv) > 1 else "plastic"]
 DATA = os.path.join(HERE, f"{V['stem']}_data.npz")
 PLAN, RUN, CAR = V["plan"], D + "/runs/screen/" + V["run"], V["car"]
 REF_CAR = "real_nom"
-TUBE, TOL, H, DT = 0.5, 0.10, 0.4, 0.025
-NS, NE = 40, 11
+TUBE, TOL, DT = 0.5, 0.10, 0.025
+H = V.get("H", 0.4)                                                  # the arrow's horizon (s)
+NS, NE = V.get("ns", 40), 11
 if V["var"] == "lat":
     GRID = np.linspace(-0.45, 0.45, NE)                              # lateral offset e_y0 (m)
     STARTS = [(0.15, 0.30), (0.40, -0.30), (0.65, 0.15), (0.90, -0.15)]   # (lap fraction, e_y0)
 else:
-    GRID = np.linspace(-0.60, 0.30, NE)                              # speed error dV0 (m/s)
-    STARTS = [(0.15, -0.45), (0.40, 0.20), (0.65, -0.25), (0.90, 0.0)]    # (lap fraction, dV0)
+    GRID = np.linspace(*V.get("grid", (-0.60, 0.30)), NE)            # speed error dV0 (m/s)
+    STARTS = V.get("starts", [(0.15, -0.45), (0.40, 0.20), (0.65, -0.25), (0.90, 0.0)])    # (lap fraction, dV0)
 
 
 def load_policy(path):
@@ -72,11 +95,25 @@ def compute():
     P = sn.PlanNP(pl)
     L = float(pl["length"])
     pols = [load_policy(f"{RUN}/its/it{k}_{CAR}_policy.npz") for k in range(4)]
-    panels = [(REF_CAR, pols[0])] + [(CAR, p) for p in pols]
+    panels = ([(REF_CAR, pols[0])] if V.get("ref", True) else []) + [(CAR, p) for p in pols]
+
+    orbit = None
+    if V.get("base") == "orbit":                                     # the zero-shot car's own lap (noise-free), by plan index
+        r0 = rc.run(CAR, pl, pols[0], laps=1.05, s0=0.0, pert=np.zeros(5), seed=0, noise=False)
+        orbit = {int(i): (np.asarray(x, float), float(e[0])) for i, x, e in zip(r0["idx"], r0["x_true"], r0["err_true"])}
+        oi = np.array(sorted(orbit))
 
     def start(s, e):
         i = int(round(s / P.ds)) % P.M
         x = pl["x"][i].copy()
+        if orbit is not None:                                        # the orbit's state nearest this arc length, shifted to offset e
+            j = int(oi[np.argmin(np.abs((oi - i + P.M // 2) % P.M - P.M // 2))])
+            xo, eo = orbit[j]
+            th = pl["x"][j][2]
+            x = xo.copy()
+            x[0] += -math.sin(th) * (e - eo)
+            x[1] += math.cos(th) * (e - eo)
+            return x, j
         if V["var"] == "lat":                                        # sideways shift, everything else on the plan
             x[0] += -math.sin(x[2]) * e
             x[1] += math.cos(x[2]) * e
@@ -126,6 +163,7 @@ def main():
     if not os.path.exists(DATA):
         compute()
     import matplotlib
+    import matplotlib.patches
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib import font_manager
@@ -145,13 +183,41 @@ def main():
     SS, EE = np.meshgrid(ss, es, indexing="ij")
     # one length factor for every row; in the speed panels the vertical axis is m/s, plotted on the same scale as m
     k_len = 0.85 * (ss[1] - ss[0]) * 2 / np.nanquantile(np.hypot(dS[0], dE[0]), 0.9)
-    titles = [r"nominal car ($\mu$ 0.6), $\pi_0$ (reference)"] + \
-             [V["label"] + rf", $\pi_{k}$" + (" (zero-shot)" if k == 0 else f" (after {2 * k} laps)") for k in range(4)]
+    ref = V.get("ref", True)
+    drift = V.get("bg") == "drift"
+    laps_per_it = 1 if "ethz" in V["plan"] else 2                    # the ETHZMobil stage's one-lap trials (ETHZ_RULES.md)
+    titles = ([r"nominal car ($\mu$ 0.6), $\pi_0$ (reference)"] if ref else []) + \
+             [V["label"] + rf", $\pi_{k}$" + (" (zero-shot)" if k == 0 else f" (after {laps_per_it * k} lap{'s' if laps_per_it * k > 1 else ''})")
+              for k in range(4)]
+    from matplotlib.colors import LinearSegmentedColormap, TwoSlopeNorm
+    DIV = LinearSegmentedColormap.from_list("div", ["#1c5cab", "#5598e7", "#f0efec", "#ec8a89", "#c23a39"])
+    DNORM = TwoSlopeNorm(vcenter=0.0, vmin=-12.0, vmax=12.0)                          # cm per 0.4 s, toward (-) / away from (+) the plan
+    outward = lambda k: 100 * np.where(EE == 0, np.abs(dE[k]), np.sign(EE) * dE[k])
+
+    def settle_line(dEk):                                            # per arc length: the offset where the push crosses zero downward
+        out = np.full(len(ss), np.nan)
+        for i in range(len(ss)):
+            y = dEk[i]
+            for j in range(len(es) - 1):
+                if y[j] > 0 >= y[j + 1]:
+                    out[i] = es[j] + (es[j + 1] - es[j]) * y[j] / (y[j] - y[j + 1])
+                    break
+            else:
+                out[i] = es[-1] if y[-1] > 0 else (es[0] if y[0] < 0 else np.nan)
+        return out
+    push = V.get("bg") == "push"
     settle = []
     fig, axs = plt.subplots(len(titles), 1, figsize=(7.16, 5.6), sharex=True)
     for k, (ax, ttl) in enumerate(zip(axs, titles)):
         dev = np.abs(dE[k] - dE[0]) / tol
-        im = ps.background(ax, SS, EE, dev)
+        if V.get("bg") == "push":                                    # the signed sideways push (cm per 0.4 s) and its zero line
+            im = ax.pcolormesh(SS, EE, 100 * dE[k], cmap=DIV, norm=DNORM, shading="gouraud")
+            sl = settle_line(dE[k])
+            ax.plot(ss, sl, color=ps.INK, lw=1.1, zorder=5)
+        elif drift:
+            im = ax.pcolormesh(SS, EE, outward(k), cmap=DIV, norm=DNORM, shading="gouraud")
+        else:
+            im = ps.background(ax, SS, EE, dev)
         if lat:
             ax.axhspan(TUBE, 0.6, color="#e9e7e2", zorder=1)
             ax.axhspan(-0.6, -TUBE, color="#e9e7e2", zorder=1)
@@ -176,18 +242,32 @@ def main():
         settle.append(float(np.mean(np.concatenate(tail))))
         if not lat:                                                  # the level the speed settles at
             ax.axhline(settle[-1], color=ps.RUN, lw=0.8, ls=":", zorder=5)
+            if "grid" in V and k > 0:                                # zoomed: the reference's level, and the gap closing
+                ax.axhline(settle[0], color=ps.INK, lw=0.6, ls=":", alpha=0.6, zorder=5)
+                ax.fill_between([0, L], settle[-1], 0, color=ps.RUN, alpha=0.22, lw=0, zorder=3)
         ax.set_xlim(0, L)
         ax.set_ylim(*ylim)
-        ax.set_yticks([-0.5, 0, 0.5] if lat else [-0.6, -0.3, 0, 0.3])
+        ax.set_yticks([-0.5, 0, 0.5] if lat else ([-0.3, -0.2, -0.1, 0, 0.1] if "grid" in V else [-0.6, -0.3, 0, 0.3]))
         ax.tick_params(labelsize=6, length=2, width=0.5, pad=1.5)
         ax.set_title(ttl, fontsize=7.5, loc="left", pad=2)
         extra = "" if lat else f", settles at {settle[-1]:+.2f} m/s"
-        ax.text(1.0, 1.02, f"mean error {np.nanmean(dev):.2f} tol{extra}", transform=ax.transAxes, ha="right", va="bottom",
-                fontsize=6, color="#555555")
+        if not lat and "grid" in V and k > 0:
+            extra += f" (gap to the plan {100 * settle[-1] / settle[1]:.0f} % of zero-shot's)"
+        if push:
+            nout = sum(np.any(np.abs(O[k, m][np.isfinite(O[k, m][:, 1]), 1]) > TUBE) for m in range(O.shape[1]))
+            tr = O[k][:, int(round(1.0 / DT)):, 1]
+            txt = (f"pulled onto a line {100 * np.nanmean(np.abs(settle_line(dE[k]))):.1f} cm off the plan on average; perturbed laps "
+                   f"{100 * np.sqrt(np.nanmean(tr ** 2)):.1f} cm rms, {nout} of {O.shape[1]} leave the tube")
+        elif drift:
+            nout = sum(np.any(np.abs(O[k, m][np.isfinite(O[k, m][:, 1]), 1]) > TUBE) for m in range(O.shape[1]))
+            txt = f"flow away from the plan at {100 * np.mean(outward(k) > 0):.0f} % of points; {nout} of {O.shape[1]} perturbed starts leave the tube"
+        else:
+            txt = f"mean error {np.nanmean(dev):.2f} tol{extra}"
+        ax.text(1.0, 1.02, txt, transform=ax.transAxes, ha="right", va="bottom", fontsize=6, color="#555555")
         for s_ in ax.spines.values():
             s_.set_linewidth(0.5)
             s_.set_color("#777777")
-    axs[-1].set_xlabel("arc length along the held-out lap (m)", fontsize=7, labelpad=1.5)
+    axs[-1].set_xlabel(f"arc length along the {V.get('track', 'held-out lap')} (m)", fontsize=7, labelpad=1.5)
     fig.supylabel("lateral offset from the plan (m)" if lat else "speed minus the plan's speed (m/s)", fontsize=7, x=0.012)
     hs, ls_ = [], []
     if lat:
@@ -201,16 +281,27 @@ def main():
     else:
         hs += [Line2D([], [], color=ps.RUN, lw=0.8, ls=":")]
         ls_ += ["where they settle (after 1 s)"]
+        if "grid" in V:
+            hs += [Line2D([], [], color=ps.INK, lw=0.6, ls=":", alpha=0.6), matplotlib.patches.Patch(color=ps.RUN, alpha=0.22)]
+            ls_ += ["reference's level", "gap to the plan's speed"]
+    if push:
+        hs += [Line2D([], [], color=ps.INK, lw=1.1)]
+        ls_ += ["where the push is zero"]
     hs += [Line2D([], [], color=ps.INK, lw=0.8, marker=">", ms=2.5, alpha=0.8)]
     ls_ += [f"where the car is {H:.1f} s later"]
-    fig.legend(hs, ls_, loc="lower center", bbox_to_anchor=(0.47, -0.005), ncol=4, frameon=False, fontsize=6, handlelength=1.4,
+    fig.legend(hs, ls_, loc="lower center", bbox_to_anchor=(0.47, -0.005), ncol=len(hs), frameon=False, fontsize=6, handlelength=1.4,
                columnspacing=1.2, handletextpad=0.4)
     fig.subplots_adjust(left=0.065, right=0.915, top=0.965, bottom=0.10, hspace=0.42)
     p0, p1 = axs[0].get_position(), axs[-1].get_position()
     cax = fig.add_axes([p0.x1 + 0.012, p1.y0, 0.009, p0.y1 - p1.y0])
-    cb = fig.colorbar(im, cax=cax, extend="max")
-    cb.set_label(("lateral" if lat else "speed") + f" flow deviation from the reference (tol = {tol:.2f} " + ("m)" if lat else "m/s)"),
-                 fontsize=6, labelpad=2)
+    cb = fig.colorbar(im, cax=cax, extend="both" if (drift or push) else "max")
+    if push:
+        cb.set_label(f"sideways push in {H:.1f} s (cm; + toward + offset)", fontsize=6, labelpad=2)
+    elif drift:
+        cb.set_label("lateral drift in 0.4 s (cm): back toward the plan  <  0  <  away from it", fontsize=6, labelpad=2)
+    else:
+        cb.set_label(("lateral" if lat else "speed") + f" flow deviation from the reference (tol = {tol:.2f} " + ("m)" if lat else "m/s)"),
+                     fontsize=6, labelpad=2)
     cb.ax.tick_params(labelsize=5.5, length=1.5, width=0.4)
     cb.outline.set_linewidth(0.4)
     for ext in ("pdf", "png"):
@@ -218,7 +309,15 @@ def main():
     for k, t in enumerate(titles):                                   # the numbers the caption quotes
         dev = np.abs(dE[k] - dE[0]) / tol
         out = np.mean([np.any(np.abs(O[k, m][np.isfinite(O[k, m][:, 1]), 1]) > TUBE) for m in range(O.shape[1])]) if lat else 0.0
-        print(f"{t:45s} mean dev {np.nanmean(dev):.2f} tol, perturbed starts settle at {settle[k]:+.3f}, leave the tube {out:.2f}")
+        if push:
+            tr = O[k][:, int(round(1.0 / DT)):, 1]
+            print(f"{t:45s} settle line |offset| {100 * np.nanmean(np.abs(settle_line(dE[k]))):.1f} cm, perturbed laps rms "
+                  f"{100 * np.sqrt(np.nanmean(tr ** 2)):.1f} cm, leave the tube {out:.2f}")
+        elif drift:
+            print(f"{t:45s} away from the plan at {100 * np.mean(outward(k) > 0):.0f} % of points, mean drift {np.nanmean(outward(k)):+.1f} cm, "
+                  f"perturbed starts leave the tube {out:.2f}, settle at {settle[k]:+.3f}")
+        else:
+            print(f"{t:45s} mean dev {np.nanmean(dev):.2f} tol, perturbed starts settle at {settle[k]:+.3f}, leave the tube {out:.2f}")
     print("->", OUT, V["stem"])
 
 
