@@ -62,9 +62,35 @@ VARIANTS = {
     "ethz_orbit_1s": dict(plan="ethzmobil43_b0_free", run="ETHZ_rubber_freePPON_s0_ss9001", car="ax:mu=1.667", var="lat",
                           stem="car_flow_ethz_orbit_1s", label="rubber car", ref=False, bg="push", ns=60, base="orbit", H=1.0,
                           track="practised ETHZMobil lap"),
+    # (2026-11-05, user: "color shading ... should show magnitude of difference between the final version and the previous versions"):
+    # the same flow, shaded by |flow - the FINAL policy's flow| (lateral, tolerance units of 0.1 m): pogo_flow's convention with the
+    # converged policy as the reference (the last row is white by construction)
+    "ethz_vs_final": dict(plan="ethzmobil43_b0_free", run="ETHZ_rubber_freePPON_s0_ss9001", car="ax:mu=1.667", var="lat",
+                          stem="car_flow_ethz_vs_final", data="car_flow_ethz_orbit_1s", label="rubber car", ref=False, bg="final",
+                          ns=60, base="orbit", H=1.0, track="practised ETHZMobil lap"),
+    # (2026-11-05, user: "isn't it supposed to be against sim reference"): pogo_flow's convention -- the reference row is the nominal car
+    # (mu 0.6, the friction the uncapped ETHZMobil plan was solved at; it drives the plan: 14.2 cm rms, pace 0.98, never out of the tube)
+    # under pi_0; every row shaded by |its lateral flow - the reference's| (tol 0.1 m); the same starting states (the rubber car's
+    # zero-shot orbit) in every row, so the rows differ only by the car and the policy
+    # (2026-11-05, user: "show how the policy has changed as a residual from the initial zero-shot policy"): the shading is the policy's
+    # own change, pi_k - pi_0 of the steering command (deg) at each starting state (policy_resid.py); arrows and the zero-push line as before
+    "ethz_resid": dict(plan="ethzmobil43_b0_free", run="ETHZ_rubber_freePPON_s0_ss9001", car="ax:mu=1.667", var="lat",
+                       stem="car_flow_ethz_resid", data="car_flow_ethz_orbit_1s", resid="car_flow_ethz_orbit_1s_resid", label="rubber car",
+                       ref=False, bg="resid", ns=60, base="orbit", H=1.0, track="practised ETHZMobil lap"),                                                         # (2026-11-05: all four perturbed starts shown, user)
+    # (2026-11-05, for the stage videos): the held-out peanut, plastic nominal car (the same run and car as "plastic" / "speed"), the
+    # 1.0 s horizon on its own zero-shot orbit, and the policy-residual shading (policy_resid.py peanut_orbit_1s)
+    "peanut_orbit_1s": dict(plan="mocap_peanutM_b0_free_a33", run="PLSL_freePPON_s0", car="n04_real_nom", var="lat",
+                            stem="car_flow_peanut_orbit_1s", label="plastic car", ref=False, bg="push", ns=40, base="orbit", H=1.0,
+                            track="held-out peanut lap"),
+    "peanut_resid": dict(plan="mocap_peanutM_b0_free_a33", run="PLSL_freePPON_s0", car="n04_real_nom", var="lat",
+                         stem="car_flow_peanut_resid", data="car_flow_peanut_orbit_1s", resid="car_flow_peanut_orbit_1s_resid",
+                         label="plastic car", ref=False, bg="resid", ns=40, base="orbit", H=1.0, track="held-out peanut lap"),
+    "ethz_simref": dict(plan="ethzmobil43_b0_free", run="ETHZ_rubber_freePPON_s0_ss9001", car="ax:mu=1.667", var="lat",
+                        stem="car_flow_ethz_simref", label="rubber car", ref=True, line=True, ns=60, base="orbit", H=1.0,
+                        track="practised ETHZMobil lap"),
 }
 V = VARIANTS[sys.argv[1] if len(sys.argv) > 1 else "plastic"]
-DATA = os.path.join(HERE, f"{V['stem']}_data.npz")
+DATA = os.path.join(HERE, f"{V.get('data', V['stem'])}_data.npz")
 PLAN, RUN, CAR = V["plan"], D + "/runs/screen/" + V["run"], V["car"]
 REF_CAR = "real_nom"
 TUBE, TOL, DT = 0.5, 0.10, 0.025
@@ -163,6 +189,7 @@ def main():
     if not os.path.exists(DATA):
         compute()
     import matplotlib
+    import matplotlib.colors
     import matplotlib.patches
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -177,6 +204,7 @@ def main():
                          "mathtext.fontset": "stix", "font.size": 7, "pdf.fonttype": 42})
     Dd = np.load(DATA)
     ss, es, dS, dE, O, L = Dd["ss"], Dd["es"], Dd["dS"], Dd["dE"], Dd["O"], float(Dd["L"])
+    KEEP = [m for m in range(O.shape[1]) if m not in V.get("drop_starts", ())]
     lat = V["var"] == "lat"
     tol = TOL if lat else 0.1 * float(Dd["vbar"])                    # 0.10 m, or 10 % of the plan's mean speed (pace_ok)
     ylim = (-0.6, 0.6) if lat else (es[0] - 0.08, es[-1] + 0.08)
@@ -205,12 +233,23 @@ def main():
             else:
                 out[i] = es[-1] if y[-1] > 0 else (es[0] if y[0] < 0 else np.nan)
         return out
-    push = V.get("bg") == "push"
+    push = V.get("bg") in ("push", "final", "resid")
+    resid = V.get("bg") == "resid"
+    vsfinal = V.get("bg") == "final"
     settle = []
     fig, axs = plt.subplots(len(titles), 1, figsize=(7.16, 5.6), sharex=True)
     for k, (ax, ttl) in enumerate(zip(axs, titles)):
         dev = np.abs(dE[k] - dE[0]) / tol
-        if V.get("bg") == "push":                                    # the signed sideways push (cm per 0.4 s) and its zero line
+        if V.get("bg") == "resid":                                   # the policy's steering change vs pi_0 (deg), and the zero-push line
+            Rz = np.load(os.path.join(HERE, f"{V['resid']}.npz"))["U"]
+            dst = np.degrees(Rz[k, :, :, 0] - Rz[0, :, :, 0])
+            im = ax.pcolormesh(SS, EE, dst, cmap=DIV, norm=TwoSlopeNorm(vcenter=0.0, vmin=-6.0, vmax=6.0), shading="gouraud")
+            ax.plot(ss, settle_line(dE[k]), color=ps.INK, lw=1.1, zorder=5)
+        elif V.get("bg") == "final":                                   # |flow - the final policy's flow| (tolerance units), and the zero line
+            devf = np.abs(dE[k] - dE[-1]) / TOL                      # own scale: these differences stay below ~1 tol
+            im = ax.pcolormesh(SS, EE, devf, cmap=ps.CMAP, norm=matplotlib.colors.Normalize(0.0, 1.0), shading="gouraud")
+            ax.plot(ss, settle_line(dE[k]), color=ps.INK, lw=1.1, zorder=5)
+        elif V.get("bg") == "push":                                    # the signed sideways push (cm per 0.4 s) and its zero line
             im = ax.pcolormesh(SS, EE, 100 * dE[k], cmap=DIV, norm=DNORM, shading="gouraud")
             sl = settle_line(dE[k])
             ax.plot(ss, sl, color=ps.INK, lw=1.1, zorder=5)
@@ -218,6 +257,8 @@ def main():
             im = ax.pcolormesh(SS, EE, outward(k), cmap=DIV, norm=DNORM, shading="gouraud")
         else:
             im = ps.background(ax, SS, EE, dev)
+            if V.get("line"):                                        # the line the flow pulls the car onto
+                ax.plot(ss, settle_line(dE[k]), color=ps.INK, lw=1.1, zorder=5)
         if lat:
             ax.axhspan(TUBE, 0.6, color="#e9e7e2", zorder=1)
             ax.axhspan(-0.6, -TUBE, color="#e9e7e2", zorder=1)
@@ -229,7 +270,7 @@ def main():
         q.width, q.headwidth, q.headlength = 0.0022, 3.6, 4.0
         q.set_alpha(0.8)
         tail = []
-        for m in range(O.shape[1]):
+        for m in KEEP:
             o = O[k, m]
             o = o[np.isfinite(o[:, 0])]
             out = np.nonzero(np.abs(o[:, 1]) > TUBE)[0] if lat else []
@@ -254,12 +295,20 @@ def main():
         if not lat and "grid" in V and k > 0:
             extra += f" (gap to the plan {100 * settle[-1] / settle[1]:.0f} % of zero-shot's)"
         if push:
-            nout = sum(np.any(np.abs(O[k, m][np.isfinite(O[k, m][:, 1]), 1]) > TUBE) for m in range(O.shape[1]))
-            tr = O[k][:, int(round(1.0 / DT)):, 1]
+            nout = sum(np.any(np.abs(O[k, m][np.isfinite(O[k, m][:, 1]), 1]) > TUBE) for m in KEEP)
+            tr = O[k][KEEP][:, int(round(1.0 / DT)):, 1]
             txt = (f"pulled onto a line {100 * np.nanmean(np.abs(settle_line(dE[k]))):.1f} cm off the plan on average; perturbed laps "
-                   f"{100 * np.sqrt(np.nanmean(tr ** 2)):.1f} cm rms, {nout} of {O.shape[1]} leave the tube")
+                   f"{100 * np.sqrt(np.nanmean(tr ** 2)):.1f} cm rms, {nout} of {len(KEEP)} leave the tube")
+            if resid:
+                Rz = np.load(os.path.join(HERE, f"{V['resid']}.npz"))["U"]
+                tr = O[k][KEEP][:, int(round(1.0 / DT)):, 1]
+                txt = (f"steering change {np.degrees(np.abs(Rz[k, :, :, 0] - Rz[0, :, :, 0])).mean():.1f} deg mean "
+                       f"(max {np.degrees(np.abs(Rz[k, :, :, 0] - Rz[0, :, :, 0])).max():.0f}); line {100 * np.nanmean(np.abs(settle_line(dE[k]))):.1f} cm "
+                       f"off the plan; laps {100 * np.sqrt(np.nanmean(tr ** 2)):.1f} cm rms, {nout}/{len(KEEP)} leave the tube")
+            if vsfinal:
+                txt = f"difference from the final flow {np.nanmean(np.abs(dE[k] - dE[-1])) / TOL:.2f} tol (mean); " + txt
         elif drift:
-            nout = sum(np.any(np.abs(O[k, m][np.isfinite(O[k, m][:, 1]), 1]) > TUBE) for m in range(O.shape[1]))
+            nout = sum(np.any(np.abs(O[k, m][np.isfinite(O[k, m][:, 1]), 1]) > TUBE) for m in KEEP)
             txt = f"flow away from the plan at {100 * np.mean(outward(k) > 0):.0f} % of points; {nout} of {O.shape[1]} perturbed starts leave the tube"
         else:
             txt = f"mean error {np.nanmean(dev):.2f} tol{extra}"
@@ -294,8 +343,12 @@ def main():
     fig.subplots_adjust(left=0.065, right=0.915, top=0.965, bottom=0.10, hspace=0.42)
     p0, p1 = axs[0].get_position(), axs[-1].get_position()
     cax = fig.add_axes([p0.x1 + 0.012, p1.y0, 0.009, p0.y1 - p1.y0])
-    cb = fig.colorbar(im, cax=cax, extend="both" if (drift or push) else "max")
-    if push:
+    cb = fig.colorbar(im, cax=cax, extend="both" if (resid or drift or (push and not vsfinal)) else "max")
+    if resid:
+        cb.set_label("steering change vs the zero-shot policy (deg; + = more to the left)", fontsize=6, labelpad=2)
+    elif vsfinal:
+        cb.set_label("difference from the final policy's flow (tol = 0.1 m)", fontsize=6, labelpad=2)
+    elif push:
         cb.set_label(f"sideways push in {H:.1f} s (cm; + toward + offset)", fontsize=6, labelpad=2)
     elif drift:
         cb.set_label("lateral drift in 0.4 s (cm): back toward the plan  <  0  <  away from it", fontsize=6, labelpad=2)
@@ -308,9 +361,9 @@ def main():
         fig.savefig(os.path.join(OUT, f"{V['stem']}.{ext}"), dpi=300)
     for k, t in enumerate(titles):                                   # the numbers the caption quotes
         dev = np.abs(dE[k] - dE[0]) / tol
-        out = np.mean([np.any(np.abs(O[k, m][np.isfinite(O[k, m][:, 1]), 1]) > TUBE) for m in range(O.shape[1])]) if lat else 0.0
+        out = np.mean([np.any(np.abs(O[k, m][np.isfinite(O[k, m][:, 1]), 1]) > TUBE) for m in KEEP]) if lat else 0.0
         if push:
-            tr = O[k][:, int(round(1.0 / DT)):, 1]
+            tr = O[k][KEEP][:, int(round(1.0 / DT)):, 1]
             print(f"{t:45s} settle line |offset| {100 * np.nanmean(np.abs(settle_line(dE[k]))):.1f} cm, perturbed laps rms "
                   f"{100 * np.sqrt(np.nanmean(tr ** 2)):.1f} cm, leave the tube {out:.2f}")
         elif drift:
