@@ -1,0 +1,14 @@
+/home/henry/miniconda3/envs/f1t/bin/python -u sim_train.py --plans mocap_square2fast_b0_free mocap_square2fast_b0_free_v85 mocap_square2fast_b0_free_v70 mocap_figfast_b0_free mocap_figfast_b0_free_v85 mocap_figfast_b0_free_v70 --out runs/zs_better/oursdrC_s0 --init runs/freeBCN_s0/policy_final.npz --bc-iters 10 --iters 90 --lanes 1024 --T 160 --explore-frac 0.7 --pert 1.5 --a-off 0.15 --chain 0.25 --beta 0.3 --delta 0.02 --cap 0.04 --max-ey 0.2 --err-scale 0.05 1000000000.0 1000000000.0 1000000000.0 1000000000.0 0.6 --replay 4 --steps 300 --mb 4096 --lr 0.0003 --lr-final 0.0001 --anchor-w 1.0 --gain-w 0.0 --hidden 256 --dr 1.0 --eval-every 10 --seed 0 --gpu 2
+W1108 20:35:20.882229 3483194 bfc_allocator.cc:502] Allocator (GPU_0_bfc) ran out of memory trying to allocate 2.99GiB (rounded to 3212204288)requested by op 
+If the cause is memory fragmentation maybe the environment variable 'TF_GPU_ALLOCATOR=cuda_malloc_async' will improve the situation. 
+Current allocation summary follows.
+Current allocation summary follows.
+W1108 20:35:20.882811 3483194 bfc_allocator.cc:513] __________________________________________________________________________________________________**
+E1108 20:35:20.882889 3483194 pjrt_stream_executor_client.cc:2111] Execution of replica 0 failed: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 2.99GiB. [tf-allocator-allocation-error='']
+Traceback (most recent call last):
+  File "/home/henry/ilc_ws/src/ilc_f1tenth/ilc2real_ubefix/sim_train.py", line 291, in <module>
+    step, valid, J, Jp = gn_steps(params, out['x'], out['idx'], (out['applied'] - sj.A_OFF) / sj.A_SCALE, pid, p,
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+jax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 2.99GiB.
+--------------------
+For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.

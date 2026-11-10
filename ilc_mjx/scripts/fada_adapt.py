@@ -32,6 +32,7 @@ ap.add_argument("--lr", type=float, default=1e-3)
 ap.add_argument("--seed", type=int, default=9001)
 ap.add_argument("--eval", default="final", choices=("val", "final", "holdout", "planeval", "planefinal", "none"))
 ap.add_argument("--perturbed", action="store_true")
+ap.add_argument("--train-cond", default="", help="(2026-11-06) every practice jump under this one perturbation of the robot's evaluation set (as deploy.py --train-cond); evaluation unchanged")
 ap.add_argument("--eval-episodes", type=int, default=4)
 ap.add_argument("--gpu", default="0")
 ap.add_argument("--train-episodes", type=int, default=1, help="episodes per goal per iteration (the data-matching "
@@ -90,6 +91,15 @@ def export(w, d):
 # ILC_QUAD_OVERLAY (a container path): an ilc_quad package put first on the robots' PYTHONPATH -- the box-fix reruns
 # (log/dilc/plane/fixbox) fly the fixed robots while other runs keep the installed ones
 OVERLAY = f"export PYTHONPATH={os.environ['ILC_QUAD_OVERLAY']}:$PYTHONPATH && " if os.environ.get("ILC_QUAD_OVERLAY") else ""
+# (2026-11-07 FIX) the robots' settings passed into the container exactly as deploy.py does (they were missing here: every flight ran the
+# robots at the overlay's default joint damping and without the free-landing / tail-landing task config -- all results before invalid)
+if os.environ.get("ILC_ROBOT_DAMPING"):
+    OVERLAY += f"export ILC_SIM_DAMPING={os.environ['ILC_ROBOT_DAMPING']} && "
+for _v in ("ILC_FREE_LANDING", "ILC_LAND_ZMIN", "ILC_FTH_MAX", "ILC_LAND_FEET"):
+    if os.environ.get(_v):
+        OVERLAY += f"export {_v}={os.environ[_v]} && "
+if os.environ.get("DILC_NODE_PARAMS"):
+    OVERLAY += f"export DILC_NODE_PARAMS='{os.environ['DILC_NODE_PARAMS']}' && "
 
 
 def flown(*args, **kw):
@@ -203,6 +213,16 @@ def run_robot(robot):
     w = dict(base)
     data, hist = [], []
     iters = a.iters if a.rank > 0 else 0
+    train_conds = robot
+    if a.train_cond:                    # (2026-11-06) every practice jump under the robot's own line of this perturbation (deploy.py --train-cond)
+        lines = [l for l in open(f"/home/henry/ilc_ws/log/dilc/final701/rob_{robot}.txt").read().splitlines()
+                 if l.startswith(f"{robot}+{a.train_cond}|")]
+        if len(lines) != 1:
+            raise SystemExit(f"{robot}: no perturbation {a.train_cond} in final701/rob_{robot}.txt")
+        tcf = os.path.join(out, f"train_cond_{a.train_cond}.txt")
+        os.makedirs(out, exist_ok=True)
+        open(tcf, "w").write(lines[0] + "\n")
+        train_conds = cpath(tcf)
     for it in range(iters + 1):
         pdir = os.path.join(out, f"it{it}", "policy")
         export(w, pdir)
@@ -211,7 +231,7 @@ def run_robot(robot):
         t0 = time.time()
         rdir = os.path.join(out, f"it{it}", "real")
         shutil.rmtree(rdir, ignore_errors=True)
-        fly(pdir, robot, a.goals, a.seed + 101 * it, os.path.join(out, f"it{it}", "real.json"), rdir,
+        fly(pdir, train_conds, a.goals, a.seed + 101 * it, os.path.join(out, f"it{it}", "real.json"), rdir,
             episodes=a.train_episodes)
         line = []
         for f in sorted(os.listdir(rdir)) if os.path.isdir(rdir) else []:

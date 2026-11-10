@@ -30,11 +30,18 @@ def load(path):
     d = np.load(path)
     n = len([k for k in d.files if k.startswith('W')])
     pol = [(d[f'W{i}'], d[f'b{i}']) for i in range(n)]
+    if 'mode' in d.files and str(d['mode']) == 'fada_tf':        # (2026-11-07) FADA full fidelity: the pickled planner + (merged) IDM
+        import fada_tf
+        w = fada_tf.load(str(d['pkl']))
+        return dict(fada_tf=True, P=w['P'], I=w['I'])
+    if 'mode' in d.files and str(d['mode']) == 'rma_oracle':     # (2026-11-07) the RMA teacher's actor + the true latent z
+        return dict(rma_oracle=True, actor=pol, z=np.asarray(d['z'], float))
     if 'mode' in d.files and str(d['mode']) == 'fada' or 'lam' in d.files:
         orc = {k[len('oracle__'):]: np.asarray(d[k]) for k in d.files if k.startswith('oracle__')}
         return dict(fada=pol, lam=float(d['lam']), oracle=orc or None,
                     dims=np.asarray(d['dims']) if 'dims' in d.files else None,
-                    horizon=int(d['horizon']) if 'horizon' in d.files else 1)
+                    horizon=int(d['horizon']) if 'horizon' in d.files else 1,
+                    planner=[(np.asarray(d[f'P_W{i}']), np.asarray(d[f'P_b{i}'])) for i in range(len([k for k in d.files if k.startswith('P_W')]))] or None)
     ad = os.path.join(os.path.dirname(path), 'rma_adapt.npz')
     if 'mode' in d.files and str(d['mode']) == 'rma' and os.path.exists(ad):
         e = np.load(ad)

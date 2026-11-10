@@ -605,6 +605,12 @@ class NumpyActor:
     """dilc_train.py's actor exported as npz: MLP (relu) -> tanh-Gaussian mean, log std."""
 
     def __init__(self, weights: dict):
+        self.fada = None
+        if "fada_tf" in weights:                # (2026-11-07) FADA full fidelity (fada_tf.py transformers, ilc_mjx fada_quad_tf.py),
+            import fada_tf                      # weights as plain named arrays FP__* / FI__* (fada_tf.flatten)
+            self.fada = fada_tf.FadaPolicy(fada_tf.unflatten(weights, "FP"), fada_tf.unflatten(weights, "FI"), 4)
+            self.fada_k = 0
+            return
         self.W = [np.asarray(weights[f"W{i}"], np.float64) for i in range(weights["n_hidden"] + 0)]
         self.b = [np.asarray(weights[f"b{i}"], np.float64) for i in range(weights["n_hidden"] + 0)]
         self.W_mu, self.b_mu = np.asarray(weights["W_mu"], float), np.asarray(weights["b_mu"], float)
@@ -624,6 +630,14 @@ class NumpyActor:
         return cls(d)
 
     def __call__(self, obs, rng=None):
+        if self.fada is not None:               # o_k = [error (6), time, the previous executed action (4)], c = the goal (2); the
+            obs = np.asarray(obs, float)        # history kept per jump (reset at the jump's first sample, time = -1); deterministic
+            if obs[6] <= -1.0 + 1e-9:
+                self.fada.reset()
+            else:                               # the action executed at the previous sample (bank prev_action: obs[-4:])
+                self.fada.observe_action(obs[-4:])
+            o = obs[:7] if self.fada.d_o == 7 else np.r_[obs[:7], obs[-4:]]       # d_o 7: the 2026-11-07 leak-fixed model
+            return np.clip(np.asarray(self.fada.act(o, obs[7:9]), float), -1.0, 1.0)
         h = np.asarray(obs, float)
         if self.P is not None:
             p = h

@@ -89,6 +89,10 @@ def run(car_name, plan, policy=None, laps=1.0, s0=0.0, pert=None, seed=0, noise=
     pname = plan.get('name', '')
     prog, failed, crash, peak_ey, dev_steps, spin_n = 0.0, False, '', 0.0, 0, 0
     hist, last_a = [], np.zeros(2)
+    fp = None
+    if isinstance(policy, dict) and 'fada_tf' in policy:    # (2026-11-07) FADA full fidelity: a stateful planner-IDM per run
+        import fada_tf
+        fp = fada_tf.FadaPolicy(policy['P'], policy['I'], 2)
     for t in range(T):
         xt = mc.planar(xm)
         meas_hist.append(xt)                          # sensing: latency, refresh rate, noise, velocity lag
@@ -110,6 +114,19 @@ def run(car_name, plan, policy=None, laps=1.0, s0=0.0, pert=None, seed=0, noise=
         obs_true, err_true = pl.features(idx, xt)
         if policy is None:
             mu = (pl.expert(idx, xmeas) - cm.A_OFF) / cm.A_SCALE
+        elif fp is not None:                           # o_t = [dev, raw] + the previous executed action; c_t = the plan preview
+            mu = np.asarray(fp.act(obs[:13] if fp.d_o == 13 else np.r_[obs[:13], last_a], obs[13:]), float)   # d_o 13: leak-fixed model
+        elif isinstance(policy, dict) and 'mlp_prev' in policy:     # (2026-11-07) an MLP reading [obs, a_{t-1}] (dagger_car.py --prev-a 1)
+            mu = mlp_np(policy['actor'], np.r_[obs, last_a])
+        elif isinstance(policy, dict) and 'rma_oracle' in policy:   # (2026-11-07) the RMA teacher's actor fed the car's TRUE latent
+            mu = mlp_np(policy['actor'], np.r_[obs, policy['z']])
+        elif isinstance(policy, dict) and 'tvlg' in policy:    # (2026-11-07) GPS's local controller p_i: time-varying linear-Gaussian
+            tv = policy['tvlg']                         # in the measured state, time from the handover (the recorded rows' index)
+            j = (t - handover) if launched else 0
+            if j < len(tv['K']):
+                mu = tv['um'][j] + tv['K'][j] @ (xmeas - tv['xm'][j]) + tv['k'][j] + tv['L'][j] @ tv['eps'][j]
+            else:                                       # beyond the fitted horizon: the global network (declared)
+                mu = mlp_np(policy['net'], obs)
         elif isinstance(policy, dict) and 'fada' in policy:    # FADA: IDM(o, lam d) with d the plan deviation
             orc = policy.get('oracle') or {}
             dims = policy.get('dims')
@@ -117,8 +134,12 @@ def run(car_name, plan, policy=None, laps=1.0, s0=0.0, pert=None, seed=0, noise=
             # IDM is trained on (o_t, d_{t+H})); the plan grid is ~5 mm, a period ~7 grid points. (Was idx + 1: one grid
             # point, i.e. the current deviation -- every FADA-oracle car run before 2026-10-12 04:30 flew that.)
             ahead = max(1, int(round(int(policy.get('horizon', 1)) * math.hypot(xmeas[3], xmeas[4]) * DT / pl.ds)))
-            d_next = orc[pname][(idx + ahead) % len(orc[pname])] if pname in orc else \
-                policy['lam'] * (obs[:8] if dims is None else obs[np.asarray(dims)])
+            if pname in orc:
+                d_next = orc[pname][(idx + ahead) % len(orc[pname])]
+            elif policy.get('planner') is not None:      # (2026-11-07, FADA audit) FADA's learned planner (fada_car_planner.py)
+                d_next = mlp_np(policy['planner'], obs)
+            else:
+                d_next = policy['lam'] * (obs[:8] if dims is None else obs[np.asarray(dims)])
             mu = mlp_np(policy['fada'], np.r_[obs, d_next])          # oracle planner: the deviation a policy
             #                                                          that works on this car reaches there
         elif isinstance(policy, dict):                 # RMA: pi(o, phi(history of obs deviations, actions))
@@ -141,6 +162,8 @@ def run(car_name, plan, policy=None, laps=1.0, s0=0.0, pert=None, seed=0, noise=
                 mu = (np.array([d_l, launch['current']]) - cm.A_OFF) / cm.A_SCALE
         a = mu + (action_noise[t] if action_noise is not None else 0.0)
         last_a = a
+        if fp is not None:
+            fp.observe_action(a)
         ap = a * cm.A_SCALE + cm.A_OFF
         cmd_hist.append(ap)
         if len(cmd_hist) > 8:
@@ -249,8 +272,11 @@ def exact_check(cars, out=None):
     import json
     env = {k: os.environ.get(k) for k in ('F1T_MU', 'F1T_PLANS', 'F1T_TRACKS', 'F1T_SAFETY_EY')}
     nowall = os.environ.get('F1T_TRAIN_NO_WALLS') == '1'   # idealized TRAINING without the room's walls (evaluation keeps them)
-    assert (env['F1T_PLANS'] or '').rstrip('/').endswith(('plans_mu02_tight', 'plans_mu02_tight_m374')) and (env['F1T_SAFETY_EY'] in ('0.5', '1.0') or nowall) \
-        and env['F1T_MU'] == '0.2', f'not the tight-track setup (source env_tight.sh): {env}'
+    pl = (env['F1T_PLANS'] or '').rstrip('/')
+    tight = pl.endswith(('plans_mu02_tight', 'plans_mu02_tight_m374')) and env['F1T_MU'] == '0.2'
+    nom06 = pl.endswith('plans_nom06') and env['F1T_MU'] == '0.6'   # 2026-11-06: the current protocol (every main table, sb_stage.sh)
+    assert (tight or nom06) and (env['F1T_SAFETY_EY'] in ('0.5', '1.0') or nowall), \
+        f'not the tight-track / nom06 setup (source env_tight.sh; nom06: F1T_MU=0.6 F1T_PLANS=plans_nom06): {env}'
     rec = dict(env=env, train_no_walls=nowall, cars={c: mc.car_config(c) for c in cars})
     if out:
         json.dump(rec, open(out, 'w'), indent=1, default=lambda x: x.tolist() if hasattr(x, 'tolist') else str(x))

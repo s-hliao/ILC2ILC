@@ -52,6 +52,7 @@ ap.add_argument("--value-warmup", type=int, default=10)
 ap.add_argument("--explore-q", type=float, default=0.08, help="stance offsets (as every arm)")
 ap.add_argument("--goals", type=float, nargs=2, default=[0.40, 0.60])
 ap.add_argument("--eval-every", type=int, default=25)
+ap.add_argument("--no-dr", action="store_true", help="(2026-11-06, figure 4) train on the nominal robot only (plain PPO); the DR evaluation is unchanged")
 ap.add_argument("--seed", type=int, default=0)
 ap.add_argument("--gpu", default="0")
 ap.add_argument("--plane", action="store_true", help="2D goal plane: goals uniform over the bank's valid region (flat and box jumps), evals on its grid")
@@ -418,7 +419,9 @@ for it in range(it0, a.iters + 1):
     goals = env.sample_plane_goals(B, rng) if a.plane else np.stack([rng.uniform(*a.goals, B), np.zeros(B)], 1)
     ref = env.references(goals)
     dyn = env.dyn_arrays(env.sample_dyn(B, rng))
-    if a.dr_async:
+    if a.no_dr:                                      # (2026-11-06) plain PPO: every training robot nominal (same rng draws)
+        dyn = env.dyn_arrays(np.tile([1.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 0.0], (B, 1)))
+    elif a.dr_async:
         dyn.update(env.sample_async(B, rng))
     q_off, _ = env.explore_noise(B, rng, a.explore_q, 0.0)
     if a.mode == "student_ctx":                      # two jumps per DR robot; psi regresses the latent on both contexts

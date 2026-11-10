@@ -143,7 +143,7 @@ rubber squareH. Known limits:
 ```bash
 cd ~/ilc_ws/src/ilc_f1tenth/ilc2real && source env_tight.sh
 export F1T_MU=0.6 F1T_PLANS=$PWD/plans_nom06       # AFTER env_tight.sh: it sets the old mu-0.2 bank
-export XLA_PYTHON_CLIENT_PREALLOCATE=false XLA_FLAGS=--xla_gpu_enable_priority_fusion=false NUMBA_NUM_THREADS=1
+export XLA_PYTHON_CLIENT_PREALLOCATE=false XLA_FLAGS= NUMBA_NUM_THREADS=1   # (2026-11-06) the old XLA flag --xla_gpu_enable_priority_fusion=false no longer exists in JAX 0.9.0.1 ("Unknown flag in XLA_FLAGS", exit at start); the sim runs use none
 S=~/car_sessions/$(date +%m%d)_<tire>             # plastic / rubber
 # plastic:
 declare -A P=([square2fast]=mocap_square2fast_b0_free_a45 [fig8R100]=mocap_fig8R100_b0_free_a33 [peanut]=mocap_peanutM_b0_free_a33)   # peanut CLOCKWISE
@@ -175,10 +175,15 @@ for NET in freePPON rmaN; do
 python -u hw_stage.py --backend manual --session-dir $S --cars real --policy runs/${NET}_s0/policy_final.npz \
   --out runs/hw/real_${NET}_<tire>_stage --goals $G --iters 3 --objective task --goal-cycle 1 \
   --trial-laps 2 --anchor-w 20 --anchor-plans $A --fit-realize 0.9 \
-  --fit-max-steps 8000 --seed 9001 --launch 1.0 8.0 --save-its 1 --beta 0.5 --delta 0.05 --cap 0.1 --slope-w 1 --tr 1 \
-  --err-scale 0.10 1e9 1e9 1e9 1e9 0.24 --eval-runs 0 --skip-launch 0.5
+  --fit-max-steps 8000 --seed 9001 --launch 1.0 8.0 --save-its 1 --beta 0.5 --delta 0.05 --cap 0.4 --fit-stall 0 --slope-w 1 --tr 1 \
+  --err-scale 0.10 1e9 1e9 1e9 1e9 0.24 --eval-runs 0 --skip-launch 0.5 $([ $NET = rmaN ] && echo --z-path 1)
 done
 ```
+(2026-11-06 ~23:55, user: "include it") RMA flies with `--z-path 1`: the update's model includes the adaptation module's path
+(runs/screen/RMA_SENS_1106.md, CAR_SIGNIF_1106.md B/C; the SB tables used it). PPO+DR unchanged.
+(2026-11-06, user: "adopt SB"; runs/screen/STEP_SCREEN_1106.md / SB_RERUN_1106.md) `--cap 0.4 --fit-stall 0` = SB: the trust region
+starts at its maximum 0.4 (still halved when the measured / predicted reduction < 0.25, the step rejected when < 0) and the refit runs
+to 8000 steps unless it realizes 90 % of the step. hw_stage.py needs the --fit-stall option (synced 2026-11-06).
 `--skip-launch 0.5` is the launch mask (approved 2026-11-02, see above): keep it for BOTH tires and both networks.
 The car flies each request as it appears; the update between trials takes ~1-3 min. A trial lasts 2.05 plan lap times
 (the car covers ~1.5-1.8 laps). RMA: the stage trains the actor only; `$S/rma_adapt.npz` holds the frozen adaptation module.

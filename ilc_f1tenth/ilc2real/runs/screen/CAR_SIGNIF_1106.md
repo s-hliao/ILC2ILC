@@ -47,3 +47,40 @@ Exactly the main RMA runs' settings and seeds, only --z-path 1 added (JAX on ube
 Evaluation identical to the main tables (ladder_eval.py: held-out peanut 5 laps -- plastic a33 / rubber x120; ETHZMobil 1 lap + the
 held-out peanut), it 0 vs 3. Reported next to the existing RMA cells (paired by network seed and stage seed). These become the paper's
 RMA rows (the method with z-path, as the hardware will fly if the user adopts it); the old rows are reported as the fixed-z_hat version.
+
+## D. Fixed-simulator re-score (2026-11-06 ~13:00; runs/screen_final/rescore_table.py; rescore_*.json next to the old files)
+The multi-body car (mb_fiala) now floors its slip denominators at 0.1 m/s (bit-identical while every wheel rolls) and a run ends
+only on a spin (yaw rate above 3 mu g / |v| for 0.1 s, F1T_SPIN_RHO=3). Every table cell re-evaluated (same policies, same seeds
+and starts); practice itself ran on the old simulator (disclosed).
+| cell | old simulator | fixed simulator | spin-outs (fixed) |
+|---|---|---|---|
+| plastic held-out peanut, PPO+DR (9) | -27.3 % [-29.4, -25.0] | -27.3 % [-29.4, -25.0] | 0 -> 0 % |
+| plastic held-out peanut, RMA (9) | -13.4 % [-15.5, -11.6] | -13.4 % [-15.4, -11.6] | 0 -> 0 % |
+| rubber held-out peanut, PPO+DR (18) | -5.3 % [-6.8, -3.9] | -5.3 % [-6.9, -4.0] | 0 -> 0 % |
+| rubber held-out peanut, RMA (18) | -4.2 % [-5.9, -2.5] | -4.2 % [-6.0, -2.6] | 0 -> 0 % |
+| rubber peanut x1.5 practised, PPO+DR (3) | -21.7 % [-30.8, -11.0] | -21.7 % [-30.8, -11.0] | 0 -> 0 % |
+| rubber peanut x1.5 practised, RMA (3) | -3.8 % [-4.8, -3.2] | -3.8 % [-4.8, -3.2] | 0 -> 0 % |
+| rubber fig8 x1.4, PPO+DR / RMA (3 each) | -0.1 % / -1.4 % | -0.1 % / -1.4 % | 0 -> 0 % |
+| plastic peanut x1.2, PPO+DR / RMA (3 each) | -0.1 % / -2.1 % | -0.1 % / -2.1 % | 0 -> 0 % |
+| plastic square2fast x1.2 (VOID, PFAST_RULES) | -0.3 % / -0.4 % | -0.3 % / -0.4 % | RMA 2.1 % both its |
+ETHZMobil (36 runs): only 13 runs' policies are on matcha -- on those (4 / 3 / 3 / 3 runs per cell) plastic PPO+DR -16.9 % (old
+-14.9 % on all 9; the old simulator failed 4.2 % of its laps, the fixed one 0.0 -> 0.5 %), plastic RMA +1.7 %, rubber PPO+DR -25.4 %,
+rubber RMA -30.3 %. All 36 re-scored on ube (ilc2real_fix/ethz_rescore_fix.sh, after zp_rescore_fix.sh): RESULT pending.
+Also fixed before use: ilc2real_fix/ladder_eval.py imported ../ilc2real's (unfixed) simulator through a hard-coded path; now its own.
+D (cont., 14:30): ALL 36 ETHZMobil runs re-scored on ube (fixed simulator): plastic PPO+DR -17.7 % [-20.2, -15.3] 9/9 (old -14.9 %; the
+old simulator failed 4.2 % of its laps, the fixed 0.0 -> 0.5 %), plastic RMA +1.0 % (n.s., unchanged), rubber PPO+DR -24.0 % [-26.1, -21.9],
+rubber RMA -29.0 % [-31.5, -26.0] (unchanged). Held-out peanut after ETHZ practice: unchanged (plastic +2.7 / +5.1 %, rubber -1.7 / +6.0 %).
+
+## C. RESULT (14:30; fixed simulator, ladder_eval as the main tables; paired by seeds with the old RMA rows)
+| RMA + stage | old chain (fixed z_hat) | + z-path (C) |
+|---|---|---|
+| plastic, held-out peanut (9 runs) | -13.4 % [-15.4, -11.6] | -17.2 % [-19.9, -14.6], 9/9, 108/108 cells |
+| rubber, held-out peanut (18 runs) | -4.2 % [-6.0, -2.6] | -5.7 % [-7.5, -4.1], 18/18 |
+| plastic, ETHZMobil practised (9) | +1.0 % [-3.5, +6.0] | -0.3 % [-2.7, +2.2] (n.s.) |
+| rubber, ETHZMobil practised (9) | -29.0 % [-31.5, -26.0] | -24.3 % [-28.5, -20.4] |
+Per C these are the paper's RMA rows (z-path); the fixed-z_hat rows are reported as the variant. The z-path is better on the held-out
+peanut (both tires) and on plastic ETHZ, worse on rubber ETHZ (-24.3 vs -29.0 %).
+
+## Faster rubber ETHZMobil x1.1 RESULT (ETHZ_RULES.md; fixed simulator, spin rule; 9 runs per network; RMA with --z-path 1)
+practised x1.1: PPO+DR -12.1 % [-15.5, -8.8] 9/9 (e_y 18.6 -> 16.3 cm), RMA -19.8 % [-24.2, -15.4] 9/9 (17.5 -> 14.0 cm), no spin-outs;
+held-out peanut x1.2 after it: PPO+DR -4.4 % [-5.8, -2.7], RMA -8.7 % [-11.5, -5.7]. (x1.0 above: -24.0 / -29.0 %.)

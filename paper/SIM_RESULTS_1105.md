@@ -130,7 +130,7 @@ not predict the robots' zero-shot. Full table: mem/MEMORY_ABLATION_1106.md.
 - RMA: the stage holds z_hat fixed; that misses 14-45 % of RMA's reaction within 8 periods, 84-105 % at 16. A chain through the
   adaptation module (hw_stage --z-path 1) passes both gates (reproduces the old chain with the path off: 2e-5; matches an independent
   numpy implementation: 4e-5) and changes the step by 31 % on a 1.5 s trial. Paired runs pending.
-- Longer practice (8 iterations, sim only; the headline stays at 3; held-out peanut, 3 runs per cell, all runs better at every iteration):
+- NOT FOR THE PAPER (user 2026-11-06: "the whole point is few-shot, at most 8 laps"). Longer practice (8 iterations, sim only; the headline stays at 3; held-out peanut, 3 runs per cell, all runs better at every iteration):
   plastic PPO+DR it3 -25.2 % [-28.7, -21.1] -> it8 -33.6 % [-39.6, -28.6]; plastic RMA -9.5 -> -15.3 %; rubber PPO+DR -7.7 -> -8.2 %;
   rubber RMA -4.9 -> -4.7 % (rubber's zero-shot is already inside tolerance on the held-out peanut, score 0.76). Plastic gains are pace
   (0.885 -> 0.944) with lateral 4.7 -> 6.5 cm (inside the 10 cm tolerance).

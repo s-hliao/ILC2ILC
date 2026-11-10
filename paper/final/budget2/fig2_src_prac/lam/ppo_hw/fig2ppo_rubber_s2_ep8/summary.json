@@ -1,0 +1,53 @@
+{
+ "args": {
+  "init": "runs/freePPON_s2/policy_final.npz",
+  "arm": "fig2ppo_rubber_s2",
+  "cars": [
+   "ax:mu=1.667",
+   "ax:mu=1.833,mass=1.1"
+  ],
+  "goals": [
+   "mocap_fig8R100_b0_free_x120"
+  ],
+  "rungs_from": "",
+  "per_iter": 8,
+  "checkpoints": [
+   8,
+   24,
+   96,
+   384
+  ],
+  "std": [
+   0.049,
+   0.046
+  ],
+  "epochs": 8,
+  "mb": 1024,
+  "lr": 0.0001,
+  "lr_critic": 0.001,
+  "critic_warmup": 300,
+  "gamma": 0.98,
+  "lam": 0.95,
+  "clip": 0.2,
+  "seed": 4244,
+  "gpu": null,
+  "policy": "runs/freePPON_s2/policy_final.npz",
+  "iters": 8,
+  "trial": "ppo_real_car",
+  "episodes_per_car": 8
+ },
+ "real_laps": {
+  "ax:mu=1.667": 7.977308294209706,
+  "ax:mu=1.833,mass=1.1": 8.151408450704228
+ },
+ "crashes": {
+  "ax:mu=1.667": 0,
+  "ax:mu=1.833,mass=1.1": 0
+ },
+ "episodes": {
+  "ax:mu=1.667": 8,
+  "ax:mu=1.833,mass=1.1": 8
+ },
+ "seconds": 15.341830730438232,
+ "safety_ey": 0.5
+}

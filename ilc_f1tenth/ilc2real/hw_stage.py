@@ -24,6 +24,7 @@ targets are at (o_t, z_hat_t), and the closed-loop K = d pi / d o holds z_hat fi
 """
 import argparse
 import json
+import re
 import os
 import shutil
 import sys
@@ -51,6 +52,7 @@ ap.add_argument('--tr-max', type=float, default=0.4)
 ap.add_argument('--fit-realize', type=float, default=0.0, help='>0: refit the newest trials to convergence: until the '
                 'realized fraction of the GN step reaches this or stops improving (< 0.003 over 1000 steps); 0: --steps')
 ap.add_argument('--fit-max-steps', type=int, default=8000)
+ap.add_argument('--fit-stall', type=float, default=0.003, help='(2026-11-06) --fit-realize stops when the realized fraction gains less than this over 1000 steps (0: run to --fit-max-steps)')
 ap.add_argument('--fit-noise', type=float, default=0.0, help='(2026-10-30) > 0: each refit sample also at o + noise (this std, '
                 'normalized observation units), its target shifted by the pre-update network: y + mu(o + n) - mu(o), so the refit '
                 'keeps the network slope around the laps (one update changed the feedback gains by 2.4 x on the current channel, '
@@ -129,6 +131,12 @@ ap.add_argument('--backend', choices=('sim', 'manual'), default='sim', help='sim
                 '(real_car.run_many); manual: the REAL car -- each trial is a request in --session-dir that '
                 'ilc_f1tenth_hw/scripts/net_runner.py flies (the operator starts it); its recorded trial comes back in '
                 "real_car.run's format (use --cars real)")
+ap.add_argument('--replay', default='', help='(2026-11-07, user: restart from previous policies) --backend manual: comma-separated '
+                'request keys already flown in --session-dir, in trial order: the first trials re-use those results instead of being '
+                'flown again (each checked: same plan, and the policy this run would fly = the one flown), so a stage restarts at the '
+                'trial after them with every update recomputed. ~/car_runs/stage_resume.sh builds the list.')
+ap.add_argument('--replay-tol', type=float, default=1e-3, help='--replay: largest allowed |weight difference| between the policy '
+                'recomputed now and the one flown (relative to the largest weight); beyond it the run stops')
 ap.add_argument('--session-dir', default='', help='--backend manual: the directory the car\'s net_runner watches')
 ap.add_argument('--launch', type=float, nargs=2, default=[1.0, 8.0], metavar=('V_HAND', 'CURRENT'),
                 help='--backend manual: the slow-start launch (the car starts at rest): fixed current (A) until |V| >= '
@@ -151,6 +159,9 @@ ap.add_argument('--skip-launch', type=float, default=0.0, help='(2026-11-01; app
                 'for the GN step (and the trust region\'s J) only from the first sample whose speed error |V - V_plan| is below this '
                 '(m/s): on the car the network takes over at the launch\'s 1 m/s and its first part is the acceleration to the plan '
                 'speed, not the task (the ILC trial starts on the plan)')
+ap.add_argument('--skip-below', type=float, default=0.0, help='(2026-11-08, user: "make the mask be anything above 0.5 m/s") > 0: '
+                'instead of --skip-launch, each trial counts from the first sample whose MEASURED speed exceeds this (m/s). Rubber fig8 '
+                '_x120 runs ~0.9 m/s below the plan throughout, so the speed-error mask kept no sample and the stage never updated')
 ap.add_argument('--dump', type=int, default=0, help='(2026-11-01, diagnostic only; the update is unchanged) 1: save each '
                 'refit\'s newest trial states, plan index, requested change (GN step) and realized change per car to '
                 'DIR/its/fit_it<k>_<car>.npz')
@@ -178,8 +189,15 @@ PER_STEP = ('x', 'x_true', 'obs', 'obs_true', 'mu', 'a', 'err', 'err_true', 'idx
 
 
 
-def launch_cut(err, valid):
-    """--skip-launch: valid[k, :t0] = False before the first sample t0 whose speed error |err V| < a.skip_launch."""
+def launch_cut(err, valid, xs=None):
+    """--skip-launch: valid[k, :t0] = False before the first sample t0 whose speed error |err V| < a.skip_launch.
+    --skip-below (2026-11-08, takes precedence): before the first sample whose measured speed xs[..., 3] > a.skip_below."""
+    if a.skip_below > 0 and xs is not None:
+        valid = valid.copy()
+        for k in range(len(valid)):
+            ok = np.nonzero((xs[k, :valid.shape[1], 3] > a.skip_below) & valid[k])[0]
+            valid[k, :ok[0] if len(ok) else valid.shape[1]] = False
+        return valid
     if a.skip_launch <= 0:
         return valid
     valid = valid.copy()
@@ -206,6 +224,37 @@ def slip_cut(xs, valid):
     return valid
 
 
+_MANUAL_N = [0]                                   # (2026-11-07) stage trials queued so far, for the request tag
+_REPLAY = [k.strip() for k in a.replay.split(',') if k.strip()]   # (2026-11-07) --replay keys not used yet
+assert not _REPLAY or a.backend == 'manual', '--replay needs --backend manual'
+
+
+def _actor_layers(pol):
+    """[(W, b)] of the network that flies: the MLP itself, or RMA's actor"""
+    return pol['actor'] if isinstance(pol, dict) else pol
+
+
+def _replay_check(k, j):
+    """the flown request k must be this job: same plan, same policy (to --replay-tol), and flown (a result, not cancelled)"""
+    sd = a.session_dir
+    q = json.load(open(os.path.join(sd, f'req_{k}.json')))
+    if q['plan'] != j['plan']['name']:
+        raise SystemExit(f'!!! --replay {k}: plan {q["plan"]} != this trial\'s {j["plan"]["name"]}')
+    rj = os.path.join(sd, f'res_{k}.json')
+    if not os.path.exists(rj) or not os.path.exists(os.path.join(sd, f'res_{k}.npz')) or json.load(open(rj)).get('cancelled'):
+        raise SystemExit(f'!!! --replay {k}: not flown (no result, or cancelled)')
+    d = np.load(q['policy'])
+    L = _actor_layers(j['policy']); scale = max(float(np.abs(np.asarray(W)).max()) for W, b in L)
+    dw = max(max(float(np.abs(np.asarray(W) - d[f'W{n}']).max()), float(np.abs(np.asarray(b) - d[f'b{n}']).max()))
+             for n, (W, b) in enumerate(L))
+    if dw > a.replay_tol * scale:
+        raise SystemExit(f'!!! --replay {k}: the policy recomputed now differs from the one flown (max |dW| {dw:.2e}, '
+                         f'allowed {a.replay_tol * scale:.2e}): the replay diverged; stopping')
+    return dw / scale
+
+
+
+
 def run_manual(jobs):
     """--backend manual: each job a request for the real car's net_runner (req_<k>.json + the policy as an npz), waited
     for (res_<k>.npz: real_car.run's dict); the launch phase (the fixed launch controller, not the network) is cut."""
@@ -213,8 +262,23 @@ def run_manual(jobs):
     os.makedirs(sd, exist_ok=True)
     k0 = len([f for f in os.listdir(sd) if f.startswith('req_') and f.endswith('.json')])
     keys = []
-    for i, j in enumerate(jobs):
+    _MANUAL_N[0] += 1                              # (2026-11-07, user: name the mocap takes) <out>_t<n>: which run this is
+    out_name = os.path.basename(os.path.normpath(a.out))
+    net = 'rma' if isinstance(jobs[0]['policy'], dict) else 'ppodr'      # RMA flies actor + frozen adaptation module (a dict)
+    tire = next((t for t in ('plastic', 'rubber') if t in out_name), '')
+    trk = re.sub(r'_b\d+_free.*$', '', jobs[0]['plan']['name']).replace('mocap_', '')   # (11-08) the practised track, e.g. fig8R100
+    base = '_'.join(x for x in (net, tire, trk, 'stage') if x)         # e.g. ppodr_rubber_fig8R100_stage
+    replayed = False
+    if _REPLAY:                                    # (2026-11-07) re-use flown trials instead of flying them again
+        if len(_REPLAY) < len(jobs):
+            raise SystemExit(f'!!! --replay: {len(jobs)} trial(s) needed here, only {len(_REPLAY)} key(s) left')
+        keys = [_REPLAY.pop(0) for _ in jobs]; replayed = True
+        rel = [_replay_check(k, j) for k, j in zip(keys, jobs)]
+        print(f">>> REPLAY: {'RMA' if net == 'rma' else 'PPO+DR'} stage, trial {_MANUAL_N[0]}: request(s) {','.join(keys)} "
+              f"already flown, result re-used (policy matches to {max(rel):.1e})" + ('' if _REPLAY else ' -- the next trial is flown live'), flush=True)
+    for i, j in enumerate([] if keys else jobs):
         k = f'{k0 + i:05d}'
+        tag = f'{base}_t{_MANUAL_N[0]}' + (f'_{i + 1}' if len(jobs) > 1 else '')
         pol = j['policy']
         pf = os.path.join(sd, f'policy_{k}.npz')
         if isinstance(pol, dict):                  # (2026-10-31) RMA: the trained actor (mode rma) + the frozen adaptation
@@ -228,11 +292,16 @@ def run_manual(jobs):
             np.savez(pf, **{f'W{n}': np.asarray(W) for n, (W, b) in enumerate(pol)}, **{f'b{n}': np.asarray(b) for n, (W, b) in enumerate(pol)})
         tmp = os.path.join(sd, f'.req_{k}.json')
         json.dump(dict(plan=j['plan']['name'], policy=os.path.abspath(pf), laps=float(j['laps']),
-                       launch=dict(v_hand=float(a.launch[0]), current=float(a.launch[1])), car=j['car_name']),
+                       launch=dict(v_hand=float(a.launch[0]), current=float(a.launch[1])), car=j['car_name'], tag=tag),
                   open(tmp, 'w'), indent=1)
         os.replace(tmp, os.path.join(sd, f'req_{k}.json'))
         keys.append(k)
     print(json.dumps(dict(manual=len(jobs), requests=[keys[0], keys[-1]], session=sd)), flush=True)
+    n = _MANUAL_N[0]
+    if not replayed:
+      print(f">>> QUEUED: {'RMA' if net == 'rma' else 'PPO+DR'} stage ({tire or 'tire ?'}), trial {n} of {a.iters} "
+          f"(flies the network after {n - 1} update{'s' if n != 2 else ''}), request {keys[0]}" + (f'..{keys[-1]}' if len(keys) > 1 else ''), flush=True)
+      print(f'>>> MOCAP TAKE: {os.path.basename(os.path.normpath(sd))}_{keys[0]}_{base}_t{n}', flush=True)
     out = []
     for k in keys:
         rf = os.path.join(sd, f'res_{k}.json')
@@ -567,7 +636,7 @@ def main():
                 continue
             if a.tr:                                   # rho from the J of this trial vs the kept step's prediction
                 xs_, idx_, acts_, err_, valid_ = ilc_core.pad_runs(rr, T)
-                valid_ = launch_cut(err_, valid_)
+                valid_ = launch_cut(err_, valid_, xs_)
                 if a.slip_max > 0:                     # the prediction's own window: spin inside it counts against the step
                     for k in range(len(rr)):
                         w_ = tr_win[c].get(gn_names[pid_c[k]])
@@ -603,7 +672,7 @@ def main():
             last_crashed[c] = crashed
             prev_params[c] = params[c]
             xs, idx, acts, err, valid = ilc_core.pad_runs(rr, T)
-            valid = launch_cut(err, slip_cut(xs, valid))
+            valid = launch_cut(err, slip_cut(xs, valid), xs)
             if a.pace_target != 1.0 or a.pace_local > 0:   # the pace row against the target fraction of the plan's speed
                 for k in range(len(rr)):
                     pl_k = by_name[gn_names[pid_c[k]]]
@@ -685,7 +754,7 @@ def main():
                 realized = float(np.sum((np.asarray(policy_fn(ps, On)) - m0) * tgt) / max(np.sum(tgt ** 2), 1e-12))
                 hist_r.append(realized)
                 if a.fit_realize <= 0 or realized >= a.fit_realize or n_steps >= a.fit_max_steps or \
-                        (len(hist_r) > 5 and realized - hist_r[-6] < 0.003):
+                        (len(hist_r) > 5 and realized - hist_r[-6] < a.fit_stall):
                     break
             realize[c].append(dict(it=it, realized=realized, steps=n_steps))
             if a.dump:                                 # diagnostic: requested vs realized change on the newest trials

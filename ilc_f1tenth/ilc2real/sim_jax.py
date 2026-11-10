@@ -91,6 +91,21 @@ def dr_params(key, n, scale=1.0):
     p['d_off'] = u(k[5], -0.03 * scale, 0.03 * scale)
     p['d_delay'] = (jax.random.uniform(k[6], (n,)) < 0.3 * scale).astype(jnp.int32)
     p['i_delay'] = (jax.random.uniform(k[7], (n,)) < 0.3 * scale).astype(jnp.int32)
+    if os.environ.get('F1T_DR_BOX'):             # (2026-11-07, user: an RMA whose DR directly covers the deployment dynamics) the
+        import json                              # deployment-covering box: JSON {m: [lo, hi] (x nominal, Iz alike), mu: [lo, hi]
+        bx = json.loads(os.environ['F1T_DR_BOX'])  # (x nominal, log-uniform), ks / kt: [lo, hi] (x nominal), tau_s / d_off: [lo, hi]
+        q = nominal_params(n)                    # (absolute)}; the delays as above. Unset: the family above, unchanged.
+        m = u(k[0], *bx['m'])
+        q['m'], q['Iz'] = q['m'] * m, q['Iz'] * m
+        mu = jnp.exp(u(k[1], np.log(bx['mu'][0]), np.log(bx['mu'][1])))
+        q['muf'], q['mur'] = q['muf'] * mu, q['mur'] * mu
+        ks = u(k[2], *bx['ks'])
+        q['Cf'], q['Cr'] = q['Cf'] * ks, q['Cr'] * ks
+        q['kt'] = q['kt'] * u(k[3], *bx['kt'])
+        q['tau_s'] = u(k[4], *bx['tau_s'])
+        q['d_off'] = u(k[5], *bx['d_off'])
+        q['d_delay'], q['i_delay'] = p['d_delay'], p['i_delay']
+        return q
     return p
 
 

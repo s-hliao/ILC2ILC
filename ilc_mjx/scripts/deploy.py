@@ -275,6 +275,28 @@ import numpy as np  # noqa: E402
 
 from ilc_mjx import host_path  # noqa: E402
 from ilc_mjx.jump import Config, JumpEnv, rec_index  # noqa: E402
+from ilc_mjx.jump import OBS_MEM  # noqa: E402
+
+
+class _MaskedTrial(dict):
+    """A saved trial (npz) as a dict with .files, for a trial whose observation is replaced (mask_obs)."""
+    @property
+    def files(self):
+        return list(self.keys())
+
+
+def mask_obs(o):
+    """(2026-11-06) ILC_OBS_MEM=m: the robot's recorded observation [error 6, time, goal 2, H past errors x 6, previous action 4]
+    masked exactly as jump.JumpEnv.obs masks the GPU sim's -- the past errors beyond the m most recent zeroed, and with m = 0 the
+    previous action too. Without it the refit trained on the robot's unmasked history and the memoryless network re-acquired
+    memory weights (max |W0| on those inputs 0.30-0.41 after the stage, mem0_RS / hwsm9), while the GPU sim's chain saw none."""
+    o = np.array(o, float, copy=True)
+    H, PA, s0 = env.H, env.PA, o.shape[-1] - 6 * env.H - (4 if env.PA else 0)
+    for j in range(OBS_MEM + 1, H + 1):
+        o[..., s0 + 6 * (j - 1): s0 + 6 * j] = 0.0
+    if PA and OBS_MEM == 0:
+        o[..., s0 + 6 * H: s0 + 6 * H + 4] = 0.0
+    return o
 from ilc_mjx.robot import PLANAR_TO_CANONICAL  # noqa: E402
 
 WS, CWS = "/home/henry/ilc_ws", "/ilc_ws"
@@ -1028,6 +1050,9 @@ def run_robot(robot):
             if not f.endswith(".npz") or f.startswith("ref_"):
                 continue
             z = np.load(os.path.join(rdir, f))
+            if OBS_MEM is not None and "obs" in z.files:   # (2026-11-06) the robot's observation masked as the GPU sim's (jump.OBS_MEM)
+                z = _MaskedTrial({k_: z[k_] for k_ in z.files})
+                z["obs"] = mask_obs(z["obs"])
             eps.setdefault(gkey(z["goal"]), []).append(z)
         line = []
         if a.sens_adapt == "vres" and vdata and An is not None:

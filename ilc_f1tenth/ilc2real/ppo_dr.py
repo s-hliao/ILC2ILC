@@ -26,6 +26,7 @@ ap.add_argument('--resume', default=None, help='(2026-10-31, user: "maybe you ju
 ap.add_argument('--mode', default='ppo', choices=('ppo', 'rma'))
 ap.add_argument('--dr', type=float, default=1.0)
 ap.add_argument('--iters', type=int, default=300)
+ap.add_argument('--save-at', type=int, nargs='*', default=None, help='(2026-11-06) also save these iterations (the figure-1 training curves); every 100 as before')
 ap.add_argument('--lanes', type=int, default=1024)
 ap.add_argument('--T', type=int, default=160)
 ap.add_argument('--epochs', type=int, default=4)
@@ -218,7 +219,9 @@ for it in range(0 if a.adapt_only else a.iters):
         log(event='ppo', it=it, reward=float(jnp.sum(r) / a.lanes), fail=float(np.asarray(out['failed'][:, -1]).mean()),
             ey=float(jnp.sqrt(jnp.sum(alive * out['err'][..., 0] ** 2) / jnp.sum(alive))), loss=float(l),
             std=np.asarray(jnp.exp(params['log_std'])).tolist())
-    if (it + 1) % 100 == 0:
+    if (it + 1) % 100 == 0 or (a.save_at and it + 1 in a.save_at):
+        if a.save_at and it % 10 != 0:
+            log(event='ckpt', it=it + 1)
         save(f'it{it + 1:03d}')
 save('final')
 

@@ -37,11 +37,20 @@ def load_policy(path):
     d = np.load(path)
     n = len([k for k in d.files if k.startswith('W')])
     pol = [(np.asarray(d[f'W{i}']), np.asarray(d[f'b{i}'])) for i in range(n)]
+    if 'mode' in d.files and str(d['mode']) == 'fada_tf':        # (2026-11-07) FADA full fidelity: the pickled planner + (merged) IDM
+        import fada_tf
+        w = fada_tf.load(str(d['pkl']))
+        return dict(fada_tf=True, P=w['P'], I=w['I'])
+    if 'mode' in d.files and str(d['mode']) == 'mlp_prev':       # (2026-11-07) dagger_car.py --prev-a 1: an MLP reading [obs, a_{t-1}]
+        return dict(mlp_prev=True, actor=pol)
+    if 'mode' in d.files and str(d['mode']) == 'rma_oracle':     # (2026-11-07) the RMA teacher's actor + the true latent z
+        return dict(rma_oracle=True, actor=pol, z=np.asarray(d['z'], float))
     if 'mode' in d.files and str(d['mode']) == 'fada' or 'lam' in d.files:
         orc = {k[len('oracle__'):]: np.asarray(d[k]) for k in d.files if k.startswith('oracle__')}
         return dict(fada=pol, lam=float(d['lam']), oracle=orc or None,
                     dims=np.asarray(d['dims']) if 'dims' in d.files else None,
-                    horizon=int(d['horizon']) if 'horizon' in d.files else 1)
+                    horizon=int(d['horizon']) if 'horizon' in d.files else 1,
+                    planner=[(np.asarray(d[f'P_W{i}']), np.asarray(d[f'P_b{i}'])) for i in range(len([k for k in d.files if k.startswith('P_W')]))] or None)
     ad = os.path.join(os.path.dirname(path), 'rma_adapt.npz')
     if 'mode' in d.files and str(d['mode']) == 'rma' and os.path.exists(ad):
         e = np.load(ad)
@@ -86,8 +95,12 @@ class Controller:
             orc = policy.get('oracle') or {}
             dims = policy.get('dims')
             ahead = max(1, int(round(int(policy.get('horizon', 1)) * math.hypot(xmeas[3], xmeas[4]) * DT / pl.ds)))
-            d_next = orc[self.pname][(idx + ahead) % len(orc[self.pname])] if self.pname in orc else \
-                policy['lam'] * (obs[:8] if dims is None else obs[np.asarray(dims)])
+            if self.pname in orc:
+                d_next = orc[self.pname][(idx + ahead) % len(orc[self.pname])]
+            elif policy.get('planner') is not None:      # (2026-11-07, FADA audit) FADA's learned planner
+                d_next = mlp_np(policy['planner'], obs)
+            else:
+                d_next = policy['lam'] * (obs[:8] if dims is None else obs[np.asarray(dims)])
             mu = mlp_np(policy['fada'], np.r_[obs, d_next])
         elif isinstance(policy, dict):
             self.hist.append(np.r_[obs[:8], self.last_a])

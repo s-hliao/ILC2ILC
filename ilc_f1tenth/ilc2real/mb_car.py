@@ -131,7 +131,7 @@ def car_config(name):
     fiala = np.array([N['Cf'] / 2 * mb.get('ky', 1.0), N['Cr'] / 2 * mb.get('ky', 1.0) * mb.get('kyr', 1.0),
                       N['muf'] * mb.get('mu', 1.0), c.get('lsd', LSD)])
     return dict(name=name, p=p, P=P, fiala=fiala, kt=c['kt'] * N['kt'], d_off=c['d_off'], tau=c['tau'],
-                d_delay=c['d_delay'], i_delay=c['i_delay'], sense=SENSE[sense] if sense else None,
+                d_delay=c['d_delay'], i_delay=c['i_delay'], sense=SENSE[sense] if sense else (c.get('sense_d') or None),
                 degrade=c.get('degrade'))
 
 
@@ -147,6 +147,12 @@ def raw_car(name):
                 c['mb'] = dict(c['mb'], **{k: float(v)})
             elif k in ('d_delay', 'i_delay'):
                 c[k] = int(float(v))
+            elif k in ('noise', 'sdelay', 'hold', 'vtau'):    # (2026-11-07, rmaD) a continuous sensing setting (as SENSE presets)
+                sd = dict(c.get('sense_d') or {})
+                sd[dict(noise='noise', sdelay='delay', hold='hold', vtau='vel_tau')[k]] = int(float(v)) if k in ('sdelay', 'hold') else float(v)
+                c['sense_d'] = sd
+            elif k == 'wear':                                # (2026-11-07, rmaD) tire wear x1 -> x`wear` over 5 laps (as tierc_wear_*)
+                c['degrade'] = dict(to=float(v), laps=5.0)
             else:
                 c[k] = float(v)
     else:
