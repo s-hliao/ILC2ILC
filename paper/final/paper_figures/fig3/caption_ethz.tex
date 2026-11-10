@@ -1,0 +1,13 @@
+% car_flow_ethz_orbit_1s_w.pdf caption (2026-11-06; track edges +-0.99 m); numbers printed by flow_car.py ethz_orbit_1s
+% (car_flow_ethz_orbit_1s_w_data.npz) and the evaluation (eval_score.py ethz_eval.json): all 9 runs per cell (3 network seeds x 3 stage
+% seeds; ETHZ_RULES.md). "More than 0.5 m off the plan" = the evaluation's deviation time (F1T_DEV_TIME, threshold 0.5 m).
+\caption{\textbf{The stage pulls the car's lateral flow back toward the plan on a practised, harder track.} Lateral flow of the rubber-tire
+car on the ETHZMobil track (scaled $\times$4.3 to the F1TENTH; 55\,m per lap, track edges $\pm$0.99\,m from the plan; simulation only)
+under the PPO+DR network's zero-shot policy $\pi_0$ and after each one-lap stage iteration $\pi_1$--$\pi_3$ (the median of three stage
+runs). At each arc length the zero-shot car's own state there (speed, heading error, sideslip, yaw rate) is shifted across the track; the
+arrows show where the car is 1.0\,s later, the shading the sideways push, and the black line where the push is zero -- the line the flow
+pulls the car onto. Orange points: four laterally perturbed laps every 0.2\,s. The flow converges in every iteration and no perturbed lap
+leaves the track; the stage moves the flow's line toward the plan (mean offset 10.8, 10.1, 9.7, 9.1\,cm) and the perturbed laps from 21.5
+to 15.7\,cm rms (largest offset 0.63 to 0.58\,m; laps more than 0.5\,m off the plan: four of four to one). Over all nine runs per network on
+this track the stage lowers the rubber car's error by 24.0\,\% (PPO+DR; time more than 0.5\,m off the plan 0.65 to 0.03\,s per lap) and
+29.0\,\% (RMA, 0.87 to 0.07\,s).}

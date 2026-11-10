@@ -1,0 +1,13 @@
+% car_flow_ethz_resid.pdf caption (2026-11-06; track edges +-0.99 m); numbers printed by policy_resid.py ethz_orbit_1s
+% (car_flow_ethz_orbit_1s_w_resid.npz) and flow_car.py ethz_resid
+\caption{\textbf{What the stage changes in the policy.} Rubber-tire car on the practised ETHZMobil track (scaled $\times$4.3 to the
+F1TENTH, track edges $\pm$0.99\,m from the plan; simulation only), median PPO+DR stage run. At each arc length the zero-shot car's own
+state there is shifted across the track; the shading is the stage's change of the steering command at that state, $\pi_k - \pi_0$ (red:
+more to the left; the zero-shot row is zero by definition), the arrows where the car is 1.0\,s later, the black line where the sideways
+push is zero (the line the flow pulls the car onto). The change grows with each one-lap iteration (mean 0.7, 1.4, 2.4\,deg; at most
+16\,deg) and depends mostly on where the car is along the lap, not on its offset: the stage learns a position-specific steering
+correction. The line moves toward the plan (10.8, 10.1, 9.7, 9.1\,cm mean offset) and the four perturbed laps from 21.5 to 15.7\,cm rms;
+none leaves the track. Three of them pass more than 0.5\,m from the plan at zero-shot (in the corners near 8\,m and 28\,m) and none after
+two and three laps; the fourth (starting at 22\,m, 0.30\,m right of the plan) is already moving outward with the zero-shot car's own
+lateral velocity there and reaches 0.58--0.63\,m along the same path in every row, before any policy can act. Over nine stage runs the
+rubber car's error falls 24.0\,\% (PPO+DR) and 29.0\,\% (RMA).}
