@@ -79,11 +79,12 @@ def main():
             zs_s.append(summary(cs) if cs is not None and len(cs) else None)
             zs_n.append(summary(cn) if cn is not None and len(cn) else None)
         rows.append((name, key, zs_s, zs_n))
-    fig, axs = plt.subplots(1, 2, figsize=(7.16, 3.3), gridspec_kw=dict(wspace=0.08))
+    fig, ax0 = plt.subplots(1, 1, figsize=(4.6, 3.3))   # 2026-11-10 (user): the nominal-stance block is removed
+    axs = [ax0]
     nr = 2 * len(rows)
     vmax = 7.0
     cmap = plt.get_cmap("Blues_r")
-    for ax, which, title in ((axs[0], 2, "score from the practised stance"), (axs[1], 3, "nominal-stance score after adapting from it")):
+    for ax, which, title in ((axs[0], 2, "score from the practised stance"),):
         M = np.full((nr, len(CONDS)), np.nan)
         T = [["" for _ in CONDS] for _ in range(nr)]
         for i, (name, key, s_s, s_n) in enumerate(rows):
@@ -120,8 +121,8 @@ def main():
         else:
             ax.set_yticks([])
     fig.text(0.5, 0.01, "normalized landing error on held-out goals (lower is better; a fall = 5); adapted rows: change vs zero-shot, "
-             "* = 95 % CI excludes 0; 4 robots, 36 practice jumps", ha="center", fontsize=6, color="#555555")
-    fig.subplots_adjust(left=0.2, right=0.99, top=0.84, bottom=0.07)
+             "* = 95 % CI excludes 0;\n4 robots, 36 practice jumps", ha="center", fontsize=6, color="#555555")
+    fig.subplots_adjust(left=0.31, right=0.99, top=0.84, bottom=0.07)
     for ext in ("pdf", "png"):
         fig.savefig(os.path.join(OUT, f"fig6_retarget.{ext}"), dpi=300)
     print("->", OUT)

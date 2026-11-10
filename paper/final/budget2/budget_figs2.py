@@ -66,7 +66,7 @@ def draw(ax, arm, pts, xf, label, ycap=None):
 def panel_fig(D, key, xf, ticks, xlabel, name):
     P = D["panels"]
     share = D.get("sharey", True)
-    fig, axs = plt.subplots(1, len(P), figsize=(7.16, 2.15), sharey=share)
+    fig, axs = plt.subplots(1, len(P), figsize=(D.get("figw", 7.16), 2.15), sharey=share)
     axs = np.atleast_1d(axs)
     ymax = max(p[3] for per in D[key].values() for pts in per.values() for p in pts)
     caps = D.get("ycap", {})                                # (2026-11-07) per-panel y cap: {panel: y}
@@ -96,9 +96,13 @@ def panel_fig(D, key, xf, ticks, xlabel, name):
         for hh, ll in zip(*ax.get_legend_handles_labels()):
             if ll not in l:
                 h.append(hh); l.append(ll)
-    fig.legend(h, l, loc="lower center", ncol=4, frameon=False, labelcolor=INK, handlelength=1.8, columnspacing=1.1,
-               bbox_to_anchor=(0.5, 0.0))
-    fig.tight_layout(rect=(0, 0.17, 1, 1), w_pad=0.8)
+    if D.get("legend_right"):                               # (2026-11-10) one-panel figures: the legend beside the panel
+        fig.legend(h, l, loc="center right", ncol=1, frameon=False, labelcolor=INK, handlelength=1.8, bbox_to_anchor=(1.0, 0.5))
+        fig.tight_layout(rect=(0, 0, D["legend_right"], 1))
+    else:
+        fig.legend(h, l, loc="lower center", ncol=4, frameon=False, labelcolor=INK, handlelength=1.8, columnspacing=1.1,
+                   bbox_to_anchor=(0.5, 0.0))
+        fig.tight_layout(rect=(0, 0.17, 1, 1), w_pad=0.8)
     for ext in ("pdf", "png"):
         fig.savefig(os.path.join(OUT, f"{name}.{ext}"), dpi=300)
     plt.close(fig)
