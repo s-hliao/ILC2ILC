@@ -5,6 +5,7 @@ load_any(path): 'expert' -> the Raibert controller; an npz -> by its 'kind' entr
   'mlp' (default; ours, PPO+DR)  -> MLPPolicy
   'rma'                          -> rma_np.RMAPolicy  (actor + adaptation module, policy_*.npz + rma_adapt.npz)
   'fada'                         -> fada_np.FADAPolicy
+  'fada_tf'                      -> fada_tf_np.FadaTFPolicy (2026-11-10: the car / quad transformer FADA, fada_pogo_tf.py)
 """
 import os
 
@@ -43,6 +44,9 @@ def load_any(path):
     if kind == 'fada':
         import fada_np
         return fada_np.load(path)
+    if kind == 'fada_tf':
+        import fada_tf_np
+        return fada_tf_np.load(path)
     return MLPPolicy(load_policy(path))
 
 

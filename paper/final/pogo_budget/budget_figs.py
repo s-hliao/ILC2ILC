@@ -41,13 +41,17 @@ STY = {"DistILC": ("#2a78d6", "o", "-"),
        "FADA (DR)": ("#6250d6", "h", "-"),          # (2026-10-30, user: "connect the fada line")
        "FADA (DR) + adaptation": ("#6250d6", "h", "-"),   # (2026-10-30, user: FADA's bullets less weird: P -> h)
        "RMA (DR)": (INK, "*", "-"),                 # (2026-10-30: a curve over sim hours, simdata_ext.py)
-       "RMA (DR), zero-shot": (INK, "*", "none")}
+       "RMA (DR), zero-shot": (INK, "*", "none"),
+       "FADA (RMA) + adaptation": ("#6250d6", "H", "--"),   # (2026-11-10) aligned FADA, as the car / quad figures
+       "RMA + DistILC": ("#7a7a7a", "P", "-"), "PPO + DR + GPS": ("#b0417a", "X", "-")}
 SIM_END = {"DistILC": 33.0, "DistILC + DR": 33.0}     # (2026-10-30, user: "end ours at around 30 sim hours")
 # legend names: subscript sim = the simulation stage, hw = the hardware (real-robot) stage (the paper's \oursS / \oursH)
 SIM_N, HW_N = r"DistIL-C$_\mathrm{sim}$", r"DistIL-C$_\mathrm{hw}$"
 LAB = {"sim": {"DistILC": SIM_N, "DistILC + DR": SIM_N + " + DR"},
        "real": {"DistILC": SIM_N + " + " + HW_N, "DistILC + DR": SIM_N + " + DR + " + HW_N,
-                "PPO + DR + DistILC": "PPO + DR + " + HW_N, "PPO + DR + PPO on robot": r"PPO + DR + PPO$_\mathrm{hw}$"}}
+                "PPO + DR + DistILC": "PPO + DR + " + HW_N, "PPO + DR + PPO on robot": r"PPO + DR + PPO$_\mathrm{hw}$",
+                "RMA + DistILC": "RMA + " + HW_N, "FADA (DR) + adaptation": "FADA (from PPO + DR) + adaptation",
+                "FADA (RMA) + adaptation": "FADA (from RMA) + adaptation"}}
 
 
 def style(ax):
@@ -75,7 +79,7 @@ def draw(ax, arm, pts, xf, label):
 
 
 def panel_fig(D, key, xf, xticks, xlabel, name, ytop=None):
-    fig, axs = plt.subplots(1, 3, figsize=(7.16, 2.15), sharey=True)
+    fig, axs = plt.subplots(1, 3, figsize=(7.16, 2.15 if key == "sim" else 2.45), sharey=True)   # (2026-11-10) real: 9 arms, 3 legend rows
     ymax = max(p[3] for arm in D[key].values() for pts in arm.values() for p in pts)
     for ax, (t, title) in zip(axs, TIERS):
         style(ax)
@@ -100,7 +104,7 @@ def panel_fig(D, key, xf, xticks, xlabel, name, ytop=None):
     h, l = axs[0].get_legend_handles_labels()
     fig.legend(h, l, loc="lower center", ncol=4 if key == "sim" else 3, frameon=False, labelcolor=INK, handlelength=1.8,
                columnspacing=1.1, bbox_to_anchor=(0.5, 0.0))
-    fig.tight_layout(rect=(0, 0.15, 1, 1), w_pad=1.0)
+    fig.tight_layout(rect=(0, 0.15 if key == "sim" else 0.215, 1, 1), w_pad=1.0)
     for ext in ("pdf", "png"):
         fig.savefig(os.path.join(OUT, f"{name}.{ext}"), dpi=300)
     plt.close(fig)
