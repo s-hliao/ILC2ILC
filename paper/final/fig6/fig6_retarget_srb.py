@@ -73,59 +73,58 @@ def summary(c):
     return c[:, 0].mean(), c[:, 1].mean(), d.mean(), (hi < 0 or lo > 0)
 
 
+ZS_ONLY = {"srb_rma"}   # (2026-11-11, user: "remove our stage+rma on the quadruped from the graphs"): RMA shown zero-shot only
+
+
 def main():
-    rows, labels = [], []
+    rows = []
     for name, key in NETS:
-        zs_s, ad_s, zs_n, ad_n = [], [], [], []
+        zs_s = []
         for P in CONDS:
-            cs, cn = cells(key, P, True), cells(key, P, False)
+            cs = cells(key, P, True)
             zs_s.append(summary(cs) if cs is not None and len(cs) else None)
-            zs_n.append(summary(cn) if cn is not None and len(cn) else None)
-        rows.append((name, key, zs_s, zs_n))
-    fig, ax0 = plt.subplots(1, 1, figsize=(4.6, 3.3))   # 2026-11-10 (user): the nominal-stance block is removed
-    axs = [ax0]
-    nr = 2 * len(rows)
+        rows.append((name, key, zs_s))
+    lines, seps = [], []                      # (label, net index, 0 = zero-shot / 1 = adapted)
+    for i, (name, key, _) in enumerate(rows):
+        if i:
+            seps.append(len(lines) - 0.5)
+        lines.append((f"{name}, zero-shot", i, 0))
+        if key not in ZS_ONLY:
+            lines.append((f"{name} + {'adaptation' if key == 'fadaNPq' else HW}", i, 1))
+    nr = len(lines)
+    fig, ax = plt.subplots(1, 1, figsize=(4.6, 0.33 * nr + 0.6))
     vmax = 7.0
     cmap = plt.get_cmap("Blues_r")
-    for ax, which, title in ((axs[0], 2, "score from the practised stance"),):
-        M = np.full((nr, len(CONDS)), np.nan)
-        T = [["" for _ in CONDS] for _ in range(nr)]
-        for i, (name, key, s_s, s_n) in enumerate(rows):
-            S = s_s if which == 2 else s_n
-            for j, v in enumerate(S):
-                if v is None:
-                    T[2 * i][j] = T[2 * i + 1][j] = "pending"
-                    continue
-                zs, ad, dd, sig = v
-                M[2 * i, j], M[2 * i + 1, j] = zs, ad
-                T[2 * i][j] = f"{zs:.2f}"
-                T[2 * i + 1][j] = f"{ad:.2f}\n{dd:+.2f}{'*' if sig else ''}"
-        ax.imshow(np.clip(M, 0, vmax), cmap=cmap.reversed(), vmin=0, vmax=vmax, aspect="auto")
-        for i in range(nr):
-            for j in range(len(CONDS)):
-                v = M[i, j]
-                ax.text(j, i, T[i][j], ha="center", va="center", fontsize=5.6,
-                        color="white" if (not np.isnan(v) and v > 0.55 * vmax) else "#222222")
-        for i in range(1, len(rows)):
-            ax.axhline(2 * i - 0.5, color="white", lw=2.0)
-        ax.set_xticks(range(len(CONDS)))
-        ax.set_xticklabels([CN[c] for c in CONDS], fontsize=6.3)
-        ax.xaxis.tick_top()
-        ax.set_title(title, fontsize=7.5, pad=18)
-        ax.tick_params(length=0)
-        for s in ax.spines.values():
-            s.set_visible(False)
-        if ax is axs[0]:
-            lab = []
-            for name, key, _, _ in rows:
-                lab += [f"{name}, zero-shot", f"{name} + {'adaptation' if key == 'fadaNPq' else HW}"]
-            ax.set_yticks(range(nr))
-            ax.set_yticklabels(lab, fontsize=6.3)
-        else:
-            ax.set_yticks([])
+    M = np.full((nr, len(CONDS)), np.nan)
+    T = [["" for _ in CONDS] for _ in range(nr)]
+    for r, (lab, i, kind) in enumerate(lines):
+        for j, v in enumerate(rows[i][2]):
+            if v is None:
+                T[r][j] = "pending"
+                continue
+            zs, ad, dd, sig = v
+            M[r, j] = ad if kind else zs
+            T[r][j] = f"{ad:.2f}\n{dd:+.2f}{'*' if sig else ''}" if kind else f"{zs:.2f}"
+    ax.imshow(np.clip(M, 0, vmax), cmap=cmap.reversed(), vmin=0, vmax=vmax, aspect="auto")
+    for i in range(nr):
+        for j in range(len(CONDS)):
+            v = M[i, j]
+            ax.text(j, i, T[i][j], ha="center", va="center", fontsize=5.6,
+                    color="white" if (not np.isnan(v) and v > 0.55 * vmax) else "#222222")
+    for y in seps:
+        ax.axhline(y, color="white", lw=2.0)
+    ax.set_xticks(range(len(CONDS)))
+    ax.set_xticklabels([CN[c] for c in CONDS], fontsize=6.3)
+    ax.xaxis.tick_top()
+    ax.set_title("score from the practised stance", fontsize=7.5, pad=18)
+    ax.tick_params(length=0)
+    for sp in ax.spines.values():
+        sp.set_visible(False)
+    ax.set_yticks(range(nr))
+    ax.set_yticklabels([l[0] for l in lines], fontsize=6.3)
     fig.text(0.5, 0.01, "normalized landing error on held-out goals (lower is better; a fall = 5); adapted rows: change vs zero-shot, "
              "* = 95 % CI excludes 0;\n4 robots, 36 practice jumps", ha="center", fontsize=6, color="#555555")
-    fig.subplots_adjust(left=0.31, right=0.99, top=0.84, bottom=0.07)
+    fig.subplots_adjust(left=0.31, right=0.99, top=1 - 0.55 / (0.33 * nr + 0.6), bottom=0.3 / (0.33 * nr + 0.6))
     for ext in ("pdf", "png"):
         fig.savefig(os.path.join(OUT, f"fig6_retarget.{ext}"), dpi=300)
     print("->", OUT)

@@ -1,0 +1,8 @@
+% car_flow_ethzx110_resid.pdf caption (2026-11-11 rebuild; policy_resid.py ethzx110_orbit_1s -> car_flow_ethzx110_orbit_1s_w_resid.npz;
+% same run, grid and flow as caption_ethzx110.tex).
+\caption{\textbf{What the stage changes in the policy.} The same flow as Fig.~X, shaded by the change of the network's steering command
+from the zero-shot policy, $\pi_k(o) - \pi_0(o)$, at each starting state (positive: more to the left). The change grows with each lap
+(mean 0.8, 1.0, 1.3\,deg; largest 4.3, 5.5, 6.9\,deg; motor current 1.7, 2.1, 2.4\,A mean) and depends mostly on where the car is along
+the lap, not on its offset: the stage learns a position-specific steering correction. The line moves toward the plan (9.4, 8.8, 8.7,
+8.6\,cm mean offset) and the four perturbed laps from 23.3 to 20.5\,cm rms; none leaves the track. Over nine stage runs this car's error
+falls 11.8\,\% (PPO+DR) and 19.9\,\% (RMA).}

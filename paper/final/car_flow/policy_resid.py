@@ -7,7 +7,7 @@ import math
 import os
 import sys
 
-D = "/home/henry/ilc_ws/src/ilc_f1tenth/ilc2real"
+D = os.environ.get("FLOW_D", "/home/henry/ilc_ws/src/ilc_f1tenth/ilc2real")   # (2026-11-11) FLOW_D: the fixed simulator (ube ilc2real_fix)
 os.environ.update(F1T_MU="0.6", F1T_PLANS=D + "/plans_nom06", F1T_TRACKS=D + "/../lifted_linear_tire_20261009/tracks_tight",
                   F1T_SAFETY_EY="0.5", F1T_NO_CRASH="1", NUMBA_NUM_THREADS="1", OMP_NUM_THREADS="1", JAX_PLATFORMS="cpu")
 HERE = os.path.dirname(os.path.abspath(__file__))

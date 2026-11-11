@@ -1,0 +1,14 @@
+% car_flow_ethzx110_orbit_1s_w.pdf caption (2026-11-11 rebuild: the FIXED simulator, ube ilc2real_fix; the x1.1 ETHZMobil plan of the
+% ETHZX110 stage runs; track edges +-0.99 m). Numbers printed by flow_car.py ethzx110_orbit_1s (car_flow_ethzx110_orbit_1s_w_data.npz) and
+% the runs' ethz_eval.json (ax:mu=1.667, it 0 -> 3, all 9 runs per network). Example run = the median of the 9 PPO+DR runs by score change
+% (ETHZX110_rubber_freePPON_s2_ss9002, -11.1 %; ETHZ_RULES.md: "a figure example is the median run").
+\caption{\textbf{The stage pulls the car's lateral flow slightly toward the plan on a practised, harder track.} Lateral flow of the
+rubber-tire car on the ETHZMobil track (scaled $\times$4.3 to the F1TENTH and run at 1.1$\times$ the plan's speed; 55\,m per lap, track
+edges $\pm$0.99\,m from the plan; simulation only) under the PPO+DR network's zero-shot policy $\pi_0$ and after each one-lap stage
+iteration $\pi_1$--$\pi_3$ (the median of nine stage runs). At each arc length the zero-shot car's own state there (speed, heading error,
+sideslip, yaw rate) is shifted across the track; the arrows show where the car is 1.0\,s later, the shading the sideways push, and the
+black line where the push is zero -- the line the flow pulls the car onto. Orange points: four laterally perturbed laps every 0.2\,s. No
+perturbed lap leaves the track in any row; the stage moves the flow's line toward the plan (mean offset 9.4, 8.8, 8.7, 8.6\,cm) and the
+perturbed laps from 23.3 to 20.5\,cm rms, while every perturbed lap still passes more than 0.5\,m from the plan once (largest offsets
+0.59--0.69\,m in every row). Over all nine runs per network on this track the stage lowers this car's error by 11.8\,\% (PPO+DR; time more
+than 0.5\,m off the plan 0.37 to 0.17\,s per lap) and 19.9\,\% (RMA, 0.13 to 0.05\,s).}

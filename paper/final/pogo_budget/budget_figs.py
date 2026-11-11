@@ -112,9 +112,10 @@ def panel_fig(D, key, xf, xticks, xlabel, name, ytop=None):
 
 if __name__ == "__main__":
     D = json.load(open(os.path.join(HERE, "budget_data.json")))
+    DB = json.load(open(os.path.join(HERE, "budget_data_best.json")))   # (2026-11-11) real panel: best-iteration rule (pogo_best_iter.py)
     panel_fig(D, "sim", np.log10, ([2, 5, 10, 30, 100, 500], ["2", "5", "10", "30", "100", "500"]),
               "simulated hours (zero-shot)", "pogo_budget_sim", ytop=5.2)   # (2026-10-30, user: FADA's line runs out of frame; "expand the range": 3.5 -> 4.5; C's start (4.73, CI 5.04) hidden: -> 5.2)
     real_x = lambda n: np.log2(1.0 + n)                       # 0 (zero-shot) at the left, rollouts on a log scale
-    panel_fig(D, "real", real_x, ([0, 12, 36, 96, 384], ["0", "12", "36", "96", "384"]),
+    panel_fig(DB, "real", real_x, ([0, 12, 36, 96, 384], ["0", "12", "36", "96", "384"]),
               "real rollouts per robot", "pogo_budget_real")
     print("->", OUT)

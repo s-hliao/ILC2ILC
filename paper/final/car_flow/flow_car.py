@@ -20,7 +20,7 @@ import math
 import os
 import sys
 
-D = "/home/henry/ilc_ws/src/ilc_f1tenth/ilc2real"
+D = os.environ.get("FLOW_D", "/home/henry/ilc_ws/src/ilc_f1tenth/ilc2real")   # (2026-11-11) FLOW_D: the fixed simulator (ube ilc2real_fix)
 os.environ.update(F1T_MU="0.6", F1T_PLANS=D + "/plans_nom06", F1T_TRACKS=D + "/../lifted_linear_tire_20261009/tracks_tight",
                   F1T_SAFETY_EY="0.5", F1T_NO_CRASH="1", NUMBA_NUM_THREADS="1", OMP_NUM_THREADS="1", JAX_PLATFORMS="cpu")
 import numpy as np  # noqa: E402
@@ -113,8 +113,31 @@ VARIANTS = {
     "ethz_simref": dict(plan="ethzmobil43_b0_free", run="ETHZ_rubber_freePPON_s0_ss9001", car="ax:mu=1.667", var="lat",
                         stem="car_flow_ethz_simref", label="rubber car", ref=True, line=True, ns=60, base="orbit", H=1.0,
                         track="practised ETHZMobil lap"),
+    # (2026-11-11, user: "rebuild flow models"; the 11-06 figure predates the simulator fix and used the x1.0 plan): the same flow on the
+    # FIXED simulator (ube ilc2real_fix, FLOW_D) and the x1.1 plan of the ETHZX110 stage runs (9 PPO+DR runs). Pick rule (ETHZ_RULES.md: "a
+    # figure example is the median run"): the median of the 9 by score change it0 -> it3 = ETHZX110_rubber_freePPON_s2_ss9002 (2.227 ->
+    # 1.980, -11.1 %; the 9: +1.1 / -4.6 / -5.0 / -5.2 / -11.1 / -14.8 / -16.9 / -20.9 / -28.8 %)
+    "ethzx110_orbit_1s": dict(plan="ethzmobil43_b0_free_x110", run="ETHZX110_rubber_freePPON_s2_ss9002", car="ax:mu=1.667", var="lat",
+                              stem="car_flow_ethzx110_orbit_1s_w", label="rubber car", ref=False, bg="push", ns=60, base="orbit", H=1.0,
+                              tube=0.99, track="practised ETHZMobil lap (x1.1)"),
+    "ethzx110_resid": dict(plan="ethzmobil43_b0_free_x110", run="ETHZX110_rubber_freePPON_s2_ss9002", car="ax:mu=1.667", var="lat",
+                           stem="car_flow_ethzx110_resid", data="car_flow_ethzx110_orbit_1s_w", resid="car_flow_ethzx110_orbit_1s_w_resid",
+                           tube=0.99, label="rubber car", ref=False, bg="resid", ns=60, base="orbit", H=1.0,
+                           track="practised ETHZMobil lap (x1.1)"),
 }
 V = VARIANTS[sys.argv[1] if len(sys.argv) > 1 else "plastic"]
+if os.environ.get("FLOW_RUN"):          # (2026-11-11) candidate screen: override the variant's run / car (and the stem)
+    if os.environ.get("FLOW_PLAN"):     # (2026-11-11) any practised track: its plan, track half-width and label
+        V = dict(V, plan=os.environ["FLOW_PLAN"], tube=float(os.environ.get("FLOW_TUBE", "0.5")), track=os.environ.get("FLOW_TRACK", V["track"]))
+    if os.environ.get("FLOW_LABEL"):
+        V = dict(V, label=os.environ["FLOW_LABEL"])
+    _sfx = "_" + os.environ["FLOW_RUN"] + "_" + os.environ.get("FLOW_CAR", V["car"]).replace(":", "").replace(",", "_")
+    V = dict(V, run=os.environ["FLOW_RUN"], car=os.environ.get("FLOW_CAR", V["car"]), stem=V["stem"] + _sfx)
+    if "resid" in V:                   # the policy-residual panel reads the candidate's own flow data and residual
+        V["data"] = "car_flow_ethzx110_orbit_1s_w" + _sfx
+        V["resid"] = V["data"] + "_resid"
+    else:
+        V.pop("data", None)
 DATA = os.path.join(HERE, f"{V.get('data', V['stem'])}_data.npz")
 PLAN, RUN, CAR = V["plan"], D + "/runs/screen/" + V["run"], V["car"]
 REF_CAR = "real_nom"
@@ -122,6 +145,9 @@ TOL, DT = 0.10, 0.025
 # the tube: the mocap room's 0.5 m safety envelope; ETHZMobil (sim only) uses its own track edges (2026-11-06, user: "aren't the margins
 # typically a lot larger in the ethzmobil track? probably about 2x"): BayesRace width 0.46 m x 4.3 = 1.98 m -> +-0.99 m
 TUBE = V.get("tube", 0.5)
+CUR = os.environ.get("FLOW_RESID_CH") == "current"
+if CUR:
+    V = dict(V, stem=V["stem"] + "_current")
 TW = "tube" if TUBE == 0.5 else "track"                              # ETHZMobil: the real track edges
 H = V.get("H", 0.4)                                                  # the arrow's horizon (s)
 NS, NE = V.get("ns", 40), 11
@@ -272,8 +298,12 @@ def main():
         dev = np.abs(dE[k] - dE[0]) / tol
         if V.get("bg") == "resid":                                   # the policy's steering change vs pi_0 (deg), and the zero-push line
             Rz = np.load(os.path.join(HERE, f"{V['resid']}.npz"))["U"]
-            dst = np.degrees(Rz[k, :, :, 0] - Rz[0, :, :, 0])
-            im = ax.pcolormesh(SS, EE, dst, cmap=DIV, norm=TwoSlopeNorm(vcenter=0.0, vmin=-6.0, vmax=6.0), shading="gouraud")
+            if CUR:                                                  # (2026-11-11) FLOW_RESID_CH=current: the motor-current change (A)
+                dst = Rz[k, :, :, 1] - Rz[0, :, :, 1]
+                im = ax.pcolormesh(SS, EE, dst, cmap=DIV, norm=TwoSlopeNorm(vcenter=0.0, vmin=-6.0, vmax=6.0), shading="gouraud")
+            else:
+                dst = np.degrees(Rz[k, :, :, 0] - Rz[0, :, :, 0])
+                im = ax.pcolormesh(SS, EE, dst, cmap=DIV, norm=TwoSlopeNorm(vcenter=0.0, vmin=-6.0, vmax=6.0), shading="gouraud")
             ax.plot(ss, settle_line(dE[k]), color=ps.INK, lw=1.1, zorder=5)
         elif V.get("bg") == "final":                                   # |flow - the final policy's flow| (tolerance units), and the zero line
             devf = np.abs(dE[k] - dE[-1]) / TOL                      # own scale: these differences stay below ~1 tol
@@ -332,8 +362,11 @@ def main():
             if resid:
                 Rz = np.load(os.path.join(HERE, f"{V['resid']}.npz"))["U"]
                 tr = O[k][KEEP][:, int(round(1.0 / DT)):, 1]
-                txt = (f"steering change {np.degrees(np.abs(Rz[k, :, :, 0] - Rz[0, :, :, 0])).mean():.1f} deg mean "
-                       f"(max {np.degrees(np.abs(Rz[k, :, :, 0] - Rz[0, :, :, 0])).max():.0f}); line {100 * np.nanmean(np.abs(settle_line(dE[k]))):.1f} cm "
+                head = (f"current change {np.abs(Rz[k, :, :, 1] - Rz[0, :, :, 1]).mean():.1f} A mean "
+                        f"(max {np.abs(Rz[k, :, :, 1] - Rz[0, :, :, 1]).max():.0f})") if CUR else \
+                       (f"steering change {np.degrees(np.abs(Rz[k, :, :, 0] - Rz[0, :, :, 0])).mean():.1f} deg mean "
+                        f"(max {np.degrees(np.abs(Rz[k, :, :, 0] - Rz[0, :, :, 0])).max():.0f})")
+                txt = (head + f"; line {100 * np.nanmean(np.abs(settle_line(dE[k]))):.1f} cm "
                        f"off the plan; laps {100 * np.sqrt(np.nanmean(tr ** 2)):.1f} cm rms, {nout}/{len(KEEP)} leave the {TW}")
             if vsfinal:
                 txt = f"difference from the final flow {np.nanmean(np.abs(dE[k] - dE[-1])) / TOL:.2f} tol (mean); " + txt
@@ -375,7 +408,8 @@ def main():
     cax = fig.add_axes([p0.x1 + 0.012, p1.y0, 0.009, p0.y1 - p1.y0])
     cb = fig.colorbar(im, cax=cax, extend="both" if (resid or drift or (push and not vsfinal)) else "max")
     if resid:
-        cb.set_label("steering change vs the zero-shot policy (deg; + = more to the left)", fontsize=6, labelpad=2)
+        cb.set_label("motor-current change vs the zero-shot policy (A; + = more drive)" if CUR else
+                     "steering change vs the zero-shot policy (deg; + = more to the left)", fontsize=6, labelpad=2)
     elif vsfinal:
         cb.set_label("difference from the final policy's flow (tol = 0.1 m)", fontsize=6, labelpad=2)
     elif push:

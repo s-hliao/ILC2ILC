@@ -72,7 +72,8 @@ def main():
     for arm in R:
         for c in R[arm]:
             R[arm][c] = [p for p in R[arm][c] if p]
-    D = {"panels": [["nominal", "held-out goals, nominal stance", 4, "robots"], ["perturbed", "held-out goals, perturbed stances", 4, "robots"]],
+    D = {"panels": [["nominal", "held-out goals, nominal stance", 4, "robots"]],   # (2026-11-11, user: perturbed stances belong in fig 6)
+         "figw": 7.0, "legend_right": 0.64,
          "real": R, "real_ticks": [0, 6, 12, 24, 48, 96, 384], "real_label": "real jumps per robot", "sharey": False, "ycap": {"nominal": 7.0, "perturbed": 7.5}, "ref_line": [5.0],
          "ylabel": "normalized landing error"}
     json.dump(D, open(OUT, "w"), indent=1)
