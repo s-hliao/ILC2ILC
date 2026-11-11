@@ -333,13 +333,14 @@ def main():
         for m in KEEP:
             o = O[k, m]
             o = o[np.isfinite(o[:, 0])]
-            out = np.nonzero(np.abs(o[:, 1]) > TUBE)[0] if lat else []
-            if len(out):                                             # leaves the tube: on the car, the kill switch
-                o = o[:out[0] + 1]
-                ax.plot(np.mod(o[-1, 0], L), np.clip(o[-1, 1], -0.97 * YM, 0.97 * YM), "x", color=ps.RUN, ms=4, mew=1.0, zorder=7)
+            # (2026-11-11, user: "keep the run going, we can just report time outside the track"): the whole lap is drawn; points
+            # outside the track / tube are drawn as x at the frame edge, and the row reports the time spent outside
             tail.append(o[int(round(1.0 / DT)):, 1])                 # after 1 s: where the starts settle
             p = o[::8]                                               # every 0.2 s
-            ax.plot(np.mod(p[:, 0], L), p[:, 1], "o", color=ps.RUN, mec="white", mew=0.3, ms=2.2, zorder=6)
+            ins = np.abs(p[:, 1]) <= TUBE if lat else np.ones(len(p), bool)
+            ax.plot(np.mod(p[ins, 0], L), p[ins, 1], "o", color=ps.RUN, mec="white", mew=0.3, ms=2.2, zorder=6)
+            if (~ins).any():
+                ax.plot(np.mod(p[~ins, 0], L), np.clip(p[~ins, 1], -0.97 * YM, 0.97 * YM), "x", color=ps.RUN, ms=3.0, mew=0.8, zorder=7)
         settle.append(float(np.mean(np.concatenate(tail))))
         if not lat:                                                  # the level the speed settles at
             ax.axhline(settle[-1], color=ps.RUN, lw=0.8, ls=":", zorder=5)
@@ -356,9 +357,10 @@ def main():
             extra += f" (gap to the plan {100 * settle[-1] / settle[1]:.0f} % of zero-shot's)"
         if push:
             nout = sum(np.any(np.abs(O[k, m][np.isfinite(O[k, m][:, 1]), 1]) > TUBE) for m in KEEP)
+            tout = DT * sum(int(np.sum(np.abs(O[k, m][np.isfinite(O[k, m][:, 1]), 1]) > TUBE)) for m in KEEP)
             tr = O[k][KEEP][:, int(round(1.0 / DT)):, 1]
             txt = (f"pulled onto a line {100 * np.nanmean(np.abs(settle_line(dE[k]))):.1f} cm off the plan on average; perturbed laps "
-                   f"{100 * np.sqrt(np.nanmean(tr ** 2)):.1f} cm rms, {nout} of {len(KEEP)} leave the {TW}")
+                   f"{100 * np.sqrt(np.nanmean(tr ** 2)):.1f} cm rms, {tout:.1f} s outside the {TW}")
             if resid:
                 Rz = np.load(os.path.join(HERE, f"{V['resid']}.npz"))["U"]
                 tr = O[k][KEEP][:, int(round(1.0 / DT)):, 1]
@@ -367,7 +369,7 @@ def main():
                        (f"steering change {np.degrees(np.abs(Rz[k, :, :, 0] - Rz[0, :, :, 0])).mean():.1f} deg mean "
                         f"(max {np.degrees(np.abs(Rz[k, :, :, 0] - Rz[0, :, :, 0])).max():.0f})")
                 txt = (head + f"; line {100 * np.nanmean(np.abs(settle_line(dE[k]))):.1f} cm "
-                       f"off the plan; laps {100 * np.sqrt(np.nanmean(tr ** 2)):.1f} cm rms, {nout}/{len(KEEP)} leave the {TW}")
+                       f"off the plan; laps {100 * np.sqrt(np.nanmean(tr ** 2)):.1f} cm rms, {tout:.1f} s outside the {TW}")
             if vsfinal:
                 txt = f"difference from the final flow {np.nanmean(np.abs(dE[k] - dE[-1])) / TOL:.2f} tol (mean); " + txt
         elif drift:
@@ -389,7 +391,7 @@ def main():
     ls_ += [("4 laterally perturbed" if lat else "4 speed-perturbed") + " starts, every 0.2 s"]
     if lat:
         hs += [Line2D([], [], ls="none", marker="x", color=ps.RUN, mew=1.0, ms=4)]
-        ls_ += [f"leaves the {TW}"]
+        ls_ += [f"outside the {TW} (at the frame edge)"]
     else:
         hs += [Line2D([], [], color=ps.RUN, lw=0.8, ls=":")]
         ls_ += ["where they settle (after 1 s)"]

@@ -98,3 +98,6 @@
   simulator; flow_car.py ethzx110_resid, FLOW_RESID_CH=current for the motor current). ETHZ plastic mu x0.4: steering barely changes
   (0.3 deg mean, max 1.6) -- the stage cuts the drive current before the corners (2.0 A mean, max 8 A): it slows the low-grip car into the
   turns. Deep peanut harsh-steer: both channels (steering 0.9 deg mean, max 6.8; current 3.6 A mean).
+  (2026-11-11, user: "track deviation is fine, keep the run going, we can just report time outside the track"): flow_car.py now draws each
+  perturbed lap in full (points outside the track / tube as x at the frame edge) and each row reports the time outside, summed over the 4
+  perturbed laps: ETHZ plastic 14.8 -> 10.2 -> 8.8 -> 5.5 s; deep peanut see the row titles. Videos: videos/*_1111.mp4.

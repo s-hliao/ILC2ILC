@@ -11,7 +11,7 @@ import math
 import os
 import sys
 
-D = "/home/henry/ilc_ws/src/ilc_f1tenth/ilc2real"
+D = os.environ.get("FLOW_D", "/home/henry/ilc_ws/src/ilc_f1tenth/ilc2real")   # (2026-11-11) FLOW_D: the fixed simulator
 os.environ.update(F1T_MU="0.6", F1T_PLANS=D + "/plans_nom06", F1T_TRACKS=D + "/../lifted_linear_tire_20261009/tracks_tight",
                   F1T_SAFETY_EY="0.5", F1T_DEV_TIME="1", NUMBA_NUM_THREADS="1", OMP_NUM_THREADS="1", JAX_PLATFORMS="cpu")
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -69,7 +69,9 @@ F = np.load(os.path.join(HERE, f"{V.get('data', V['stem'])}_data.npz"))
 ss, es, dS, dE = F["ss"], F["es"], F["dS"], F["dE"]
 _rf = os.path.join(HERE, f"{V['resid']}.npz") if "resid" in V else os.path.join(HERE, f"{V['stem']}_resid.npz")   # (2026-11-06) also <stem>_resid
 Rz = np.load(_rf)["U"] if os.path.exists(_rf) else None
-RCH = 0 if LAT else 1                                                # the policy change shown: steering (deg) or motor current (A)
+RCH = 1 if (os.environ.get("FLOW_RESID_CH") == "current" or not LAT) else 0   # (2026-11-11) FLOW_RESID_CH=current
+CURL = LAT and RCH == 1
+#                                               # the policy change shown: steering (deg) or motor current (A)
 SS, EE = np.meshgrid(ss, es, indexing="ij")
 xy = np.asarray(pl["x"])[:, :3]
 
@@ -155,15 +157,18 @@ def draw_strip(k):
     strip_art.clear()
     if Rz is not None:
         dR = Rz[k, :, :, RCH] - Rz[0, :, :, RCH]
-        dR = np.degrees(dR) if LAT else dR
-        lim = 6.0 if LAT else max(1.0, float(np.nanmax(np.abs(Rz[3, :, :, 1] - Rz[0, :, :, 1]))))
+        dR = np.degrees(dR) if (LAT and not CURL) else dR
+        lim = 6.0 if (LAT and not CURL) else max(1.0, float(np.nanmax(np.abs(Rz[3, :, :, 1] - Rz[0, :, :, 1]))))
         strip_art.append(axs.pcolormesh(SS, EE, dR, cmap=DIV, norm=TwoSlopeNorm(vcenter=0.0, vmin=-lim, vmax=lim), shading="gouraud"))
     sub = (slice(None, None, 2), slice(None, None, 2))
     k_len = 0.85 * (ss[1] - ss[0]) * 2 / np.nanquantile(np.hypot(dS[0], dE[0]), 0.9)
     strip_art.append(axs.quiver(SS[sub], EE[sub], k_len * dS[k][sub], k_len * dE[k][sub], angles="xy", scale_units="xy", scale=1.0,
                                 color=INK, alpha=0.7, width=0.0018, headwidth=3.6, headlength=4.0, zorder=4))
     strip_art.extend(axs.plot(ss, settle_line(dE[k]), color=INK, lw=1.1, zorder=5))
-    if LAT:
+    if CURL:
+        axs.set_title("flow under this policy: shading = motor-current change vs zero-shot (red more, blue less); black = where the car is pulled",
+                      fontsize=8, loc="left")
+    elif LAT:
         axs.set_title("flow under this policy: shading = steering change vs zero-shot (red left, blue right); black = where the car is pulled",
                       fontsize=8, loc="left")
     else:
