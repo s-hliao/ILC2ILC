@@ -46,7 +46,7 @@ V = fc.V
 pl = bank.load_plan(V["plan"])
 P = sn.PlanNP(pl)
 L = float(pl["length"])
-pols = [fc.load_policy(f"{fc.RUN}/its/it{k}_{fc.CAR}_policy.npz") for k in range(4)]
+pols = [fc.load_policy(f"{fc.RUN}/its/it{k}_{fc.CAR}_policy.npz") for k in fc.ITS]
 # (2026-11-06, user: "make sure that the full 2 laps gets shown") NLAPS FULL laps per policy (the stage's 2-lap trials; --laps):
 # real_car.run stops after laps x the plan's lap time, which a car slower than its plan (pace < 1, e.g. the rubber car on the peanut
 # x1.5) does not finish in -- fly up to 2x that time and cut where the car's progress reaches NLAPS laps
@@ -60,8 +60,8 @@ def full_lap(r):
         print(f"WARNING: only {prog[-1] / L:.2f} of {NLAPS} laps in 2x the plan's time", flush=True)
     return {k_: (v[:n] if isinstance(v, np.ndarray) and len(v) >= len(idx) else v) for k_, v in r.items()}
 laps = [full_lap(rc.run(fc.CAR, pl, pols[k], laps=NLAPS, s0=0.0, pert=np.zeros(5), seed=0, noise=False,
-                        T_max=int(math.ceil(2.0 * NLAPS * pl["lap_time"] / rc.DT)))) for k in range(4)]
-for k in range(4):
+                        T_max=int(math.ceil(2.0 * NLAPS * pl["lap_time"] / rc.DT)))) for k in range(len(fc.ITS))]
+for k in range(len(fc.ITS)):
     laps[k]["dev_time"] = float(np.sum(np.abs(np.asarray(laps[k]["err_true"])[:, 0]) > fc.TUBE) * rc.DT)
 LAT = V["var"] == "lat"
 COL = 0 if LAT else 5                                                # err_true column: lateral offset, or speed error
@@ -124,7 +124,7 @@ def trace(k):
         return prog, 100 * err[:, 0], None
     zz = np.asarray(pl["z"]); vp = np.hypot(zz[idx % len(zz), 2], zz[idx % len(zz), 3])
     return prog, np.hypot(x[:, 3], x[:, 4]), vp
-TR = [trace(k) for k in range(4)]
+TR = [trace(k) for k in range(len(fc.ITS))]
 allv = np.concatenate([t_[1] for t_ in TR] + ([t_[2] for t_ in TR] if not LAT else []))
 axt.set_xlim(0, NLAPS * L); lo_, hi_ = np.nanpercentile(allv, 1), np.nanpercentile(allv, 99.5)
 axt.set_ylim(lo_ - 0.08 * (hi_ - lo_), hi_ + 0.08 * (hi_ - lo_))
@@ -186,13 +186,13 @@ axs.axhline(0, color=INK, lw=0.5, alpha=0.5)
 axs.set_xlabel("arc length along the lap (m)", fontsize=8)
 axs.set_ylabel("offset (m)" if LAT else "speed - plan's (m/s)", fontsize=8)
 lpi = 1 if "ethz" in V["plan"] else 2                               # practice laps per iteration (ETHZMobil 1, mocap tracks 2)
-names = ["zero-shot"] + [f"after {lpi * k} practice lap{'s' if lpi * k > 1 else ''}" for k in (1, 2, 3)]
+names = ["zero-shot"] + [f"after {lpi * k} practice lap{'s' if lpi * k > 1 else ''}" for k in fc.ITS[1:]]
 def metrics(r):
     err = np.asarray(r["err_true"]); x = np.asarray(r["x_true"])
     ey, dv = err[:, 0], err[:, 5]
     return dict(ey=100 * np.sqrt(np.mean(ey ** 2)), v=float(np.mean(np.hypot(x[:, 3], x[:, 4]))), dv=float(np.mean(dv)),
                 tr=len(ey) * rc.DT / (NLAPS * float(pl["lap_time"])), J=0.5 * float(np.sum((ey / 0.10) ** 2 + (dv / 0.24) ** 2)))
-MET = [metrics(laps[k]) for k in range(4)]
+MET = [metrics(laps[k]) for k in range(len(fc.ITS))]
 def log_text(n):
     hdr = (f"after each policy's {NLAPS:g} lap{'s' if NLAPS != 1 else ''}\n\n"
            f"{'policy':23s}{'lateral':>8s}{'speed':>7s}{'speed err':>10s}{'time':>7s}{'cost J':>8s}\n"
@@ -204,7 +204,7 @@ def log_text(n):
     return hdr + rows + "\nJ = 1/2 sum_t (e_y/0.10 m)^2 + (speed err/0.24 m/s)^2\n    (the stage's own objective)"
 HOLD = int(round(args.pause * args.fps))
 frames = []
-for k in range(4):
+for k in range(len(fc.ITS)):
     T_k = len(laps[k]["x_true"])
     frames += [(k, t, False) for t in range(0, T_k, 2)] + [(k, T_k - 1, True)] * HOLD
 cur = {"k": -1}
@@ -250,4 +250,4 @@ with w.saving(fig, args.out, dpi=110):
         update(fr)
         w.grab_frame()
 print("->", args.out, len(frames), "frames;", ", ".join(f"pi{k}: lap rms {100 * np.sqrt(np.mean(np.asarray(laps[k]['err_true'])[:, 0] ** 2)):.1f} cm, "
-                                                          f"outside tube {laps[k]['dev_time']:.2f} s" for k in range(4)))
+                                                          f"outside tube {laps[k]['dev_time']:.2f} s" for k in range(len(fc.ITS))))

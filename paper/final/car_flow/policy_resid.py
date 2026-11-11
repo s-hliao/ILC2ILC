@@ -26,7 +26,7 @@ import sim_jax_np as sn  # noqa: E402
 pl = bank.load_bank([V["plan"]])[0]
 P = sn.PlanNP(pl)
 L = float(pl["length"])
-pols = [fc.load_policy(f"{fc.RUN}/its/it{k}_{fc.CAR}_policy.npz") for k in range(4)]
+pols = [fc.load_policy(f"{fc.RUN}/its/it{k}_{fc.CAR}_policy.npz") for k in fc.ITS]
 ORBIT = V.get("base") == "orbit"
 if ORBIT:
     r0 = rc.run(fc.CAR, pl, pols[0], laps=1.05, s0=0.0, pert=np.zeros(5), seed=0, noise=False)
@@ -34,7 +34,7 @@ if ORBIT:
     oi = np.array(sorted(orbit))
 ss = np.linspace(0, L, fc.NS, endpoint=False)
 es = fc.GRID
-U = np.zeros((4, len(ss), len(es), 2))
+U = np.zeros((len(fc.ITS), len(ss), len(es), 2))
 for i, s in enumerate(ss):
     ig = int(round(s / P.ds)) % P.M
     if ORBIT:
@@ -57,9 +57,9 @@ for i, s in enumerate(ss):
                 x[3:7] *= f
         idx = P.project(j, x[:2])
         obs, _ = P.features(idx, x)
-        for k in range(4):
+        for k in range(len(fc.ITS)):
             U[k, i, jj] = rc.mlp_np(pols[k], obs) * cm.A_SCALE + cm.A_OFF     # (steering rad, current A)
 np.savez(os.path.join(HERE, f"{V['stem']}_resid.npz"), ss=ss, es=es, U=U)
-print("steering change vs pi_0 (deg): mean |.|", [round(float(np.degrees(np.abs(U[k, :, :, 0] - U[0, :, :, 0]).mean())), 2) for k in range(4)],
-      "max |.|", [round(float(np.degrees(np.abs(U[k, :, :, 0] - U[0, :, :, 0]).max())), 2) for k in range(4)])
-print("current change vs pi_0 (A): mean |.|", [round(float(np.abs(U[k, :, :, 1] - U[0, :, :, 1]).mean()), 2) for k in range(4)])
+print("steering change vs pi_0 (deg): mean |.|", [round(float(np.degrees(np.abs(U[k, :, :, 0] - U[0, :, :, 0]).mean())), 2) for k in range(len(fc.ITS))],
+      "max |.|", [round(float(np.degrees(np.abs(U[k, :, :, 0] - U[0, :, :, 0]).max())), 2) for k in range(len(fc.ITS))])
+print("current change vs pi_0 (A): mean |.|", [round(float(np.abs(U[k, :, :, 1] - U[0, :, :, 1]).mean()), 2) for k in range(len(fc.ITS))])

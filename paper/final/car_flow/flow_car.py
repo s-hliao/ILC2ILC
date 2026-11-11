@@ -145,6 +145,7 @@ TOL, DT = 0.10, 0.025
 # the tube: the mocap room's 0.5 m safety envelope; ETHZMobil (sim only) uses its own track edges (2026-11-06, user: "aren't the margins
 # typically a lot larger in the ethzmobil track? probably about 2x"): BayesRace width 0.46 m x 4.3 = 1.98 m -> +-0.99 m
 TUBE = V.get("tube", 0.5)
+ITS = [int(x) for x in os.environ.get("FLOW_ITS", "0,1,2,3").split(",")]   # (2026-11-11) which stage iterations the 4 rows show
 CUR = os.environ.get("FLOW_RESID_CH") == "current"
 if CUR:
     V = dict(V, stem=V["stem"] + "_current")
@@ -175,7 +176,7 @@ def compute():
     pl = bank.load_bank([PLAN])[0]
     P = sn.PlanNP(pl)
     L = float(pl["length"])
-    pols = [load_policy(f"{RUN}/its/it{k}_{CAR}_policy.npz") for k in range(4)]
+    pols = [load_policy(f"{RUN}/its/it{k}_{CAR}_policy.npz") for k in ITS]
     panels = ([(REF_CAR, pols[0])] if V.get("ref", True) else []) + [(CAR, p) for p in pols]
 
     orbit = None
@@ -271,8 +272,8 @@ def main():
     drift = V.get("bg") == "drift"
     laps_per_it = 1 if "ethz" in V["plan"] else 2                    # the ETHZMobil stage's one-lap trials (ETHZ_RULES.md)
     titles = ([r"nominal car ($\mu$ 0.6), $\pi_0$ (reference)"] if ref else []) + \
-             [V["label"] + rf", $\pi_{k}$" + (" (zero-shot)" if k == 0 else f" (after {laps_per_it * k} lap{'s' if laps_per_it * k > 1 else ''})")
-              for k in range(4)]
+             [V["label"] + rf", $\pi_{ITS[k]}$" + (" (zero-shot)" if ITS[k] == 0 else f" (after {laps_per_it * ITS[k]} lap{'s' if laps_per_it * ITS[k] > 1 else ''})")
+              for k in range(len(ITS))]
     from matplotlib.colors import LinearSegmentedColormap, TwoSlopeNorm
     DIV = LinearSegmentedColormap.from_list("div", ["#1c5cab", "#5598e7", "#f0efec", "#ec8a89", "#c23a39"])
     DNORM = TwoSlopeNorm(vcenter=0.0, vmin=-12.0, vmax=12.0)                          # cm per 0.4 s, toward (-) / away from (+) the plan
@@ -293,7 +294,7 @@ def main():
     resid = V.get("bg") == "resid"
     vsfinal = V.get("bg") == "final"
     settle = []
-    fig, axs = plt.subplots(len(titles), 1, figsize=(7.16, 5.6), sharex=True)
+    fig, axs = plt.subplots(len(titles), 1, figsize=(7.16, 1.4 * len(titles)), sharex=True)
     for k, (ax, ttl) in enumerate(zip(axs, titles)):
         dev = np.abs(dE[k] - dE[0]) / tol
         if V.get("bg") == "resid":                                   # the policy's steering change vs pi_0 (deg), and the zero-push line

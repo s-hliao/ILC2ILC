@@ -101,3 +101,10 @@
   (2026-11-11, user: "track deviation is fine, keep the run going, we can just report time outside the track"): flow_car.py now draws each
   perturbed lap in full (points outside the track / tube as x at the frame edge) and each row reports the time outside, summed over the 4
   perturbed laps: ETHZ plastic 14.8 -> 10.2 -> 8.8 -> 5.5 s; deep peanut see the row titles. Videos: videos/*_1111.mp4.
+- Fig 3, LARGE STEP (2026-11-11, user: "do the big step that we used on hardware"): the two fig 3 cells re-run in sim with the hardware
+  stage settings (car_runs/stage_track.sh BIGSTEP=1 + DVSCALE=1.0: --cap 0.8 --tr-max 0.8 --anchor-w 10 --err-scale ... 1.0, 4 iterations;
+  ube big_1111.sh -> runs/screen/BIG_*; all 9 runs per cell, 0 rollbacks). Flows of all 18 with pi_0..pi_4 (FLOW_ITS=0,1,2,3,4).
+  ETHZ plastic mu x0.4: all 9 runs cut the perturbed laps 47-57 cm rms; the MEDIAN run BIG_SB_ethzp_freePPON_s0_ss9001:
+  101.2 -> 76.8 -> 68.9 -> 50.8 -> 48.5 cm rms, time outside the track 14.8 -> 9.8 -> 8.7 -> 5.1 -> 5.0 s, motor-current change 0.9 -> 2.8 A
+  mean (max 13 A: braking before the corners). candidates_1111/*_BIGSTEP.*; video videos/car_ethz_plastic_mu04_BIGSTEP_1111.mp4.
+  Deep peanut harsh-steer, large step: 9 runs -14.5 to -18.9 cm (40 -> 21 cm best).
