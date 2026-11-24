@@ -143,7 +143,9 @@ def real_curves(TI, rng):
                                 (24, f"{V}/rmaR1_s{{s}}_PF/it4/{F}", f"{T}/rma_s{{s}}_PF/it4/{F}"),
                                 (36, f"{V}/rmaR1_s{{s}}_PF/{F}", f"{T}/rma_s{{s}}_PF/{F}")],
               # (2026-11-10) GPS from PPO + DR (gps_pogo.py, MDGPS; 30 real rollouts per robot per iteration)
-              "PPO + DR + GPS": [(30 * k, f"{V}/gps_s{{s}}_it{k}/{F}", f"{T}/gps_s{{s}}_it{k}/{F}") for k in (0, 1, 2, 4, 8, 12)],
+              # (2026-11-11, user: "tune gps") the tuned GPS (gps_tune_1111.sh: picked on the VALIDATION set, KL 0.2, dynamics prior
+              # n0 10, T 300) -> gps_pogo_1111.sh runs gpsT_s<k>; replaces the untuned gps_s<k> (diverged: eta at the cap)
+              "PPO + DR + GPS": [(30 * k, f"{V}/gpsT_s{{s}}_it{k}/{F}", f"{T}/gpsT_s{{s}}_it{k}/{F}") for k in (0, 1, 2, 4, 8, 12)],
               "RMA (DR), zero-shot": [(0, f"{V}/rmaR1_s{{s}}_zs/{F}", f"{T}/rma_s{{s}}_zs/summary.json")]}
     out = {}
     for arm, pts in series.items():

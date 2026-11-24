@@ -108,3 +108,10 @@
   101.2 -> 76.8 -> 68.9 -> 50.8 -> 48.5 cm rms, time outside the track 14.8 -> 9.8 -> 8.7 -> 5.1 -> 5.0 s, motor-current change 0.9 -> 2.8 A
   mean (max 13 A: braking before the corners). candidates_1111/*_BIGSTEP.*; video videos/car_ethz_plastic_mu04_BIGSTEP_1111.mp4.
   Deep peanut harsh-steer, large step: 9 runs -14.5 to -18.9 cm (40 -> 21 cm best).
+- Pogo GPS (2026-11-11 12:34, user: "tune gps"): the PPO + DR + GPS curve = the TUNED GPS (gps_tune_1111.sh picked KL 0.2 / dynamics
+  prior n0 10 / T 300 on the VALIDATION set; gps_pogo_1111.sh -> runs/{v3,tierc,tierab}/gpsT_s<k>; budget_data.py backup .bak_1111).
+  MEASURED on test: still worse with practice on every tier (A 0.64 -> 1.24, B 1.25 -> 1.64, C 1.43 -> 1.87 at 360 rollouts; per seed
+  v3 0.83 -> 1.18 / 1.83 / 0.88). The validation gain that picked the setting did NOT reproduce: the full run with identical args and
+  seed scored worse on the same validation set at it 4 (spring 0.125 vs 0.625 success) -> run-to-run nondeterminism; GPS on the pogo is
+  unstable at any tested setting. Figures redrawn (pogo/pogo_budget_{sim,real}); fonts fall back (TeX Gyre Termes / Times not installed),
+  as the earlier versions did.

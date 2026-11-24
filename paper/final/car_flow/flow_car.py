@@ -164,7 +164,12 @@ def load_policy(path):
     """hw_stage.load_policy (hw_stage parses argv on import)"""
     d = np.load(path)
     n = len([k for k in d.files if k.startswith("W")])
-    return [(np.asarray(d[f"W{i}"]), np.asarray(d[f"b{i}"])) for i in range(n)]
+    pol = [(np.asarray(d[f"W{i}"]), np.asarray(d[f"b{i}"])) for i in range(n)]
+    if os.environ.get("FLOW_RMA"):           # (2026-11-21) RMA stage runs: the actor flies with the frozen adaptation module
+        e = np.load(os.environ["FLOW_RMA"])  # (FLOW_RMA = rma_adapt.npz), as hw_stage.load_policy; real_car.run takes the dict
+        m = len([k for k in e.files if k.startswith("W")])
+        return dict(actor=pol, adapt=[(np.asarray(e[f"W{i}"]), np.asarray(e[f"b{i}"])) for i in range(m)], hist=int(e["hist"]))
+    return pol
 
 
 def compute():

@@ -42,6 +42,14 @@ ap.add_argument("--beta", type=float, default=0.5)
 ap.add_argument("--cap", type=float, default=0.1)
 ap.add_argument("--delta", type=float, default=0.05)
 ap.add_argument("--max-err", type=float, default=0.25, help="m: a landing error past this gives no landing rows")
+ap.add_argument("--fall-rows", type=int, default=0,
+                help="(2026-11-11, user: 'fix how the falls are handled - should be able to learn from them, mask out rows') 1: a "
+                     "jump that FELL keeps its landing rows. The fall is detected only in the landing phase after touchdown "
+                     "(jump.py land_tick), so its touchdown state and its Jacobians are as valid as a clean jump's; 0 (old) "
+                     "dropped all its landing rows, leaving it only clearance rows. Rows are masked one by one instead: x / z past "
+                     "--max-err use the ballistic takeoff prediction (as before), the pitch row is kept on every jump with a "
+                     "finite touchdown pitch, its residual clipped to --pitch-clip (the step's linear regime)")
+ap.add_argument("--pitch-clip", type=float, default=0.30, help="rad: --fall-rows' clip on the pitch residual")
 ap.add_argument("--rate-w", type=float, default=0.0, help="rad/s: a 4th landing row, the touchdown pitch rate against "
                                                          "the plan's, this rate counting as the landing's 1 cm (0: none)")
 ap.add_argument("--clear", type=float, default=0.0, help="m: the legs' and trunk's clearance to the box the ILC keeps "
@@ -533,7 +541,7 @@ for it, inner in sched:
     cst[stage] = 1.0
     # landing rows: e_n through the ballistic flight (none for a jump that hit the box: its landing is the hit's)
     hit = np.asarray(o["hit"], bool)
-    land_ok = (~fell) & (~hit) & np.isfinite(e).all(1) & (np.abs(np.nan_to_num(e[:, 0], nan=9.0)) <= a.max_err) \
+    land_ok = (a.fall_rows > 0 or ~fell) & (~hit) & np.isfinite(e).all(1) & (np.abs(np.nan_to_num(e[:, 0], nan=9.0)) <= a.max_err) \
         & (np.abs(np.nan_to_num(e[:, 1], nan=9.0)) <= a.max_err)
     # a jump far off (past max_err, or fallen with its landing past it) and not hit: its landing as the takeoff state
     # predicts it (the CoM is ballistic in flight: exact for x, z whatever the landing met), x and z rows only
@@ -541,6 +549,10 @@ for it, inner in sched:
     pred = np.stack([Xnc[:, 0] + Tf * Xnc[:, 3], Xnc[:, 1] + Tf * Xnc[:, 4] - 0.5 * 9.81 * Tf ** 2], 1) - tg[:, :2]
     far = (~hit) & (~land_ok) & np.isfinite(pred).all(1) & (np.abs(np.nan_to_num(e[:, :2], nan=9.0)).max(1) > a.max_err)
     e_use = np.where(far[:, None], np.concatenate([np.nan_to_num(pred) / sx[:2], np.zeros((B, 1))], 1), en)
+    pitch_ok = land_ok
+    if a.fall_rows:                                   # every jump with a finite touchdown pitch keeps its (clipped) pitch row
+        pitch_ok = (land_ok | far) & np.isfinite(e[:, 2])
+        e_use[:, 2] = np.clip(en[:, 2], -a.pitch_clip / sx[2], a.pitch_clip / sx[2])
     R_land = np.einsum("ij,bjk->bik", Pn, D[:, Nc])                       # (B, 3, Nc*4): the jump's own FD co-states
     use_vg = a.vg > 0 and it >= a.vg_warm
     if a.vg:
@@ -560,11 +572,11 @@ for it, inner in sched:
             R_land = R_crit
     rows.append(cst[2] * R_land)                                           # (B, 3, Nc*4)
     res.append(cst[2] * e_use)
-    keep.append(np.stack([land_ok | far, land_ok | far, land_ok], 1) & (cst[2] > 0))
+    keep.append(np.stack([land_ok | far, land_ok | far, pitch_ok], 1) & (cst[2] > 0))
     if a.rate_w > 0:   # the touchdown pitch rate against the plan's (constant in the ballistic flight), per rate_w rad/s
         rows.append(cst[2] * D[:, Nc, 5:6] / a.rate_w)
         res.append(cst[2] * ((np.asarray(o["X"])[:, N, 5] - np.asarray(ref["x_ref"])[:, N, 5]) / a.rate_w)[:, None])
-        keep.append(land_ok[:, None] & (cst[2] > 0))
+        keep.append(pitch_ok[:, None] & (cst[2] > 0))
     # tracking rows (JumpILC's Stages I / II): the jump's SRB state against the plan's, (x_k - x_ref,k) / sx, every
     # --track-stride samples -- Stage I on the contact samples, Stage II from rear-leg contact through the flight
     # (ballistic from takeoff) -- up to the jump's first hit, scaled by the stage's weight
@@ -709,7 +721,7 @@ for it, inner in sched:
         real = float("nan")
     ok = (~fell) & (np.abs(np.nan_to_num(e[:, 0], nan=9)) <= 0.05) & (np.abs(np.nan_to_num(e[:, 1], nan=9)) <= 0.03)
     cl = slice(nx, None)
-    log(f"it {it:3d}: stage {'I' * (stage + 1)} batch ok {ok.mean():.0%} (clean {ok[cl].mean():.0%}) fell {fell.mean():.0%} hit {hit.mean():.0%} targets {good.mean():.0%} clr rows {n_clr} trk rows {n_trk} far {int(far.sum())} "
+    log(f"it {it:3d}: stage {'I' * (stage + 1)} batch ok {ok.mean():.0%} (clean {ok[cl].mean():.0%}) fell {fell.mean():.0%} hit {hit.mean():.0%} targets {good.mean():.0%} fell w/ land rows {int((fell & pitch_ok).sum())} clr rows {n_clr} trk rows {n_trk} far {int(far.sum())} "
         f"|ex| {np.abs(np.nan_to_num(e[~fell, 0])).mean() * 100:.1f} cm  step rms {np.sqrt((stp[gi] ** 2).sum((1, 2)) / amask.sum()).mean():.3f} "
         f"loss {l:.2e} step taken {real:.0%}{vg_msg}{k_msg}{f' | sim jumps {n_sim}' if a.gps_inner else ''}  {time.time() - t0:.0f} s")
 log("done")

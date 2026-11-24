@@ -59,8 +59,13 @@ def full_lap(r):
     if not np.any(prog >= NLAPS * L):
         print(f"WARNING: only {prog[-1] / L:.2f} of {NLAPS} laps in 2x the plan's time", flush=True)
     return {k_: (v[:n] if isinstance(v, np.ndarray) and len(v) >= len(idx) else v) for k_, v in r.items()}
-laps = [full_lap(rc.run(fc.CAR, pl, pols[k], laps=NLAPS, s0=0.0, pert=np.zeros(5), seed=0, noise=False,
-                        T_max=int(math.ceil(2.0 * NLAPS * pl["lap_time"] / rc.DT)))) for k in range(len(fc.ITS))]
+# (2026-11-19, user: "the launch on plastic is too strong") FLOW_LAUNCH="V_HAND,CURRENT": start as the car does -- rolling
+# at 0.6 m/s, the fixed-current launch controller until V_HAND, then the network (real_car.run's launch); unset: the old
+# start at the plan's own state and speed
+_LA = os.environ.get("FLOW_LAUNCH")
+LAUNCH = None if not _LA else dict(v0=0.6, v_hand=float(_LA.split(",")[0]), current=float(_LA.split(",")[1]))
+laps = [full_lap(rc.run(fc.CAR, pl, pols[k], laps=NLAPS, s0=0.0, pert=None if LAUNCH else np.zeros(5), seed=0, noise=False,
+                        launch=LAUNCH, T_max=int(math.ceil(2.0 * NLAPS * pl["lap_time"] / rc.DT)))) for k in range(len(fc.ITS))]
 for k in range(len(fc.ITS)):
     laps[k]["dev_time"] = float(np.sum(np.abs(np.asarray(laps[k]["err_true"])[:, 0]) > fc.TUBE) * rc.DT)
 LAT = V["var"] == "lat"
